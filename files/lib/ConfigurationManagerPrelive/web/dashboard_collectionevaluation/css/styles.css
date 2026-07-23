@@ -1,0 +1,52 @@
+body {
+    background: #F4F7FC;
+    font: 12px 'Segoe UI'
+}
+
+li.bullet {
+    background: url('../img/info.ico') no-repeat;
+    background-position: 0 2px;
+    background-size: 14px 14px;
+    list-style: none;
+    margin-left: -20px;
+    padding: 0 20px 0px 25px;
+}
+
+.hidden {
+    display: none;
+}
+
+.statTitle {
+    background: url('../img/bullet-off.png') no-repeat;
+    background-position: 10px 3px;
+    color: #000;
+    cursor: hand;
+    cursor: pointer;
+    font: 16px 'Segoe UI';
+    margin-left: -23px;
+    opacity: 0.5;
+    padding-left: 22px;
+}
+
+.stat.on .statTitle {
+    background-image: url('../img/bullet-on.png');
+}
+
+.stat:hover .statTitle {
+    opacity: 1.0;
+}
+
+.statTitle {
+    width: 79%;
+}
+
+li {
+    list-style-type: none;
+    text-align: left;
+    font-size: 12px;
+}
+
+nav ul {
+    overflow: auto;
+    overflow-y: auto;
+}

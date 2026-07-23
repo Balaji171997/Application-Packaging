@@ -1,0 +1,78 @@
+﻿.tile {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: var(--background-color);
+    position: relative;
+    height: 300px;
+}
+.tile-2-3 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px !important;
+    background: var(--background-color);
+    position: relative;
+    height: 308px;
+    width: 516px;
+}
+.tile-2-4 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: var(--background-color);
+    position: relative;
+    height: inherit;
+    width: 516px;
+}
+.tile-2-5 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: var(--background-color);
+    position: relative;
+    height: auto;
+    width: 680px;
+
+}
+.tile-2-6 {
+       column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px !important;
+    background: var(--background-color);
+    position: relative;
+    height: 308px;
+    width: 680px;
+}
+.tile-2-3, .tile-2-4, .tile-2-5, .tile-2-6 {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+.tile-container-2-6 {
+    height: auto;
+    display: inline-block;
+    float: left;
+    width: 1250px;
+    display:flex;
+}

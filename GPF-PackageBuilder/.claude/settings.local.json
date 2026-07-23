@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(& powershell.exe -NoProfile -File \"C:\\\\Users\\\\AW140\\\\Downloads\\\\files\\\\Test-Build.ps1\" | Select-String 'FAIL|PASSED')",
+      "Bash(cp \"C:\\\\temp\\\\PackageCreator\\\\snippets.json\" \"C:\\\\Users\\\\AW140\\\\Downloads\\\\files\\\\snippets.json\" && echo \"copied\" && wc -l \"C:\\\\Users\\\\AW140\\\\Downloads\\\\files\\\\snippets.json\")",
+      "Read(//c/temp/Tools/UpdatedMANSCCMAutomator/**)",
+      "Read(//c/temp/**)",
+      "Bash(sed -n '160,185p' \"C:\\\\temp\\\\SCCM2Intune Migration Tool\\\\MAN_SCCM2IntuneMgrationTool.ps1\")",
+      "Bash(sed -n '40,110p' \"C:\\\\temp\\\\PSADT-Migration-Orchestrator.ps1\")",
+      "Bash([ -f \"$f\" ])",
+      "Bash(echo \"=== exists, content: ===\")",
+      "Bash(cat 'C:\\\\Users\\\\AW140\\\\Downloads\\\\files\\\\settings.json')",
+      "Bash(echo \"settings.json does NOT exist\")",
+      "Bash(powershell -NoProfile -Command '$psi=[PowerShell]::Create\\(\\); try { [void]$psi.AddScript\\({param\\($a\\) $a}\\).AddArgument\\(@{x=1}\\) | Out-Null; '\\\\''pattern-A ok'\\\\'' } catch { '\\\\''pattern-A ERR: '\\\\''+$_.Exception.Message }; try { $r=[void]$psi.AddScript\\({1}\\); '\\\\''castvar ok'\\\\'' } catch { '\\\\''castvar ERR: '\\\\''+$_.Exception.Message }')",
+      "PowerShell($e=$null;[void][System.Management.Automation.Language.Parser]::ParseFile\\(\"C:\\\\Users\\\\AW140\\\\Downloads\\\\files\\\\Sccm.ps1\",[ref]$null,[ref]$e\\); \"Sccm.ps1: $\\($e.Count\\) parse error\\(s\\)\")",
+      "Bash(grep -n 'PredecessorModel = $null\\\\|PredecessorModel=$null' C:/Users/AW140/Downloads/files/GUI.ps1)",
+      "WebSearch",
+      "PowerShell(& 'C:\\\\Users\\\\AW140\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-AW140-Downloads-files\\\\9821670a-d587-4d70-8e9a-15b6c36657a1\\\\scratchpad\\\\build-doc.ps1')"
+    ]
+  }
+}

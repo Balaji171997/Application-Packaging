@@ -1,0 +1,34 @@
+{
+    "WorkRoot": "C:\\temp\\GPF-PackageBuilder",
+    "LocalWorkingDir": "C:\\temp\\GPF-PackageBuilder\\Build",
+    "DefaultMsiProperties": [
+        "ALLUSERS=1",
+        "REBOOT=ReallySuppress",
+        "MSIDISABLERMRESTART=1",
+        "MSIRMSHUTDOWN=2",
+        "MSIRESTARTMANAGERCONTROL=Disable"
+    ],
+    "AutoDetectAuthor": true,
+    "DefaultAuthor": "",
+    "PredecessorPath": "C:\\Users\\AW140\\Downloads\\OtherBrand\\Outgoing",
+    "OutputBasePath": "c:\\temp",
+    "RepositoryPath": "C:\\Users\\AW140\\Downloads\\OtherBrand\\Incoming",
+    "OutgoingPath": "C:\\Users\\AW140\\Downloads\\OtherBrand\\Outgoing",
+    "SharePointPath": "",
+    "SnippetsPath": "",
+    "Brand": {
+        "Name": "GPF",
+        "TemplateRoot": "PSADT_Template_GPF",
+        "OrderNumberLabel": "AES",
+        "OutgoingPrefix": { "INA": "Audi", "VWG": "Group package", "G1V": "VW" },
+        "Features": { "Sccm": false, "Intune": false, "Publish": false },
+        "Convert": {
+            "MtbMappings": false,
+            "VwgVarRename": false,
+            "RegWowHardcode": false,
+            "LogPathMain": false,
+            "SectionVarScope": false,
+            "SoftIdentFormat": "GPF"
+        }
+    }
+}

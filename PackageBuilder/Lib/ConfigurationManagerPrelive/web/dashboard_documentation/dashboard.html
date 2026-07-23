@@ -1,0 +1,40 @@
+﻿<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" ng-app="dashboard">
+<head>
+    <title>Documentation Dashboard</title>
+    <meta charset="UTF-8" />
+    <meta content="IE=edge" http-equiv="X-UA-Compatible" />
+    <meta name="description" content="System Center Configuration Manager documentation" />
+    <meta name="keywords" content="Documentation" />
+
+    <link href="css/styles.css" rel="stylesheet" type="text/css" />
+    <link href="../css/columns.css" rel="stylesheet" type="text/css" />
+    <script src="../js/external.js" type="text/javascript"></script>
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="../js/utility.js" type="text/javascript"></script>
+    <script src="js/showdown.min.js" type="text/javascript"></script>
+    <script src="js/controller.js" type="text/javascript"></script>
+    <noscript>Javascript is not enabled</noscript>
+</head>
+
+    <body id="dashboardBody" ng-controller="dashboardController">
+        <div style="margin-left:16px;">
+
+            <div id="loadingMessageBlock">
+                <p ng-bind="strings.LoadingMessage">LoadingMessage</p>
+            </div>
+
+            <div id="errorMessageBlock" style="display:none;">
+                <h1 id="errorLabel" ng-bind="strings.ErrorLoadingLabel">ErrorLoadingLabel</h1>
+                <p id="errorText">ErrorLoadingMessage</p>
+                <p id="retryText" ng-bind="strings.RetryButtonDescription">RetryMessage</p>
+                <button id="retryButton" type="button" onclick="angular.element(document.getElementById('dashboardBody')).scope().refreshPage();" ng-bind="strings.RetryButtonLabel">RetryButton</button>
+                <p id="currentLanguageAndTimeParagraph">CurrentLanguageAndTimeAnd</p>
+            </div>
+
+            <div id="documentationContentBlock" style="display:none;">
+            </div>
+
+        </div>
+    </body>
+</html>

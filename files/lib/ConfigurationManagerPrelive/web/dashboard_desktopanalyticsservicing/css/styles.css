@@ -1,0 +1,116 @@
+body {
+    background: #F4F7FC;
+    font-family: 'Segoe UI';
+}
+
+button {
+    border: none;
+    color: #ffffff;
+    background-color: #0070BF;
+    width: 225px;
+    height: 30px;
+    font-size: 16px;
+}
+
+.setup-da-section {
+    margin-bottom: 40px;
+}
+
+.setup-da-section-bg {
+    background-color: #F2F2F2;
+}
+
+.container-title {
+    font-size: 16px;
+}
+
+.container-tile {
+    padding-left: 20px;
+    padding-right: 20px;
+    padding-top: 20px;
+    padding-bottom: 20px;
+    text-align: left;
+    font-size: 14px;
+}
+
+.desktop-analytics-container {
+    display: inline-block;
+    width: 300px;
+}
+
+.desktop-analytics-container-padding {
+    margin-left: 40px;
+    margin-right: 20px;
+}
+
+.desktop-analytics-container-number {
+    padding-right: 15px;
+    font-size: 32px;
+    color: #575757;
+    float: left;
+}
+
+.desktop-analytics-container-text {
+    word-break: break-word;
+}
+
+.desktop-analytics-container-list ul li {
+    padding-top: 10px;
+    margin-left: -10px;
+}
+
+.blank-row-large {
+    height: 30px;
+}
+
+.blank-row {
+    height: 20px;
+}
+
+@media screen and (-ms-high-contrast: white-on-black) {
+    button {
+        border: none;
+        color: black;
+        background-color: #1AEBFF;
+        width: 225px;
+        height: 30px;
+        font-size: 16px;
+    }
+}
+
+@media screen and (-ms-high-contrast: black-on-white) {
+    button {
+        border: none;
+        color: white;
+        background-color: #37006E;
+        width: 225px;
+        height: 30px;
+        font-size: 16px;
+    }
+}
+
+.boxed {
+    border: 1px solid #C1C2C3;
+    padding-left: 10px;
+    padding-right: 10px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    background-color: #DAE3F3;
+}
+
+#pLink {
+    padding-left: 10px;
+    text-align: left;
+    text-decoration: none;
+    color: #66D7F7;
+}
+
+#pLink:hover {
+    text-decoration: underline;
+}
+
+h1 {
+    font-size: 15px;
+    font-weight: normal;
+    text-align: center;
+}

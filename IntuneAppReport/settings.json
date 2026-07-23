@@ -1,0 +1,53 @@
+{
+    "TenantId": "m365.man",
+    "ModulePath": "C:\\Users\\AW140\\Downloads\\files\\lib\\PowerShell Module",
+    "DataPath": "",
+
+    "_comment_stats": "installSummary returned HTTP 400 for every one of the 801 apps in this tenant - that per-app endpoint is not usable here, and it costs one wasted call per app. Left OFF. Device/user install counts would need the reports API (deviceManagement/reports/getDeviceInstallStatusReport) instead.",
+    "IncludeInstallStats": false,
+    "IncludeRelationships": true,
+    "IncludeAuditHistory": true,
+    "AuditDays": 14,
+
+    "_comment_incremental": "Incremental sync always re-reads the app list and assignments (cheap, one call) and only re-reads per-app extras for apps whose lastModifiedDateTime moved. Assignment-only edits do NOT bump that date, which is why assignments are never skipped.",
+    "IncrementalSync": true,
+    "RefreshStatsAlways": false,
+
+    "_comment_patterns": "TestPatterns / UpdPatterns are matched against the FIRST or LAST token of the name only (separators _ - . are treated as spaces), so 'Attestation Client' is never a test app. Regex, case-insensitive.",
+    "TestPatterns": [
+        "^test\\d*$",
+        "^testing\\d*$",
+        "^tst\\d*$",
+        "^dummy\\d*$"
+    ],
+    "UpdPatterns": [
+        "^upd\\d*$"
+    ],
+    "WingetVersionValues": [
+        "^winget$",
+        "^current$",
+        "^latest$"
+    ],
+
+    "_comment_notes": "The Notes field is JSON written by the team's tooling: { notes, managed, status, rollout, pilot, lifecycle }. 797 of 801 apps use it, so lifecycle is READ DIRECTLY from the lifecycle key - no guessing. Observed values: LIVE 525, SAT 158, RETIRED 78, UAT 24, FailedUAT 11, PreRollout 1.",
+
+    "_comment_creation": "The inner 'notes' string says how the package was created. Blank = made by hand. First match wins.",
+    "CreationMethodRules": [
+        { "Method": "SCCM2Intune",            "Pattern": "(?i)sccm2intune" },
+        { "Method": "Intune Win32 Automator", "Pattern": "(?i)win32\\s*automator" },
+        { "Method": "Winget Intune Manager",  "Pattern": "(?i)winget\\s*intune\\s*manager" },
+        { "Method": "Package Builder",        "Pattern": "(?i)package\\s*builder" },
+        { "Method": "Manual",                 "Pattern": "(?i)^\\s*created\\s*manual" }
+    ],
+
+    "_comment_lifecycle": "Fallback ONLY for the few apps whose Notes are free text rather than JSON. First rule that matches wins.",
+    "LifecycleRules": [
+        { "Stage": "RETIRED", "Pattern": "(?i)\\b(retired|retire|decommission\\w*|end.of.life|eol|obsolete|do.not.use|sunset)\\b" },
+        { "Stage": "SAT",     "Pattern": "(?i)\\bSAT\\b" },
+        { "Stage": "UAT",     "Pattern": "(?i)\\bUAT\\b" },
+        { "Stage": "Pilot",   "Pattern": "(?i)\\b(pilot|trial)\\b" },
+        { "Stage": "LIVE",    "Pattern": "(?i)\\b(live|production|prod|released|rolled.out)\\b" }
+    ],
+
+    "StaleAfterDays": 365
+}

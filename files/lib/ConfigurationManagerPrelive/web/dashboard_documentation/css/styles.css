@@ -1,0 +1,21 @@
+h1 {
+    font-size: 28px;
+    font-weight: bold;
+}
+
+table {
+    border-collapse: collapse;
+}
+
+table, th, td {
+    border: 1px solid black;
+}
+
+th, td {
+    padding: 4px;
+    text-align: left;
+}
+
+ul li {
+    padding: 2px 0px;
+}

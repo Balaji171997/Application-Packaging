@@ -1,0 +1,186 @@
+body {
+    background: #F4F7FC;
+    font: 12px 'Segoe UI'
+}
+
+a,
+a:visited {
+    color: #0066CC;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+a:hover,
+a:visited:hover {
+    color: #F00;
+}
+
+
+.release {
+    border: solid 1px #A0A0A0;
+    margin-bottom: 12px;
+    padding: 7px 7px 0 24px;
+}
+
+.release.on {
+    border-color: #F4F7FC;
+}
+
+.release:hover {
+    border-color: #A0A0A0;
+}
+
+.toggle {
+    padding-bottom: 7px;
+}
+
+.releaseTitle {
+    background: url('../img/bullet-off.png') no-repeat;
+    background-position: 0 3px;
+    color: #000;
+    cursor: hand;
+    cursor: pointer;
+    font-size: 18px;
+    margin-left: -23px;
+    opacity: 0.5;
+    padding-left: 22px;
+}
+
+.release.on .releaseTitle {
+    background-image: url('../img/bullet-on.png');
+}
+
+.release:hover .releaseTitle {
+    opacity: 1.0;
+}
+
+.releaseTitle {
+    width: 79%;
+}
+
+.barChart {
+    height: 24px;
+}
+
+.table {
+    display: table;
+    height: 100%;
+}
+
+.cell {
+    display: table-cell;
+    text-align: center;
+    vertical-align: middle;
+}
+
+.barBorder {
+    border: solid 1px #C9C9C9;
+    width: 100%;
+}
+
+.completedBar {
+    background: #21A901;
+}
+
+.completedText {
+    color: #FFF;
+}
+
+.incompleteBar {
+    background: #C3C3C3;
+}
+
+li.scenario {
+    background: url('../img/checkbox-off.png') no-repeat;
+    background-position: 0 3px;
+    list-style: none;
+    margin-left: -20px;
+    padding: 0 0 10px 25px;
+}
+
+li.scenario.on {
+    background-image: url('../img/checkbox-on.png');
+}
+
+li {
+    list-style: disc;
+}
+
+.hidden {
+    display: none;
+}
+
+.strong {
+    font-weight: bold;
+}
+
+ul.content {
+    border-top: solid 1px #A0A0A0;
+    list-style: none;
+    margin-top: 0;
+    padding-left: 0;
+}
+
+#top,
+.feature {
+    flex-flow: row nowrap;
+    justify-content: space-between;
+    padding-bottom: 20px;
+}
+
+.feature {
+    border-bottom: gainsboro solid 1px;
+    padding-top: 20px;
+}
+
+#overview,
+.description {
+    padding-right: 10px;
+}
+
+div.scenario {
+    border-left: gainsboro solid 1px;
+    display: block;
+    padding-left: 10px;
+}
+
+.featureTitle {
+    font-size: 13px;
+}
+
+.featureDescription {
+    padding: 5px 0 12px 0;
+}
+
+.description {
+    width: 79%;
+}
+
+.barChart,
+div.scenario {
+    width: 21%;
+}
+
+.scenarioHeader {
+    align-items: center;
+    display: none;
+    padding-bottom: 10px;
+}
+
+.toggle,
+.barChart,
+.barBorder,
+#top,
+.feature,
+li.hasscenario .scenarioHeader {
+    display: flex;
+}
+
+.progress, 
+img.scenario {
+    padding-right: 5px;
+}
+
+#feedbackTop {
+    padding-top: 10px;
+}

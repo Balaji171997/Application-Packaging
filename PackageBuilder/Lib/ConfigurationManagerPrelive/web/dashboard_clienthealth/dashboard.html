@@ -1,0 +1,200 @@
+﻿<!--
+ <copyright file="dashboard.html" company="Microsoft">
+    Copyright (c) 2019 Microsoft Corporation.  All rights reserved.
+ </copyright>
+ <purpose>
+ </purpose>
+ <notes>
+ </notes>
+-->
+
+<!DOCTYPE html>
+
+<html ng-app="dashboard">
+<head>
+    <title>Client Health</title>
+    <meta charset="utf-8" />
+    <meta content="IE=edge" http-equiv="X-UA-Compatible" />
+    <meta name="description" content="Client Health Dashboard" />
+    <meta name="keywords" content="Client Health, Dashboard" />
+
+    
+    <link href="css/columns.css" rel="stylesheet" type="text/css" />
+    <link href="../css/columns.css" rel="stylesheet" type="text/css">
+    <link href="css/styles.css" rel="stylesheet" type="text/css" />
+    <link href="../css/c3.min.css" rel="stylesheet" type="text/css" />
+
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="../js/utility.js" type="text/javascript"></script>
+    <script src="../js/d3.min.js" type="text/javascript"></script>
+    <script src="../js/c3.min.js" type="text/javascript"></script>
+    <script src="../js/external.js" type="text/javascript"></script>
+    <script src="js/controller.js" type="text/javascript"></script>
+
+    <noscript>Javascript is not enabled</noscript>
+</head>
+
+<body id="dashboardBody" ng-controller="dashboardController" ng-cloak>
+    <script>
+        function handleSliderChange() {
+            var controllerElement = document.getElementById('dashboardBody');
+            var scope = angular.element(controllerElement).scope();
+            scope.handleSliderChange();
+        }
+    </script>
+
+    <!-- Filters -->
+    <div class="tile-container-2-6-2" id="filterTile">
+        <div class="tile-2-2 trueCenter">
+            <h1 ng-bind="filter"></h1>
+            <div id="filterCheckboxes">
+                <div>
+                    <input ng-model="offline" type="checkbox" name="{{ offlineString }}" value="{{ offlineString }}" [checked]="offline=='false'" ng-change="refresh()" tabindex="1" id="offlineCheck" />
+                    <label for="offlineCheck">{{ offlineString }}</label>
+                </div>
+                <br />
+                <div>
+                    <input ng-model="failure" type="checkbox" name="{{ failureString }}" value="{{ failureString }}" [checked]="failure=='false'" ng-change="refresh()" tabindex="2" id="failureCheck" />
+                    <label for="failureCheck">{{ failureString }}</label>
+                </div>
+                <br />
+                <div>
+                    <select ng-name="days"
+                            ng-init="days"
+                            ng-model="days"
+                            ng-options="days for days in range(3, 60)"
+                            ng-change="refresh()"
+                            tabindex="3"
+                            id="clientDaysAria">
+                    </select>
+                    <label for="clientDaysAria">{{ clientDays }}</label>
+                </div>
+            </div>
+            <p tabindex="-1">_</p>
+            <div id="collectionPicker">
+                <div ng-bind="strings.clientCollection" id="clientCollectionAria"></div>
+                <br />
+                <button class="button" ng-click="LaunchCollectionPickerWizard()" tabindex="4" aria-labelledby="clientCollectionAria">{{ browse }}</button>
+                <p class="biggerText">{{ collectionValue.name }}</p>
+            </div>
+        </div>
+        <div class="tile-2-4">
+            <!--health gauge chart-->
+            <h1 ng-bind="getString('PercentageHealthy')"></h1>
+            <div id="PercentageHealthyAria" tabindex="5">
+                <div id="percentageHealthyGauge">
+
+                </div>
+            </div>
+            <p ng-bind="getString('PercentageHealthyDesc')"></p>
+            <a href="https://go.microsoft.com/fwlink/?linkid=2074474" target="_blank" tabindex="6" ng-bind="getString('LearnMore')"></a>
+        </div>
+    </div>
+
+    <!-- Donut Charts -->
+    <div class="tile-container-2-6">
+        <!-- Percentage Unhealthy -->
+        <div class="tile-container-2-2">
+            <div class="tile-2-2" id="errorGaugeTile">
+                <h1 ng-bind="getString('allClientsWithFailures')"></h1>
+                <div id="PercentageUnhealthyAria" tabindex="7">
+                    <div id="percentageUnhealthy">
+
+                    </div>
+                </div>
+                <p  ng-bind="getString('PercentageUnhealthyDesc')"></p>
+            </div>
+        </div>
+        <!-- Configuration Manager Client Version -->
+        <div class="tile-2-2">
+            <h1 class="labelStyle2" ng-bind="getString('ClientVersionDetails')" ></h1>
+            <button class="linkbutton" id="showClientVersionChartButton" ng-click="toggleClientVersionChart()" tabindex="8" ng-bind="getString('ShowTable')"></button>
+            <div id="ClientVersionDetailsTable" class="client-version-table" tabindex="9" role="table">
+                <div class="row">
+                    <div class="cell" ng-bind="getString('clientVersion')" tabindex="10"></div>
+                    <div class="cell" ng-bind="getString('Count')" tabindex="11"></div>
+                </div>
+            </div>
+            <div id="ClientVersionDetailsAria" tabindex="12">
+                <div id="ClientVersionDetails">
+
+                </div>
+            </div>
+        </div>
+        <!-- Client OS Versions -->
+        <div class="tile-2-2">
+            <h1 class="labelStyle2" ng-bind="getString('ClientTypes')"></h1>
+            <button class="linkbutton" id="showClientOSVersionChartButton" ng-click="toggleClientOSVersionChart()" tabindex="13" ng-bind="getString('ShowTable')"></button>
+            <div id="ClientOSVersionDetailsTable" class="client-version-table" tabindex="14"  role="table">
+                <div class="row">
+                    <div class="cell" ng-bind="getString('OSVersion')" tabindex="15"></div>
+                    <div class="cell" ng-bind="getString('Count')"tabindex="16"></div>
+                </div>
+            </div>
+            <div id="ClientTypesAria" tabindex="17">
+                <div id="ClientTypes">
+
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- scenario health -->
+    <div class="tile-container-2-6" id="scenarioHealth">
+        <div class="tile-2-6">
+            <h1 ng-bind="getString('ScenarioHealth')" ></h1>
+            <div id="ClientFailureCountAria" tabindex="18">
+                <div id="ClientFailureCountsSansSummaries">
+
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Trends by scenario health topic-->
+    <div class="tile-container-2-6-2" id="trendChartParent">
+        <div class="tile-2-6-2">
+            <h1 ng-bind="getString('TrendsByScenario')" ></h1>
+            <div id="sliderContainer">
+                <label for="days-filter-slider" id="slider-label"></label>
+                <input type="range" id="days-filter-slider" min="1" max="90" value="31" aria-valuemin="1" aria-valuemax="90" aria-valuenow="31" onchange="handleSliderChange()" class="slider" tabindex="19" />
+            </div>
+            <div id="buttonContainer">
+                <button class="button" id="evalBtn" ng-bind="getString('ClientEvalId')" ng-click="updateLineGraph('evalBtn')" tabindex="20"></button>
+                <button class="button" id="PolicyBtn" ng-bind="getString('PolicyRequestId')" ng-click="updateLineGraph('PolicyBtn')" tabindex="21"></button>
+                <button class="button" id="softwareBtn" ng-bind="getString('SoftwareInventoryId')" ng-click="updateLineGraph('softwareBtn')" tabindex="22"></button>
+                <button class="button" id="hardwareBtn" ng-bind="getString('HardwareInventoryId')" ng-click="updateLineGraph('hardwareBtn')" tabindex="23"></button>
+                <button class="button" id="DDRBtn" ng-bind="getString('DDRId')" ng-click="updateLineGraph('DDRBtn')" tabindex="24"></button>
+                <button class="button" id="statusBtn" ng-bind="getString('StatusMessageId')" ng-click="updateLineGraph('statusBtn')" tabindex="25"></button>
+            </div>
+            <div id="TrendsByScenario" tabindex="26">
+
+            </div>
+            <p id="summarization"> {{lastSummarization}} </p>
+        </div>
+    </div>
+    <div class="tile-container-2-6-2">
+        <div class="tile-2-6-2">
+            <h1 ng-bind="getString('Top')" tabindex="27"></h1>
+            <form>
+                <div class="inner-addon">
+                    <input type="text" class="searchFilter" placeholder="{{filter}}" ng-model="search" tabindex="28" id="searchIcon" />
+                </div>
+            </form>
+
+            <table class="table table-bordered table-striped">
+                <thead>
+                    <tr>
+                        <td tabindex="29" ng-bind="getString('ClientHealthFailure')"></td>
+                        <td tabindex="29" ng-bind="getString('Count')"></td>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr ng-repeat="error in clientHealthFailure | orderBy:'-count' | filter:search | limitTo:10" ng-click="loadClientErrorsDrillThrough(error.errorCode)">
+                        <td tabindex="29" class="pointer">{{ error.failure }}</td>
+                        <td tabindex="29" class="pointer-mid">{{ error.count }}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>

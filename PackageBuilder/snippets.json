@@ -1,0 +1,215 @@
+{
+    "version":  "1.0",
+    "categories":  [
+                       {
+                           "name":  "Shortcuts",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "Start Menu",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Create a Start-Menu shortcut",
+                                                                          "code":  "# Create a Start-Menu shortcut (PSADT v4)\nNew-ADTShortcut -Path \"$envCommonStartMenuPrograms\\<Vendor>\\<AppName>.lnk\" `\n    -TargetPath \"$envProgramFiles\\<Vendor>\\<AppName>\\<MainExe>.exe\" `\n    -IconLocation \"$envProgramFiles\\<Vendor>\\<AppName>\\<MainExe>.exe\" `\n    -WorkingDirectory \"$envProgramFiles\\<Vendor>\\<AppName>\""
+                                                                      }
+                                                                  ]
+                                                 },
+                                                 {
+                                                     "name":  "Desktop",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Delete a shortcut from every user's Desktop",
+                                                                          "code":  "# Delete a shortcut from EVERY user's Desktop (matched by name pattern)\n$ProfilePaths = Get-ADTUserProfiles | Select-Object -ExpandProperty 'ProfilePath'\nforeach ($PPath in $ProfilePaths) {\n    if (Test-Path -Path \"$PPath\\Desktop\") {\n        $ShortcutsToDelete = Get-ChildItem -Path \"$PPath\\Desktop\" -Filter \"<AppName>*.lnk\"\n        foreach ($shortcut in $ShortcutsToDelete) {\n            Remove-ADTFile -Path $shortcut.FullName\n        }\n    }\n}"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Certificates",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "Manage",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Import a certificate (LocalMachine)",
+                                                                          "code":  "# Import a certificate into a LocalMachine store (native PKI cmdlet works in v4)\nImport-Certificate -FilePath \"$($adtSession.DirFiles)\\<CertFile>.cer\" -CertStoreLocation \"Cert:\\LocalMachine\\TrustedPublisher\""
+                                                                      },
+                                                                      {
+                                                                          "name":  "Remove a certificate by thumbprint",
+                                                                          "code":  "# Remove a certificate by thumbprint from a LocalMachine store\nRemove-Item -Path \"Cert:\\LocalMachine\\TrustedPublisher\\<Thumbprint>\" -Force -ErrorAction SilentlyContinue"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Uninstall",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "MSI",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Find product code by name and uninstall",
+                                                                          "code":  "# Find a product code by display name and uninstall (MSI)\n$app = Get-ADTApplication -Name \"<AppDisplayName>\" -NameMatch Exact\nif ($app -and $app.ProductCode) {\n    Start-ADTMsiProcess -Action Uninstall -ProductCode $app.ProductCode\n}"
+                                                                      },
+                                                                      {
+                                                                          "name":  "Uninstall several MSI product codes in a loop",
+                                                                          "code":  "# Uninstall several MSI product codes in a loop\n$ProductCodes = @(\n    '<GUID1>',\n    '<GUID2>',\n    '<GUID3>'\n)\nforeach ($code in $ProductCodes) {\n    Start-ADTMsiProcess -Action Uninstall -ProductCode $code\n}"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Folders",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "Create",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Create a folder if it doesn't exist",
+                                                                          "code":  "# Create a folder only if it does not already exist\nif (-not (Test-Path -Path \"$envSystemDrive\\<RelativePath>\")) {\n    Write-ADTLogEntry -Message \"Folder $envSystemDrive\\<RelativePath> not present - creating it.\" -Severity 1\n    New-ADTFolder -Path \"$envSystemDrive\\<RelativePath>\"\n}"
+                                                                      }
+                                                                  ]
+                                                 },
+                                                 {
+                                                     "name":  "Cleanup",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Remove empty folders recursively",
+                                                                          "code":  "# Remove empty sub-folders recursively under a base folder\nif (Test-Path -Path \"$envProgramData\\<Vendor>\") {\n    $folders = Get-ChildItem -Path \"$envProgramData\\<Vendor>\" -Force -Recurse |\n        Sort-Object PSPath -Descending -Unique | Select-Object -ExpandProperty FullName\n    foreach ($folder in $folders) {\n        if ((Get-ChildItem -Path $folder | Measure-Object).Count -eq 0) {\n            Remove-ADTFolder -Path $folder\n        }\n    }\n}"
+                                                                      },
+                                                                      {
+                                                                          "name":  "Remove leftover .tmp files then empty folders",
+                                                                          "code":  "# Remove leftover *.tmp files, then the folder(s) if now empty\nif (Test-Path -Path \"$envProgramFilesX86\\<AppFolder>\\bin\") {\n    Get-ChildItem -Path \"$envProgramFilesX86\\<AppFolder>\\bin\\*\" -Include *.tmp |\n        ForEach-Object { Remove-ADTFile -Path $_.FullName }\n    if ($null -eq (Get-ChildItem \"$envProgramFilesX86\\<AppFolder>\\bin\")) {\n        Remove-ADTFolder -Path \"$envProgramFilesX86\\<AppFolder>\\bin\"\n    }\n    if ($null -eq (Get-ChildItem \"$envProgramFilesX86\\<AppFolder>\")) {\n        Remove-ADTFolder -Path \"$envProgramFilesX86\\<AppFolder>\"\n    }\n}"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Registry",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "Values",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Remove a value only when it equals X",
+                                                                          "code":  "# Remove a registry value only when it equals an expected value\n# NOTE: Wow6432Node is the 32-bit registry view - drop it for a 64-bit app.\n$key = \"HKLM:\\SOFTWARE\\Wow6432Node\\<Vendor>\\<SubKey>\"\nif (Test-Path -Path $key) {\n    if ((Get-ADTRegistryKey -Key $key -Value '<ValueName>') -eq \"<ExpectedValue>\") {\n        Remove-ADTRegistryKey -Key $key -Name \"<ValueName>\"\n    }\n}"
+                                                                      }
+                                                                  ]
+                                                 },
+                                                 {
+                                                     "name":  "ARP",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Set ARP DisplayVersion and Publisher",
+                                                                          "code":  "# Set DisplayVersion + Publisher on an ARP (Uninstall) entry\n# NOTE: Wow6432Node is the 32-bit registry view - drop it for a 64-bit app.\n$arp = \"HKLM:\\SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\<AppUninstallKey>\"\nSet-ADTRegistryKey -Key $arp -Name \"DisplayVersion\" -Value \"<Version>\"\nSet-ADTRegistryKey -Key $arp -Name \"Publisher\"      -Value \"<Publisher>\""
+                                                                      }
+                                                                  ]
+                                                 },
+                                                 {
+                                                     "name":  "Backup",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Back up a registry key by renaming it",
+                                                                          "code":  "# Back up a registry key by renaming it (before changing it)\nif (Test-Path -Path \"HKLM:\\SOFTWARE\\Classes\\<.ext>\") {\n    Write-ADTLogEntry -Message \"Backing up HKLM:\\SOFTWARE\\Classes\\<.ext>\" -Severity 1\n    Rename-Item -Path \"HKLM:\\SOFTWARE\\Classes\\<.ext>\" -NewName \"<.ext>bckup\"\n}"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Services",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "Manage",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Stop and remove a service",
+                                                                          "code":  "# Stop and remove a Windows service (Stop-ServiceAndDependencies has no v4 equivalent -> native Stop-Service)\nif (Get-Service -Name \"<ServiceName>\" -ErrorAction SilentlyContinue) {\n    Stop-Service -Name \"<ServiceName>\" -Force -ErrorAction SilentlyContinue\n    Get-CimInstance -ClassName Win32_Service -Filter \"Name='<ServiceName>'\" | Remove-CimInstance\n}"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Scheduled Tasks",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "Manage",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Remove a scheduled task",
+                                                                          "code":  "# Remove a scheduled task (matches the tool's snapshot cleanup syntax)\r\nif (Get-ScheduledTask -TaskName '<TaskName>' -ErrorAction SilentlyContinue) {\r\n    Unregister-ScheduledTask -TaskName '<TaskName>' -TaskPath '<\\Full\\TaskPath\\>' -Confirm:$false -ErrorAction SilentlyContinue\r\n    Write-ADTLogEntry -Message 'Removed scheduled task <TaskName>.' -Severity 1\r\n}"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "DLL Registration",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "regsvr32",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Register / unregister a DLL",
+                                                                          "code":  "# Register / unregister a DLL with regsvr32\n# Register:\nStart-ADTProcess -FilePath \"regsvr32.exe\" -ArgumentList '/s \"$($adtSession.DirSupportFiles)\\<Name>.dll\"' -WindowStyle Hidden\n# Unregister:\nStart-ADTProcess -FilePath \"regsvr32.exe\" -ArgumentList '/u /s \"$($adtSession.DirSupportFiles)\\<Name>.dll\"' -WindowStyle Hidden"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Branding",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "VWG",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Remove branding detection key",
+                                                                          "code":  "# Remove the package's branding detection key under HKLM\\SOFTWARE\\VWG\\CM (team helper Remove-MTBDetectionKey).\n# - No arguments: removes THIS package's own key ($AppFullName) - the usual case (already done in Post-Uninstall).\n# - -Name: remove specific OLD keys by their EXACT full package name. No wildcards - the helper does an exact match.\nRemove-MTBDetectionKey\n# Remove specific predecessor keys instead:\nRemove-MTBDetectionKey -Name \"<OldPackageFullName1>\",\"<OldPackageFullName2>\""
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Per-user configuration",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "All users (registry)",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Apply HKCU settings to all users (Invoke-ADTAllUsersRegistryAction)",
+                                                                          "code":  "## Per-user settings applied to EVERY existing user + the default profile (new users inherit). Runs at install time.\n## EDIT the registry value(s) this app needs under each user's HKCU (HKCU is auto-redirected per user via -SID).\nInvoke-ADTAllUsersRegistryAction -ScriptBlock {\n    Set-ADTRegistryKey -SID $_.SID -LiteralPath 'HKCU\\Software\\<Vendor>\\<App>' -Name '<ValueName>' -Value '<Data>' -Type String\n}"
+                                                                      }
+                                                                  ]
+                                                 },
+                                                 {
+                                                     "name":  "Active Setup",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Active Setup - install + uninstall wiring",
+                                                                          "code":  "## Per-user configuration via ACTIVE SETUP: the plain-PowerShell stub below runs ONCE per user at their next logon\n## (covers users created later). The stub is staged in SupportFiles - EDIT it to add this app's HKCU settings.\n$userCfgDir = \"$envProgramData\\VWG\\$($adtSession.AppName)\\ActiveSetup\"\nNew-ADTFolder -Path $userCfgDir\nCopy-ADTFile -Path \"$($adtSession.DirSupportFiles)\\<App>_<Version>_ActiveSetup_Install.ps1\" -Destination $userCfgDir\nSet-ADTActiveSetup -StubExePath \"$userCfgDir\\<App>_<Version>_ActiveSetup_Install.ps1\" -Description 'User_Registries' -Key $AppFullName -ExecutionPolicy 'Bypass'\r\n\r\n# --- The above goes in POST-INSTALLATION. The below goes in POST-UNINSTALLATION: ---\r\n## Remove the Active Setup entry (and its per-user replication) + the staged stub on uninstall.\nSet-ADTActiveSetup -Key $AppFullName -PurgeActiveSetupKey\nRemove-ADTFolder -Path \"$envProgramData\\VWG\\$($adtSession.AppName)\\ActiveSetup\"\r\n\r\n# NOTE: also place the plain-PowerShell stub '<App>_<Version>_ActiveSetup_Install.ps1' in SupportFiles (see the 'Active Setup stub' snippet)."
+                                                                      },
+                                                                      {
+                                                                          "name":  "Active Setup stub (save into SupportFiles as <App>_<Version>_ActiveSetup_Install.ps1)",
+                                                                          "code":  "## Active Setup stub - PLAIN PowerShell (NOT PSADT). Runs ONCE per user at their next logon, in the USER's context,\n## from the copy staged under ProgramData. >>> ADD this app's per-user settings in the marked section below. <<<\n\n# Hide the brief console window that appears during Active Setup.\nAdd-Type -Name Window -Namespace Console -MemberDefinition '\n    [DllImport(\"Kernel32.dll\")]\n    public static extern IntPtr GetConsoleWindow();\n    [DllImport(\"user32.dll\")]\n    public static extern bool ShowWindow(IntPtr hWnd, Int32 nCmdShow);\n'\nfunction Hide-Console { $p = [Console.Window]::GetConsoleWindow(); [void][Console.Window]::ShowWindow($p, 0) }\nHide-Console\n\n$appname = '<App>_<Version>'\n$LogTime = Get-Date -Format 'MM-dd-yyyy_hh-mm-ss'\n$LogDir  = \"$env:localappdata\\VWG\\Logs\"\n$LogFile = Join-Path $LogDir ($appname + '_ActiveSetup_Install.log')\nif (!(Test-Path $LogDir)) { New-Item -ItemType Directory -Force -Path $LogDir | Out-Null }\n$ParentDirPath = Split-Path $script:MyInvocation.MyCommand.Path\n\"$LogTime : Active Setup started for $appname\" >> $LogFile\n\n# =================== PER-USER SETTINGS - EDIT BELOW ===================\n# A) Import a .reg into HKCU. Stage the .reg in SupportFiles, copy it beside this stub in POST-INSTALLATION, then at\n#    logon it sits next to this file ($ParentDirPath):\n#   Start-Process -FilePath \"$([Environment]::SystemDirectory)\\reg.exe\" -ArgumentList \"Import `\"$ParentDirPath\\<App>_Add_HKCU.reg`\"\" -WindowStyle Hidden -Wait\n# B) Or set values directly under the current user's hive:\n#   New-Item -Path 'HKCU:\\Software\\<Vendor>\\<App>' -Force | Out-Null\n#   Set-ItemProperty -Path 'HKCU:\\Software\\<Vendor>\\<App>' -Name '<ValueName>' -Value '<Data>'\n# =====================================================================\n\n\"$LogTime : Active Setup finished for $appname\" >> $LogFile"
+                                                                      }
+                                                                  ]
+                                                 },
+                                                 {
+                                                     "name":  "User profile files",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Copy file(s) from SupportFiles into every user profile (Get-ADTUserProfiles)",
+                                                                          "code":  "# Copy per-user file(s) into EVERY user profile (existing users + the Default profile, so NEW users inherit).\n# Stage the file(s) in the package SupportFiles folder first. Put this block in POST-INSTALLATION.\n[string[]]$ProfilePaths = Get-ADTUserProfiles | Select-Object -ExpandProperty 'ProfilePath'\nforeach ($ProfilePath in $ProfilePaths) {\n    Copy-ADTFile -Path \"$($adtSession.DirSupportFiles)\\<UserFile.ext>\" -Destination \"$ProfilePath\\AppData\\Roaming\\<Vendor>\\<App>\"\n    # Copy-ADTFile -Path \"$($adtSession.DirSupportFiles)\\<Other.ext>\" -Destination \"$ProfilePath\\AppData\\Local\\<App>\"\n}\n\n# --- Cleanup: put this block in POST-UNINSTALLATION (remove what was copied) ---\n[string[]]$ProfilePaths = Get-ADTUserProfiles | Select-Object -ExpandProperty 'ProfilePath'\nforeach ($ProfilePath in $ProfilePaths) {\n    Remove-ADTFile -Path \"$ProfilePath\\AppData\\Roaming\\<Vendor>\\<App>\\<UserFile.ext>\"\n}"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       }
+                   ]
+}

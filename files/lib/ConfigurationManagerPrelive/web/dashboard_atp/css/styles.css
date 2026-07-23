@@ -1,0 +1,41 @@
+body {
+  background: #F4F7FC;
+  font-family: 'Segoe UI';
+}
+
+.c3-tooltip-container {
+  max-width: 200px;
+  max-height: 10px;
+}
+.selected {
+  background-color: #D3D3D3;
+}
+
+.ng-cloak {
+  display: none !important;
+}
+
+h1 {
+  font-size: 15px;
+  font-weight: normal;
+  text-align: center;
+}
+/* specific to ATP dashboard */
+@media screen and (-ms-high-contrast: active){
+  .c3-gauge-value{
+    stroke: WindowText !important;
+    fill: WindowText !important;
+  }
+  .c3-axis .domain{
+    stroke: WindowText !important;
+  }
+  .c3-axis line{
+    stroke: WindowText !important;
+  }
+  .c3-axis text{
+    stroke: WindowText !important;
+  }
+  .c3-legend-item text{
+    stroke: WindowText !important;
+  }
+}

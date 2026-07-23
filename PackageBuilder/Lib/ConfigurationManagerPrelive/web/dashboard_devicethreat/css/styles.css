@@ -1,0 +1,153 @@
+.create-servicing-plan {
+  font-size: 16px;
+}
+.tile-2-6-placeholder-text {
+  font-size: 30px;
+  vertical-align: middle;
+}
+#bar-chart,
+#servicing-plan-list {
+  display: inline-block;
+  float: left;
+  width: 49%;
+}
+#DeviceThreatDonut,
+#DTPComplianceDonut,
+#iOSDevicesChart,
+#TopThreatsChart,
+#AndroidDevicesChart
+{
+  max-height: 230px; 
+  position: relative;
+  height: 230px;
+}
+#DeviceThreatDonut
+{
+  padding-left: 20px;
+  height: 240px;
+  width: 300px;
+}
+#iOSDevicesChart,
+#AndroidDevicesChart
+{
+  padding-top: 40px;
+}
+#legal {
+  padding: 20px;
+}
+#close {
+  background-color: transparent;
+  border: none;
+  float: right;
+  color: #000000;
+  font-size: 12px;
+  line-height: 8px;
+  padding-top: 6px;
+  width: 0px;
+  font-weight: bold;
+  display: inline-block;
+}
+#tile-value {
+  font-size: 50px;
+  font-weight: 100;
+}
+#numeric-symbol {
+  font-size: 25px;
+}
+.percentage {
+  font-size: 50px;
+  font-weight: 100;
+}
+.percentage span {
+  font-size: 25px;
+}
+.plus {
+  width: 40px;
+  height: 40px;
+}
+.icon {
+  width: 16px;
+  height: 16px;
+  margin-left: 5px;
+}
+.form {
+  padding: 0 10px;
+  font-size: 12px;
+  line-height: 30px;
+}
+.form-label {
+  float: left;
+}
+.form-row {
+  width: 100%;
+  display: inline-block;
+}
+.form-row > input
+{
+  width: 220px;
+  float: right;
+}
+
+.form-row > select {
+  width: 150px;
+  float: right;
+}
+.form-row > input[type="number"],
+.form-row > select[type="number"] {
+  width: 40px;
+}
+.c3-tooltip-container {
+  max-width: 200px;
+  max-height: 10px;
+}
+.selected {
+  background-color: #D3D3D3;
+}
+.ng-cloak {
+  display: none !important;
+}
+h1 {
+  font-size: 15px;
+  font-weight: normal;
+  text-align: center;
+}
+select {
+  padding: 2px;
+  font-size: 12px;
+}
+button {
+  line-height: 14px;
+  float: right;
+  margin-left: 5px;
+  padding: 3px 18px 3px 18px;
+  border: none;
+  color: #ffffff;
+  background-color: #707070;
+}
+li {
+  list-style-type: none;
+  text-align: left;
+  font-size: 12px;
+}
+nav ul {
+  overflow: auto;
+  overflow-y: auto;
+}
+@media screen and (-ms-high-contrast: active){
+  .c3-gauge-value{
+    stroke: WindowText !important;
+    fill: WindowText !important;
+  }
+  .c3-axis .domain{
+    stroke: WindowText !important;
+  }
+  .c3-axis line{
+    stroke: WindowText !important;
+  }
+  .c3-axis text{
+    stroke: WindowText !important;
+  }
+  .c3-legend-item text{
+    stroke: WindowText !important;
+  }
+}

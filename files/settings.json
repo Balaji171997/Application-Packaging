@@ -1,0 +1,35 @@
+{
+    "WorkRoot": "C:\\temp\\PackageBuilder",
+    "LocalWorkingDir": "C:\\temp\\PackageBuilder\\Build",
+    "DefaultMsiProperties": [
+        "ALLUSERS=1",
+        "REBOOT=ReallySuppress",
+        "MSIDISABLERMRESTART=1",
+        "MSIRMSHUTDOWN=2",
+        "MSIRESTARTMANAGERCONTROL=Disable"
+    ],
+    "AutoDetectAuthor": true,
+    "DefaultAuthor": "",
+    "PredecessorPath": "\\\\mbddfsovpc01.mn-man.biz\\SWDLive-Gate\\CMLib_LIVE\\Apps",
+    "OutputBasePath": "c:\\temp",
+    "RepositoryPath": "\\\\mndemucfsm01\\SEC-EQS-Lib-Gate\\EQS_SEC\\EQS\\Packages\\Incoming",
+    "OutgoingPath": "\\\\mndemucfsm01\\SEC-EQS-Lib-Gate\\EQS_SEC\\EQS\\Packages\\Outgoing",
+    "SharePointPath": "",
+    "SnippetsPath": "\\\\mndemucfsm01\\SEC-EQS-Lib-Gate\\EQS_SEC\\EQS\\Script Repository\\VWITS Team\\Balaji\\PackageBuilder\\snippets.json",
+    "Sccm": {
+        "SiteCode": "G08",
+        "SiteServer": "mbdcaswvtb29843.mn-man.biz",
+        "ContentShare": "\\\\mbddfsovpc01.mn-man.biz\\SWDPreLive-Gate\\CMLib_TEST\\Apps",
+        "DPGroup": "_ALL_DPs",
+        "AppFolder": "G08:\\Application\\VOLKSWAGEN\\DEVELOPMENT\\EQS",
+        "CollectionFolder": "G08:\\DeviceCollection\\DEVELOPMENT\\EQS",
+        "LimitingCollection": "All Systems",
+        "ModuleRelPath": "ConfigurationManagerPrelive\\ConfigurationManager\\ConfigurationManager.psd1",
+        "CMTracePath": "C:\\Windows\\CCM\\CMTrace.exe"
+    },
+    "Intune": {
+        "TenantId": "m365.man",
+        "IntuneWinAppUtil": "Lib",
+        "ModulePath": "Lib"
+    }
+}
