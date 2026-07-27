@@ -86,6 +86,7 @@ $script:State = @{
     # Step 2 (Detection): installer type, product code, MST flags
     # Remove flags default ON: the MST strips desktop shortcut / Startup(autostart) / SendTo+stray shortcuts / Run keys when present in the MSI.
     InstallerType=''; ProductCode=''
+    GenerateMst=$true   # F27/F29: build an MST (standard transform + cleanup flags). Untick -> reuse source MST if present, else plain MSI.
     RemoveShortcut=$true; RemoveRun32=$true; RemoveRun64=$true; RemoveStartup=$true; RemoveStray=$true
     # Step 2: EXE parameters + loose-files options
     MstReviewNotes=@()  # report-only notes from "Match predecessor MST" (other tables the old MST touched)
@@ -265,7 +266,7 @@ function Show-InstallerPicker {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Package Builder" Height="640" Width="1040" WindowStartupLocation="CenterScreen" Background="#181A1F">
+        Title="Package Assistance" Height="640" Width="1040" WindowStartupLocation="CenterScreen" Background="#181A1F">
   <Grid>
     <Grid.ColumnDefinitions><ColumnDefinition Width="152"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
     <!-- step rail -->
@@ -313,6 +314,10 @@ function Show-InstallerPicker {
           <TextBox x:Name="TxtType" Height="24" IsReadOnly="True" Margin="0,2,0,10" Width="160" HorizontalAlignment="Left"/>
           <TextBlock Text="MSI ProductCode (auto)" Foreground="#E7E9ED"/>
           <TextBox x:Name="TxtPC" Height="24" FontFamily="Consolas" Margin="0,2,0,12"/>
+          <!-- F27/F29: master toggle - generate an MST (standard transform + cleanup) or not. Unticked: reuse a source
+               MST if the vendor shipped one, else install the MSI plain. Hides the MST options below when off. -->
+          <CheckBox x:Name="ChkGenerateMst" Content="Generate MST (standard transform + cleanup options below)" IsChecked="True" Foreground="#E7E9ED" Margin="0,2,0,6"
+                    ToolTip="On: build a transform that sets the standard properties and applies the cleanup ticked below. Off: if the source already ships an MST it's reused as-is; otherwise the MSI installs plain (no transform)."/>
           <!-- MST cleanup: removed by default per MSI when present; tick to KEEP (independent). -->
           <StackPanel x:Name="PnlMstFlags">
             <TextBlock Text="MST cleanup - applies to ALL MSIs in this package (when present):" Foreground="#E7E9ED" Margin="0,0,0,2"/>
@@ -403,7 +408,7 @@ function Show-InstallerPicker {
 
           <StackPanel x:Name="PnlLoose" Margin="0,14,0,0">
             <TextBlock Text="Loose files options" Foreground="#56C8D6" FontWeight="SemiBold" Margin="0,0,0,2"/>
-            <CheckBox x:Name="ChkArp" Content="Create ARP / Application Wizard entry (Set-MTBApplicationWizardEntry)" Foreground="#E7E9ED" Margin="0,4"/>
+            <CheckBox x:Name="ChkArp" Content="Create ARP / Application Wizard entry (Set-ApplicationWizardEntry)" Foreground="#E7E9ED" Margin="0,4"/>
             <CheckBox x:Name="ChkLooseShortcut" Content="Create Start Menu shortcut(s)" Foreground="#E7E9ED" Margin="0,4"/>
             <TextBlock Text="Shortcut target exe(s), relative to install path - comma separated (e.g. bin\App.exe, Helper.exe)" Foreground="#888" FontSize="11" Margin="0,4,0,2"/>
             <TextBox x:Name="TxtLooseTargets" Height="24" FontFamily="Consolas"/>
@@ -805,7 +810,7 @@ if (Test-Path $icoPath) {
     catch { Write-Log "Window icon load failed ($($_.Exception.Message)) - using default." Warning }
 }
 # Build stamp in the title: instantly answers "is my exe running the latest pak?" after an update.
-try { $script:Win.Title = "Package Builder  -  build $($script:BuildStamp)" } catch {}
+try { $script:Win.Title = "$(if (Get-Command Get-PBToolName -EA SilentlyContinue) { Get-PBToolName } else { 'Package Builder' })  -  build $($script:BuildStamp)" } catch {}
 foreach ($n in 'N1','N2','N3','N4','P1','P2','P3','P4','TabsP4','TxtPkg','LblParsed','BtnPred','BtnFetch','BtnAddInst','ChkAddUninstall',
                 'BtnPredCmds','LblReview','LblCreateResult','BtnCopyOutgoing','TxtPubPkgName','BtnLoadOutgoing','BtnBrowsePkg','PnlPublish','TxtPubProductName','TxtPubPublisher','TxtPubVersion','TxtPubProductCode',
                 'TxtPubBrandingKey','TxtPubUninstallKey','TxtPubDetectVersion','TxtPubInstall','TxtPubUninstall','TxtPubRepair','TxtPubDescription','CmbDetectType','ChkPubAllowInteract',
@@ -821,7 +826,7 @@ foreach ($n in 'N1','N2','N3','N4','P1','P2','P3','P4','TabsP4','TxtPkg','LblPar
                 'TxtMoveAppName','BtnMoveToTest','BtnMoveToDev',
                 'LblPred','LblSrc','LblInst','TxtType','TxtPC','ChkKeepShortcut','ChkKeepStartup','ChkKeepStray','ChkKeepRunKey','BtnMsiPropsView','BtnMatchPredMst','LblMatchMst','BtnBack','BtnNext','TxtRitm',
                 'LblRitmCaption','TabIntegration','TabTesting','TabDevTest','PnlOutPrefix','CmbOutPrefix',
-                'PnlMstFlags','PnlMsiProps','TxtMsiProps',
+                'PnlMstFlags','PnlMsiProps','TxtMsiProps','ChkGenerateMst',
                 'LblExeParams','PnlExeParams','TxtInstArgs','TxtUninstArgs','PnlBundled','BtnBundledMsi','BtnCaptureMsi','LblBundled','PnlSnapshot','BtnSnapshot','LblSnapshot','PnlPerUser','CmbPerUser','LblPerUser','PnlKbHint','LblKbConf','LblKbArgs','LblKbNote','BtnProbeHelp','LblKbSrc','BtnKbUse','LblKbUninst','BtnKbUseUninst','PnlKbUninst','PnlLoose','ChkArp','ChkLooseShortcut','TxtLooseTargets',
                 'LblMultiArgs','PnlMultiArgs',
                 'BtnResetStep','BtnResetAll','BtnAdminCmd','BtnSystemCmd','BtnAdminInstall','BtnAdminUninstall','BtnAdminRepair','BtnSysInstall','BtnSysUninstall','BtnSysRepair',
@@ -1572,9 +1577,12 @@ function Populate-Step2 {
         } else {
             $TxtPC.Text='(not an MSI)'; $TxtPC.IsEnabled=$false; $script:State.ProductCode=''
         }
+        # F27/F29: the Generate-MST master toggle is relevant only for an MSI. Sync it and let it gate the option panels.
+        if ($ChkGenerateMst) { $ChkGenerateMst.IsChecked = [bool]$script:State.GenerateMst; $ChkGenerateMst.Visibility = if ($isMsi) { 'Visible' } else { 'Collapsed' } }
+        $genMst = (-not $isMsi) -or [bool]$script:State.GenerateMst
         # MST cleanup toggles (KEEP = don't remove), PER MSI. The single pair is shown only for a
-        # lone MSI; in Multiple mode each MSI row carries its own pair (Build-MultiArgRows).
-        $PnlMstFlags.Visibility = if ($isMsi) { 'Visible' } else { 'Collapsed' }
+        # lone MSI; in Multiple mode each MSI row carries its own pair (Build-MultiArgRows). Hidden when not generating an MST.
+        $PnlMstFlags.Visibility = if ($isMsi -and $genMst) { 'Visible' } else { 'Collapsed' }
         if ($isMsi -and $first) {
             $fl = Get-MsiFlags $first.FullName
             $ChkKeepShortcut.IsChecked = [bool]$fl.KeepShortcut
@@ -1582,8 +1590,8 @@ function Populate-Step2 {
             $ChkKeepStray.IsChecked    = [bool]$fl.KeepStray
             $ChkKeepRunKey.IsChecked   = [bool]$fl.KeepRunKey
         }
-        # Single-MSI extra-properties box (merged into its MST at assemble time).
-        $PnlMsiProps.Visibility = if ($isMsi) { 'Visible' } else { 'Collapsed' }
+        # Single-MSI extra-properties box (merged into its MST at assemble time). Hidden when not generating an MST.
+        $PnlMsiProps.Visibility = if ($isMsi -and $genMst) { 'Visible' } else { 'Collapsed' }
         if ($isMsi -and $first) {
             if (-not $script:State.MsiProps) { $script:State.MsiProps = @{} }
             $TxtMsiProps.Text = if ($script:State.MsiProps.ContainsKey($first.FullName)) { [string]$script:State.MsiProps[$first.FullName] } else { '' }
@@ -1903,6 +1911,11 @@ function Build-Step3Script {
         # User chose loose files: script copies the payload (+ optional shortcut(s)/ARP).
         $newPkg.InstallerMode = 'LooseFiles'
         $newPkg.CreateArp = [bool]$script:State.LooseArp
+        # F25/F34 (GPF): a zipped source is kept FLAT under its OWN name (mirrors the incoming Files\), and the ps1's
+        # Expand-ZipFile extracts THAT file - not a tool-renamed <PackageName>.zip. Only when the payload is a single .zip.
+        if ((Get-PBBrand -Path 'Name' -Default 'MTB') -eq 'GPF' -and @($ins).Count -eq 1 -and "$($ins[0].Extension)" -match '(?i)^\.zip$') {
+            $newPkg.ZipName = $ins[0].Name
+        }
         if ($script:State.LooseShortcut -and $script:State.LooseTargets) {
             $newPkg.Shortcuts = @(($script:State.LooseTargets -split ',') |
                 ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object { @{ Target = $_ } })
@@ -1914,7 +1927,14 @@ function Build-Step3Script {
             $rel = Get-RelativePath -Base $payloadRoot -Full $_.FullName
             $rel = $rel -replace '(?i)^Files\\', ''   # nested Files\Files payloads are hoisted at assembly - the command must match
             if ($_.Extension.ToLower() -eq '.msi') {
-                @{ Type='MSI'; MsiFileName=$rel; ProductCode=(Get-MsiProductCode $_.FullName) }
+                $mit = @{ Type='MSI'; MsiFileName=$rel; ProductCode=(Get-MsiProductCode $_.FullName) }
+                # F27/F29: honour the Generate-MST choice per MSI too (reuse a source MST, else plain).
+                if (-not $script:State.GenerateMst) {
+                    $sm = if (Get-Command Find-VendorMst -EA SilentlyContinue) { Find-VendorMst $_.FullName } else { $null }
+                    if ($sm) { $sub = Split-Path $rel -Parent; $ml = [IO.Path]::GetFileName($sm); $mit.MstFileName = if ($sub) { Join-Path $sub $ml } else { $ml } }
+                    else { $mit.NoMst = $true }
+                }
+                $mit
             } else {
                 $a = $script:State.InstallerArgs[$_.FullName]
                 @{ Type='EXE'; ExeFileName=$rel; InstallParams=$(if($a){$a.Install}else{''}); UninstallParams=$(if($a){$a.Uninstall}else{''}) }
@@ -1924,7 +1944,21 @@ function Build-Step3Script {
         $rel = Get-RelativePath -Base $payloadRoot -Full $ins[0].FullName
         $rel = $rel -replace '(?i)^Files\\', ''   # nested Files\Files payloads are hoisted at assembly - the command must match
         switch ($ins[0].Extension.ToLower()) {
-            '.msi' { $newPkg.MsiFileName = $rel }
+            '.msi' {
+                $newPkg.MsiFileName = $rel
+                # F27/F29: MST generation is a user choice. Generate ON (default) -> the builder builds <msi>.mst.
+                # Generate OFF -> if the SOURCE already ships an MST, reuse it as-is (it's copied flat next to the MSI);
+                # otherwise install the MSI PLAIN (no transform).
+                $newPkg.GenerateMst = [bool]$script:State.GenerateMst
+                if (-not $script:State.GenerateMst) {
+                    $srcMst = if (Get-Command Find-VendorMst -EA SilentlyContinue) { Find-VendorMst $ins[0].FullName } else { $null }
+                    if ($srcMst) {
+                        $sub = Split-Path $rel -Parent
+                        $mstLeaf = [IO.Path]::GetFileName($srcMst)
+                        $newPkg.MstFileName = if ($sub) { Join-Path $sub $mstLeaf } else { $mstLeaf }
+                    } else { $newPkg.NoMst = $true }
+                }
+            }
             '.exe' { $newPkg.ExeFileName = $rel; $newPkg.InstallParams = $script:State.InstallParams; $newPkg.UninstallParams = $script:State.UninstallParams
                      $newPkg.UninstallCommand = "$($script:State.SnapshotUninstall)" }   # snapshot-captured full uninstall -> written into the ps1
         }
@@ -2608,21 +2642,38 @@ $BtnPred.add_Click({
     if (-not $cands -or $cands.Count -eq 0) {
         # LAST RESORT: let the packager point at the predecessor package folder themselves (request folder empty /
         # share not reachable / unexpected layout). The picked folder becomes the single candidate.
+        # F45: offer BOTH a folder pick and a ZIP-file pick, so a zipped predecessor (which auto-detection can miss) is
+        # still selectable. "Yes" = browse to a folder; "No" = pick a .zip file; "Cancel" = give up.
         $ask = [System.Windows.MessageBox]::Show(
-            "No predecessor was found automatically.`n`nDo you want to browse to the predecessor package folder yourself?",
-            'Predecessor not found', 'YesNo', 'Question')
+            "No predecessor was found automatically.`n`nYES  - browse to the predecessor package FOLDER`nNO   - pick a predecessor .ZIP file`nCANCEL - skip",
+            'Predecessor not found', 'YesNoCancel', 'Question')
+        $selPath = $null
         if ($ask -eq 'Yes') {
             $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-            $dlg.Description = 'Select the PREDECESSOR package folder (the folder that holds Content\ or Deploy-Application.ps1)'
-            if ($dlg.ShowDialog() -eq 'OK' -and $dlg.SelectedPath) {
-                $selDir = Get-Item -LiteralPath $dlg.SelectedPath
-                $normName = if (Get-Command Get-GpfPredecessorPackageName -EA SilentlyContinue) { Get-GpfPredecessorPackageName $selDir.Name } else { $selDir.Name }
-                $pp = Parse-PackageName $normName
-                $pv = try { [version]($pp.Version -replace '[^0-9.]','') } catch { $null }
-                $cands = @([pscustomobject]@{ Name=$normName; FullName=$selDir.FullName; Version=$pp.Version; Ver=$pv
-                                              Revision=$pp.Release; SameVersion=($pp.Version -eq $script:State.Parsed.Version) })
-                if (-not $pp.IsValid) { Write-Log "Manually selected predecessor '$($selDir.Name)' does not parse as Vendor_App_Arch_Version-Rev_Lang - identity fields may need manual review." Warning }
+            $dlg.Description = 'Select the PREDECESSOR package folder (holds Content\ or Deploy-Application.ps1, or a package .zip)'
+            if ($dlg.ShowDialog() -eq 'OK' -and $dlg.SelectedPath) { $selPath = $dlg.SelectedPath }
+        } elseif ($ask -eq 'No') {
+            $fd = New-Object System.Windows.Forms.OpenFileDialog
+            $fd.Title = 'Select the PREDECESSOR package .zip'; $fd.Filter = 'Zip packages (*.zip)|*.zip'
+            if ($fd.ShowDialog() -eq 'OK' -and $fd.FileName) { $selPath = $fd.FileName }
+        }
+        if ($selPath) {
+            $selItem  = Get-Item -LiteralPath $selPath
+            # for a .zip the identity comes from the file's base name (drop .zip); for a folder, from the folder name.
+            $rawName  = if ($selItem.PSIsContainer) { $selItem.Name } else { $selItem.BaseName }
+            # A picked .zip is extracted NOW so FullName is the package folder (MST replication + Read-PredecessorModel
+            # both scan the folder). Read-PredecessorModel also extracts as a safety net if a .zip path still reaches it.
+            $fullPath = $selItem.FullName
+            if (-not $selItem.PSIsContainer -and ($selItem.Extension -match '(?i)^\.zip$') -and (Get-Command Expand-PredecessorZip -EA SilentlyContinue)) {
+                $ex = Expand-PredecessorZip -ZipPath $selItem.FullName
+                if ($ex) { $fullPath = $ex } else { Write-Log "Predecessor zip '$rawName' has no deployment script inside." Warning }
             }
+            $normName = if (Get-Command Get-GpfPredecessorPackageName -EA SilentlyContinue) { Get-GpfPredecessorPackageName $rawName } else { $rawName }
+            $pp = Parse-PackageName $normName
+            $pv = try { [version]($pp.Version -replace '[^0-9.]','') } catch { $null }
+            $cands = @([pscustomobject]@{ Name=$normName; FullName=$fullPath; Version=$pp.Version; Ver=$pv
+                                          Revision=$pp.Release; SameVersion=($pp.Version -eq $script:State.Parsed.Version) })
+            if (-not $pp.IsValid) { Write-Log "Manually selected predecessor '$rawName' does not parse as Vendor_App_Arch_Version-Rev_Lang - identity fields may need manual review." Warning }
         }
         if (-not $cands -or $cands.Count -eq 0) {
             $script:State.PredecessorPath=$null; $script:State.PredecessorModel=$null
@@ -4292,6 +4343,11 @@ $ChkKeepShortcut.add_Click({ if ($script:Rehydrating) { return } ; $ins=@($scrip
 $ChkKeepStartup.add_Click({  if ($script:Rehydrating) { return } ; $ins=@($script:State.ChosenInstallers); if ($ins.Count -ge 1) { (Get-MsiFlags $ins[0].FullName).KeepStartup  = [bool]$ChkKeepStartup.IsChecked } })
 $ChkKeepStray.add_Click({    if ($script:Rehydrating) { return } ; $ins=@($script:State.ChosenInstallers); if ($ins.Count -ge 1) { (Get-MsiFlags $ins[0].FullName).KeepStray    = [bool]$ChkKeepStray.IsChecked } })
 $ChkKeepRunKey.add_Click({   if ($script:Rehydrating) { return } ; $ins=@($script:State.ChosenInstallers); if ($ins.Count -ge 1) { (Get-MsiFlags $ins[0].FullName).KeepRunKey   = [bool]$ChkKeepRunKey.IsChecked } })
+$ChkGenerateMst.add_Click({  if ($script:Rehydrating) { return } ; $script:State.GenerateMst = [bool]$ChkGenerateMst.IsChecked
+                             # hide the MST cleanup + properties options when not generating an MST
+                             $vis = if ($ChkGenerateMst.IsChecked) { 'Visible' } else { 'Collapsed' }
+                             if ($PnlMstFlags) { $PnlMstFlags.Visibility = $vis }; if ($PnlMsiProps) { $PnlMsiProps.Visibility = $vis }
+                             Invalidate-From 3 })
 $TxtMsiProps.add_TextChanged({   if ($script:Rehydrating) { return } ; if (-not $script:State.MsiProps) { $script:State.MsiProps=@{} }
                                   $ins=@($script:State.ChosenInstallers); if ($ins.Count -ge 1) { $script:State.MsiProps[$ins[0].FullName]=$TxtMsiProps.Text } })
 $TxtInstArgs.add_TextChanged({   if ($script:Rehydrating) { return } ; $script:State.InstallParams  =$TxtInstArgs.Text;   Invalidate-From 3 })
@@ -5153,7 +5209,8 @@ $BtnNext.add_Click({
                        -RemoveShortcut ([bool]$script:State.RemoveShortcut) -RemoveRun32 ([bool]$script:State.RemoveRun32) -RemoveRun64 ([bool]$script:State.RemoveRun64) `
                        -RemoveStartup ([bool]$script:State.RemoveStartup) -RemoveStray ([bool]$script:State.RemoveStray) `
                        -CreateArp ([bool]$script:State.LooseArp) -ShortcutTargets $targets -MsiPropsMap $msiPropsMap -MsiFlagsMap $msiFlagsMap `
-                       -MstApplyExtras @($script:State.MstApplyExtras) -PredecessorPath $predPathForBuild -PredVersion $predVerForBuild
+                       -MstApplyExtras @($script:State.MstApplyExtras) -PredecessorPath $predPathForBuild -PredVersion $predVerForBuild `
+                       -GenerateMst ([bool]$script:State.GenerateMst)
             $BtnNext.IsEnabled = $true
             if ($pkg -and (Test-Path $pkg)) {
                 $LblCreateResult.Text = "Created: $pkg"; $LblCreateResult.Foreground = '#6A9955'
@@ -5175,7 +5232,7 @@ $BtnNext.add_Click({
         if (Test-LiveShareDuplicate) { return }   # warn once if this exact name is already in the live share
         $script:State.Ritm = $TxtRitm.Text.Trim()
         if (-not $script:State.ChosenInstallers -or $script:State.ChosenInstallers.Count -eq 0) {
-            [Windows.MessageBox]::Show('Fetch a source with at least one installer/payload file before continuing.','Package Builder') | Out-Null
+            [Windows.MessageBox]::Show('Fetch a source with at least one installer/payload file before continuing.',(Get-PBToolName)) | Out-Null
             return
         }
         if ($script:State.ChosenInstallers | Where-Object { $_.Extension.ToLower() -eq '.iso' }) {

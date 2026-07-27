@@ -4,7 +4,7 @@
 # utilities that implement Plan section 1 (one-dot-prefix swap).
 ##############################################################
 
-$script:BuildStamp = '2026-07-22.r215'  # shown in the WINDOW TITLE so you always know which build/pak you run
+$script:BuildStamp = '2026-07-24.r217'  # shown in the WINDOW TITLE so you always know which build/pak you run
 
 # SNIPPET OWNERS - only these Windows usernames see the Add / Edit / Delete snippet buttons (everyone else just USES the
 # shared library). Baked into the ENCRYPTED pak (users get exe+pak only, so they can't read/change this - unlike
@@ -332,6 +332,22 @@ function Get-Setting {
         return $script:Settings[$Name]
     }
     return $Default
+}
+
+# Lift the execution policy for THIS PROCESS ONLY, so SCRIPT modules (ConfigMgr AdminUI.PS, MSAL.PS, IntuneWin32App)
+# import even when the machine/user policy is Restricted/Undefined - common on the 32-bit WOW6432Node hive the ps2exe
+# launcher reads. In-memory, no admin rights, no registry write, gone when the tool exits. Only a GPO-set
+# MachinePolicy/UserPolicy can override it; then we warn and let the caller continue. Idempotent + cheap - both the SCCM
+# and Intune module imports call it so no integration forgets it ("running scripts is disabled" was hitting Intune).
+function Enable-PBProcessScripts {
+    try {
+        if ((Get-ExecutionPolicy -Scope Process) -eq 'Bypass') { return $true }
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop
+        return $true
+    } catch {
+        if (Get-Command Write-Log -ErrorAction SilentlyContinue) { Write-Log "Could not relax the execution policy for this process - a GPO may enforce it: $($_.Exception.Message)" Warning }
+        return $false
+    }
 }
 
 # Author DISPLAY NAME (not the login id). Priority: settings.json DefaultAuthor ->

@@ -1684,13 +1684,13 @@ if ((Test-Path "$audiRoot\Incoming") -and (Test-Path "$audiRoot\Outgoing")) {
             Assert 'map: Execute-MSI -AddParameters -> -AdditionalArgumentList' (($cAdd -match '-AdditionalArgumentList\s+"K=1"') -and ($cAdd -notmatch '-AddParameters'))
             $cSvc = Convert-V3ToV4Content -Content 'Set-ServiceStartMode -Name "Svc" -StartupType Disabled'
             Assert 'map: Set-ServiceStartMode -Name -> -Service' (($cSvc -match 'Set-ADTServiceStartMode\s+-Service\s+"Svc"') -and ($cSvc -notmatch '-Name'))
-            # -IfEmpty -> the team house style (QA rule): nested Test-Path -> (Get-ChildItem -Path -Force|Measure-Object).Count -eq 0.
+            # -IfEmpty -> GPF team house style: single If with -PathType Container AND (Get-ChildItem -Force|Measure-Object).Count -eq 0, -Path.
             $cIfe = Convert-V3ToV4Content -Content 'Remove-Folder -Path "$envProgramFiles\App" -IfEmpty'
-            Assert 'map: Remove-Folder -IfEmpty -> nested Test-Path/Measure block' (($cIfe -match 'If \(Test-Path -Path') -and ($cIfe -match '\(Get-ChildItem -Path .* -Force \| Measure-Object\)\.Count -eq 0') -and ($cIfe -match 'Remove-ADTFolder -Path') -and ($cIfe -notmatch '-IfEmpty') -and ($cIfe -notmatch 'LiteralPath'))
+            Assert 'map: Remove-Folder -IfEmpty -> GPF empty-folder block' (($cIfe -match 'Test-Path -Path .* -PathType Container') -and ($cIfe -match '\(Get-ChildItem .* -Force \| Measure-Object\)\.Count -eq 0') -and ($cIfe -match 'Remove-ADTFolder -Path') -and ($cIfe -notmatch '-IfEmpty') -and ($cIfe -notmatch 'LiteralPath'))
             Assert 'map: -IfEmpty output parses'                ($(($pfe=$null);[void][System.Management.Automation.Language.Parser]::ParseInput($cIfe,[ref]$null,[ref]$pfe);$pfe.Count -eq 0))
             # Final safety net: a -IfEmpty that survived a preserved verbatim block is still rewritten at format time.
             $cIfe2 = Format-OutputScript -Text '        Remove-ADTFolder -Path "$envProgramFiles\App" -IfEmpty'
-            Assert 'fmt: leftover Remove-ADTFolder -IfEmpty -> nested block' (($cIfe2 -match 'If \(Test-Path -Path') -and ($cIfe2 -match 'Measure-Object\)\.Count -eq 0') -and ($cIfe2 -notmatch '-IfEmpty'))
+            Assert 'fmt: leftover Remove-ADTFolder -IfEmpty -> GPF block' (($cIfe2 -match '-PathType Container') -and ($cIfe2 -match 'Measure-Object\)\.Count -eq 0') -and ($cIfe2 -notmatch '-IfEmpty'))
             # 8. Duplicate template scaffold log lines ("...$appVendor $appName $appVersion...") dropped when the injected
             #    body carries its OWN action logging (verified real-gen: Freia had them doubled above the authored lines).
             $scaffTpl = ('#*====================================MAIN-INSTALLATION BEGIN====',
@@ -1796,6 +1796,121 @@ if ((Test-Path "$audiRoot\Incoming") -and (Test-Path "$audiRoot\Outgoing")) {
         Assert "GPF v4 authored: template boilerplate stripped"         ($pre7 -notmatch 'Show-ADTInstallationWelcome' -and $pre7 -notmatch 'VWG_CheckForReboot')
     } finally { $script:Settings = $savedSettings }
 } else { Write-Host "SKIP GPF corpus tests (Downloads\OtherBrand not present)" -ForegroundColor Yellow }
+
+# ==== GPF New_Findings batch (2026-07-24) - UNGATED (do NOT depend on OtherBrand), so they always run ============
+$__saved = $script:Settings
+$script:Settings = @{ Brand = @{ Name='GPF'; ToolName='Package Assistance'; TemplateRoot='PSADT_Template_GPF'; OrderNumberLabel='AES'
+    Convert=@{ MtbMappings=$false; VwgVarRename=$false; RegWowHardcode=$false; LogPathMain=$false; SectionVarScope=$false; SoftIdentFormat='GPF' } } }
+try {
+    $nfTpl = $null
+    $nfPath = Join-Path (Split-Path (Resolve-Module 'PSADT_V3toV4_Mappings.ps1') -Parent) 'lib\PSADT_Template_GPF\Content\Invoke-AppDeployToolkit.ps1'
+    if (Test-Path $nfPath) { $nfTpl = Read-FileSmart -Path $nfPath }
+    # F12: Write-ADTLogEntry -Source back to $adtSession.DeployAppScriptFriendlyName
+    $nf12 = Convert-V3ToV4Content -Content "Write-Log -Message 'x' -Source `$deployAppScriptFriendlyName"
+    Assert "NF F12: -Source -> adtSession.DeployAppScriptFriendlyName" (($nf12 -match '\$adtSession\.DeployAppScriptFriendlyName') -and ($nf12 -notmatch '(?<!\.)\$deployAppScriptFriendlyName'))
+    # F18: generated per-user registry uses -Key not -LiteralPath
+    $nf18 = Get-PBHkcuLines -Items @(@{Key='HKCU:\Software\JavaSoft\Prefs';Name='v';Value='1';Type='DWord'}) -Style 'ADT'
+    Assert "NF F18: generated reg -Key not -LiteralPath" (($nf18 -match '-Key ') -and ($nf18 -notmatch '-LiteralPath'))
+    # F15: GPF if-empty style (single -and, -PathType Container, Measure-Object, -Path)
+    $nf15 = Convert-V3ToV4Content -Content 'Remove-Folder -Path "$envProgramFiles\App" -IfEmpty'
+    Assert "NF F15: GPF empty-folder single-and block" (($nf15 -match 'Test-Path -Path .* -PathType Container') -and ($nf15 -match 'Measure-Object\)\.Count -eq 0') -and ($nf15 -notmatch 'LiteralPath') -and ($nf15 -notmatch '-IfEmpty'))
+    # F36: variable-GUID -FilePath -> -ProductCode (scoped), real file -FilePath untouched
+    $nf36 = Convert-V3ToV4Content -Content "`$MSIGUID = '{A886A286-7184-448D-9D93-CCE7F5D28174}'`r`nExecute-MSI -Action Uninstall -Path `$MSIGUID"
+    Assert "NF F36: -FilePath `$MSIGUID -> -ProductCode" (($nf36 -match '-ProductCode \$MSIGUID') -and ($nf36 -notmatch '-FilePath \$MSIGUID'))
+    Assert "NF F36: real -FilePath `$msiFile untouched"  ((Convert-V3ToV4Content -Content 'Execute-MSI -Action Install -Path $msiFile') -match '-FilePath \$msiFile')
+    # F9: predecessor DisplayName from SoftIdent (strip _is1; MSI GUID -> '')
+    Assert "NF F9: DisplayName from SoftIdent (_is1 stripped)" ((Get-PredecessorDisplayName -Model @{ Session=@{ SoftIdent="'HKLM:\...\Uninstall\Animator4_v2.8.1_64_is1 [DisplayVersion=2.8.1]'" } }) -eq 'Animator4_v2.8.1_64')
+    Assert "NF F9: MSI GUID subkey -> '' (use ProductCode)"   ((Get-PredecessorDisplayName -Model @{ Session=@{ SoftIdent="'HKLM:\...\Uninstall\{A886A286-7184-448D-9D93-CCE7F5D28174}'" } }) -eq '')
+    # F32: GPF LooseFiles ARP -> Set-ApplicationWizardEntry (no MTB)
+    $nfLf = Get-LooseFilesCommandSet -InstallPath 'C:\App' -ZipName 'x' -Shortcuts @() -CreateArp $true -AppName 'MyApp'
+    Assert "NF F32: GPF ARP -> Set-ApplicationWizardEntry" (($nfLf.MainInstall -match 'Set-ApplicationWizardEntry') -and ($nfLf.MainInstall -notmatch 'Set-MTBApplicationWizardEntry'))
+    if ($nfTpl) {
+        # F22: Portfv forced to vendor (from carried 'blank'); AppAddInfo01-04 all NA
+        $nfW = Set-GpfWrapperDefaults -Text ($nfTpl -replace "VWG_Portfv\s*=\s*''", "VWG_Portfv = 'blank'") -NewPkg @{ Vendor='Volkswagen'; AppName='iDEX'; Arch='x64'; Version='3.0.6.4'; Revision='0001'; Lang='MUL'; Ritm='AES-1-020574-A' } -IsMsi $false
+        Assert "NF F22: Portfv forced to vendor (was 'blank')" ($nfW -match "VWG_Portfv\s*=\s*'Volkswagen'")
+        Assert "NF F22: AppAddInfo01-04 all NA"                (([regex]::Matches($nfW,"VWG_AppAddInfo0[1-4]\s*=\s*'NA'")).Count -eq 4)
+        # F40: carried non-global custom-vars $VWG_SoftIdent -> $Global
+        $nfCv = $nfTpl -replace '(?s)(CUSTOM APPLICATION VARIABLES BEGIN[^\r\n]*\r?\n)', "`$1`t[string]`$VWG_SoftIdent = `"HKLM:\SOFTWARE\`$(`$VWG_CurrentRegWOW)Microsoft\Windows\CurrentVersion\Uninstall\App_is1`"`r`n"
+        $nfCvOut = Set-GpfSoftIdentTwoPlace -Text $nfCv -Arch 'x86'
+        Assert "NF F40: carried `$VWG_SoftIdent -> `$Global" (($nfCvOut -match '\$Global:VWG_SoftIdent\s*=\s*"HKLM') -and ($nfCvOut -notmatch '(?m)^\s*\[string\]\s*\$VWG_SoftIdent\s*='))
+        # F47: fresh EXE with NO snapshot -> best-guess Uninstall\<AppName> [DisplayVersion=<ver>] (not the VWG\CM path)
+        $nf47 = Set-GpfWrapperDefaults -Text $nfTpl -NewPkg @{ Vendor='Acme'; AppName='CoolTool'; Arch='x64'; Version='3.2.1'; Revision='0001'; Lang='MUL'; Ritm='AES-1-1' } -IsMsi $false
+        $nf47si = ([regex]::Match($nf47, "(?im)$(Get-FieldLinePrefix 'SoftIdent')['`"]([^'`"]*)")).Groups[2].Value
+        Assert "NF F47: EXE-no-snap Uninstall\<App> [DisplayVersion=ver]" (($nf47si -match 'Uninstall\\CoolTool') -and ($nf47si -match '\[DisplayVersion=3\.2\.1\]') -and ($nf47si -notmatch 'VWG\\CM'))
+    }
+    # F47: fresh MSI detection carries ProductCode + DisplayVersion (independent of snapshot)
+    Assert "NF F47: MSI ProductCode + DisplayVersion" ((Get-AutoSoftIdent -ProductCode '{11112222-3333-4444-5555-666677778888}' -Version '3.2.1') -match 'Uninstall\\\{11112222-3333-4444-5555-666677778888\} \[DisplayVersion=3\.2\.1\]')
+    # Review-item audit: fresh EXE bare-app-name detection must be flagged with CHECK AND FILL
+    $nfRfFresh = Get-ScriptReviewFindings -ScriptText "    AppName = 'CoolTool'`r`n    SoftIdent = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\CoolTool [DisplayVersion=3.2.1]'" -IsPredecessor $false
+    Assert "NF audit: fresh bare-app-name SoftIdent flagged" ((($nfRfFresh -join "`n") -match 'bare app name') -and (($nfRfFresh -join "`n") -match 'CHECK AND FILL'))
+    # Review-item audit: predecessor uninstall by bare-AppName fallback must be flagged
+    $nfPredFb = "    AppName = 'Animator4'`r`n#Upgrade Acme_Animator4_x64_2.0-0001_MUL`r`nIf ((Get-ADTApplication -Name `"Animator4`") -and (Test-Path -Path `"x`")) {`r`n}"
+    Assert "NF audit: pred bare-name fallback flagged" (((Get-ScriptReviewFindings -ScriptText $nfPredFb -IsPredecessor $true) -join "`n") -match 'bare package name')
+    # Review-item audit: predecessor detection by ProductCode must NOT raise a name-detection finding
+    $nfPredPc = "    AppName = 'Animator4'`r`n#Upgrade Acme_Animator4_x64_2.0-0001_MUL`r`nIf ((Get-ADTApplication -ProductCode `"{AAAABBBB-CCCC-DDDD-EEEE-FFFF00001111}`") -and (Test-Path -Path `"x`")) {`r`n}"
+    Assert "NF audit: pred ProductCode no false name finding" (((Get-ScriptReviewFindings -ScriptText $nfPredPc -IsPredecessor $true) -join "`n") -notmatch 'detection is by NAME|bare package name')
+    # F52: progress bar carried from predecessor (section-scoped). Predecessor active in INSTALL only -> enable install line, review item raised.
+    if ($nfTpl) {
+        $nfPredProg = "MAIN-INSTALLATION BEGIN`r`n    If (`$VWG_UseDialogs){`r`n        Show-ADTInstallationProgress`r`n    }`r`nMAIN-INSTALLATION END`r`nMAIN-UNINSTALLATION BEGIN`r`n    If (`$VWG_UseDialogs){`r`n        #Show-ADTInstallationProgress`r`n    }`r`nMAIN-UNINSTALLATION END"
+        $nfPb = Set-PredecessorProgressBar -Text $nfTpl -Model @{ RawV4Content = $nfPredProg }
+        Assert "NF F52: enables progress in the section predecessor had it" ($nfPb.Enabled -ge 1)
+        $nfSecI = [regex]::Match($nfPb.Text,'(?s)MAIN-INSTALLATION BEGIN(.*?)MAIN-INSTALLATION END').Groups[1].Value
+        Assert "NF F52: install progress line uncommented" ($nfSecI -match '(?m)^[ \t]*Show-ADTInstallationProgress')
+    }
+    Assert "NF F52: no-op when predecessor had no progress" ((Set-PredecessorProgressBar -Text $nfTpl -Model @{ RawV4Content = $nfTpl }).Enabled -eq 0)
+    # F52 review item: active progress on predecessor reuse
+    Assert "NF F52: review item on active progress" (((Get-ScriptReviewFindings -ScriptText "    AppName='X'`r`n        Show-ADTInstallationProgress`r`n" -IsPredecessor $true) -join "`n") -match 'progress bar is ENABLED')
+    # F54 review item: empty ProcToBlock on predecessor reuse flagged; populated one not flagged
+    Assert "NF F54: empty ProcToBlock flagged"     (((Get-ScriptReviewFindings -ScriptText "    AppName='X'`r`n    [string[]] `$Global:VWG_ProcToBlock = @()`r`n" -IsPredecessor $true) -join "`n") -match 'ProcToBlock .* is empty')
+    Assert "NF F54: populated ProcToBlock not flagged" (((Get-ScriptReviewFindings -ScriptText "    AppName='X'`r`n    [string[]] `$Global:VWG_ProcToBlock = @('firefox')`r`n" -IsPredecessor $true) -join "`n") -notmatch 'ProcToBlock .* is empty')
+    # F45: zipped predecessor is detected/extracted (both a .zip file path AND a folder holding a package .zip)
+    $f45tmp = Join-Path $env:TEMP ("PBnf45_" + [guid]::NewGuid().ToString('N').Substring(0,8))
+    try {
+        $f45pkg = 'VWG_ZipPred_x86_1.0.0-0001_MUL'
+        $f45c   = Join-Path $f45tmp "$f45pkg\Content"; New-Item -ItemType Directory -Path $f45c -Force | Out-Null
+        "[String]`$appName='ZipPred'" | Set-Content -Path (Join-Path $f45c 'Invoke-AppDeployToolkit.ps1') -Encoding UTF8
+        $f45zip = Join-Path $f45tmp "$f45pkg.zip"
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::CreateFromDirectory((Join-Path $f45tmp $f45pkg), $f45zip)
+        Remove-Item (Join-Path 'C:\temp\PackageBuilder\PredCache' $f45pkg) -Recurse -Force -EA SilentlyContinue
+        Assert "NF F45: Expand-PredecessorZip -> Content-at-root package root" ((Test-Path (Join-Path (Expand-PredecessorZip -ZipPath $f45zip) 'Content\Invoke-AppDeployToolkit.ps1')))
+        Assert "NF F45: model loads from a .zip file path" ((Read-PredecessorModel -PackagePath $f45zip -PackageName $f45pkg).Identity.AppName -eq 'ZipPred')
+        $f45pf = Join-Path $f45tmp 'Predecessor'; New-Item -ItemType Directory -Path $f45pf -Force | Out-Null
+        Copy-Item $f45zip -Destination (Join-Path $f45pf "$f45pkg.zip")
+        Assert "NF F45: model loads from folder holding a package .zip" ((Read-PredecessorModel -PackagePath $f45pf -PackageName $f45pkg).Identity.AppName -eq 'ZipPred')
+        Assert "NF F45: bad zip path -> '' (no throw)" ((Expand-PredecessorZip -ZipPath (Join-Path $f45tmp 'nope.zip')) -eq '')
+    } finally { Remove-Item -LiteralPath $f45tmp -Recurse -Force -EA SilentlyContinue }
+    # F57-59: predecessor SupportFiles helper scripts (e.g. sc-uninstall.ps1) suggested for copy; only on reuse
+    $nfSf = "    AppName='Bentley'`r`nStart-ADTProcess -FilePath 'powershell.exe' -ArgumentList `"-File `$(`$adtSession.DirSupportFiles)\sc-uninstall.ps1`""
+    Assert "NF F57: sc-uninstall.ps1 helper suggested (reuse)" (((Get-ScriptReviewFindings -ScriptText $nfSf -IsPredecessor $true) -join "`n") -match 'sc-uninstall\.ps1')
+    Assert "NF F57: helper NOT flagged on fresh package"       (((Get-ScriptReviewFindings -ScriptText $nfSf -IsPredecessor $false) -join "`n") -notmatch 'helper file')
+    # F27/F29: MST-generation toggle. ON -> built <msi>.mst; OFF+no src -> plain; OFF+src -> reuse source mst.
+    Assert "NF F27: generate ON -> -Transform <msi>.mst" ((New-StandardCommands -NewPkg @{ InstallerMode='SingleMSI'; MsiFileName='app.msi'; ProductCode='{PC}' }).MainInstall -match 'app\.mst')
+    Assert "NF F27: generate OFF + no src -> no -Transform" ((New-StandardCommands -NewPkg @{ InstallerMode='SingleMSI'; MsiFileName='app.msi'; ProductCode='{PC}'; GenerateMst=$false; NoMst=$true }).MainInstall -notmatch '-Transform')
+    Assert "NF F27: generate OFF + src -> reuse source mst" (((New-StandardCommands -NewPkg @{ InstallerMode='SingleMSI'; MsiFileName='Firefox.msi'; ProductCode='{PC}'; GenerateMst=$false; MstFileName='firefox-esr.mst' }).MainInstall -match 'firefox-esr\.mst') -and ((New-StandardCommands -NewPkg @{ InstallerMode='SingleMSI'; MsiFileName='Firefox.msi'; ProductCode='{PC}'; GenerateMst=$false; MstFileName='firefox-esr.mst' }).MainInstall -notmatch 'Firefox\.mst'))
+    # F2: GPF tool display name = "Package Assistance" (brand ToolName); default stays "Package Builder"
+    if (Get-Command Get-PBToolName -EA SilentlyContinue) {
+        Assert "NF F2: GPF tool name = Package Assistance" ((Get-PBToolName) -eq 'Package Assistance')
+    }
+    # F25/F34: GPF loose/zip source -> Expand-ZipFile (no MTB) to $envTemp\<App>_<Ver>, referencing the source zip name
+    $nfLz = New-StandardCommands -NewPkg @{ InstallerMode='LooseFiles'; AppName='TmxDIKAB'; Version='2408.1700'; Arch='x64'; Vendor='Siemens'; ZipName='TmxDIKAB_source.zip'; CreateArp=$true }
+    Assert "NF F25: GPF Expand-ZipFile (no MTB)"         (($nfLz.MainInstall -match 'Expand-ZipFile ') -and ($nfLz.MainInstall -notmatch 'Expand-MTBZipFile'))
+    Assert "NF F25: GPF extract to `$envTemp\<App>_<Ver>" ($nfLz.MainInstall -match 'Destination "\$envTemp\\TmxDIKAB_2408\.1700"')
+    Assert "NF F25: GPF references source zip name"      ($nfLz.MainInstall -match 'TmxDIKAB_source\.zip')
+    # Intune/SCCM module import: execution-policy is lifted for THIS PROCESS before importing script modules (MSAL.PS /
+    # ConfigMgr) - both integrations must call the shared guard so "running scripts is disabled" can't block the import.
+    Assert "NF Intune: Enable-PBProcessScripts exists"   ([bool](Get-Command Enable-PBProcessScripts -EA SilentlyContinue))
+    $nfToolRoot = Split-Path (Resolve-Module 'PSADT_V3toV4_Mappings.ps1') -Parent
+    Assert "NF Intune: guard runs BEFORE MSAL import"    ((Get-Content (Join-Path $nfToolRoot 'Intune.ps1') -Raw) -match 'Enable-PBProcessScripts[\s\S]{0,400}Import-Module \$msalPath')
+    Assert "NF SCCM: still lifts policy (shared guard)"  ((Get-Content (Join-Path $nfToolRoot 'Sccm.ps1') -Raw) -match 'Enable-PBProcessScripts')
+} finally { $script:Settings = $__saved }
+# F25/F34: MTB loose-files path stays on Program Files + Expand-MTBZipFile (brand isolation) - checked with MTB settings
+$__savedMtb = $script:Settings
+$script:Settings = @{ Brand = @{ Name='MTB' } }
+try {
+    $nfMtbLz = New-StandardCommands -NewPkg @{ InstallerMode='LooseFiles'; AppName='App'; Version='1.0'; Arch='x64'; Vendor='Acme'; FullName='Acme_App_x64_1.0-0001_MUL'; CreateArp=$true }
+    Assert "NF F25: MTB keeps Expand-MTBZipFile + Program Files" (($nfMtbLz.MainInstall -match 'Expand-MTBZipFile ') -and ($nfMtbLz.MainInstall -match '\$envProgramFiles\\Acme\\App') -and ($nfMtbLz.MainInstall -notmatch '\$envTemp'))
+} finally { $script:Settings = $__savedMtb }
 
 Write-Host ""
 if ($fail -eq 0) { Write-Host "ALL TESTS PASSED" -ForegroundColor Green; exit 0 }   # explicit: a native command's exit code (robocopy's benign 1 in the self-stage test) must not leak as OUR exit code

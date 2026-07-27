@@ -262,7 +262,8 @@ function New-Package {
         [hashtable]$MsiFlagsMap = @{},          # MSI filename -> @{ Shortcut=<remove?>; Run=<remove?> } (per MSI)
         [object[]]$MstApplyExtras = @(),        # user-confirmed predecessor MST removals (single-MSI reuse)
         [string]$PredecessorPath = '',          # reuse: carry the predecessor's Active Setup .ps1 forward (version-swapped)
-        [string]$PredVersion = ''               # reuse: the predecessor version, for the Active Setup name/content swap
+        [string]$PredVersion = '',              # reuse: the predecessor version, for the Active Setup name/content swap
+        [bool]$GenerateMst = $true              # F27/F29: build an MST per MSI (transform+cleanup). $false -> reuse the source MST if present, else plain MSI.
     )
     # UNIVERSAL predecessor-doc guard: the package's Documents folder must hold ONLY the CURRENT request's documents,
     # never a predecessor's. Fetch-mode already filters, but a MANUAL installer pick (or any brand) can carry docs that
@@ -353,8 +354,12 @@ function New-Package {
     if ($LooseFiles) {
         $srcRoot = if ($Resolved -and $Resolved.PayloadRoot) { $Resolved.PayloadRoot } else { Get-CommonParent -Files $ChosenInstallers }
         if (-not $srcRoot -and $Resolved) { $srcRoot = $Resolved.RootPath }
-        $zip = New-PayloadZip -PayloadFiles $ChosenInstallers -SrcRoot $srcRoot -DestZip (Join-Path $filesDir "$pkgName.zip")
-        if ($zip) { Write-Log "Loose payload zipped -> $zip" Success } else { Write-Log "Loose payload zip not created (no source root)." Warning }
+        # F25/F34: preserve a zipped source's ORIGINAL name when set ($NewPkg.ZipName - GPF keeps the source's own name so
+        # Files\ mirrors the incoming source), instead of renaming everything to <PackageName>.zip.
+        $destZipName = if ("$($NewPkg.ZipName)".Trim()) { "$($NewPkg.ZipName)".Trim() } else { "$pkgName.zip" }
+        if ($destZipName -notmatch '(?i)\.zip$') { $destZipName = "$destZipName.zip" }
+        $zip = New-PayloadZip -PayloadFiles $ChosenInstallers -SrcRoot $srcRoot -DestZip (Join-Path $filesDir $destZipName)
+        if ($zip) { Write-Log "Loose payload -> $zip" Success } else { Write-Log "Loose payload zip not created (no source root)." Warning }
         # docs + icons still come across for loose packages
         if ($Resolved) {
             foreach ($item in @($Resolved.DocItems)) { if ($item -and (Test-Path $item)) { Copy-Item -LiteralPath $item -Destination $docsDir -Recurse -Force } }
@@ -408,7 +413,14 @@ function New-Package {
     }
 
     # 5. MST for EVERY MSI in the package (each merges its own vendor MST + the Step-2 flags).
-    if (-not $LooseFiles -and (Get-Command Build-Mst -ErrorAction SilentlyContinue)) {
+    # F27/F29: only when the packager kept "Generate MST" on. When off, any SOURCE mst was already copied flat into
+    # Files\ (used as-is by the install command); if there was none, the MSI installs plain - either way we build NOTHING.
+    if (-not $GenerateMst) {
+        $srcMsts = @(Get-ChildItem -LiteralPath $filesDir -Filter *.mst -File -Recurse -ErrorAction SilentlyContinue)
+        if ($srcMsts.Count) { Write-Log "MST generation OFF - reusing the source transform(s) as-is: $((@($srcMsts | ForEach-Object { $_.Name })) -join ', ')." }
+        else { Write-Log "MST generation OFF and no source MST found - the MSI(s) install plain (no transform)." }
+    }
+    elseif (-not $LooseFiles -and (Get-Command Build-Mst -ErrorAction SilentlyContinue)) {
         $msis = @(Get-ChildItem -LiteralPath $filesDir -Filter *.msi -File -Recurse -ErrorAction SilentlyContinue)
         $runToPsadt = New-Object System.Collections.Generic.List[object]   # Run keys the MST kept (shared component) -> PSADT
         foreach ($msi in $msis) {

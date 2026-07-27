@@ -4,7 +4,7 @@
 # utilities that implement Plan section 1 (one-dot-prefix swap).
 ##############################################################
 
-$script:BuildStamp = 'GPF-2026-07-22.r28'  # shown in the WINDOW TITLE so you always know which build/pak you run
+$script:BuildStamp = 'GPF-2026-07-24.r31'  # shown in the WINDOW TITLE so you always know which build/pak you run
 
 # SNIPPET OWNERS - only these Windows usernames see the Add / Edit / Delete snippet buttons (everyone else just USES the
 # shared library). Baked into the ENCRYPTED pak (users get exe+pak only, so they can't read/change this - unlike
@@ -376,6 +376,30 @@ function Get-PBBrand {
 function Test-PBFeature {
     param([string]$Feature)   # Sccm | Intune | Publish
     return [bool](Get-PBBrand -Path "Features.$Feature" -Default $true)
+}
+# Lift the execution policy for THIS PROCESS ONLY, so SCRIPT modules (ConfigMgr AdminUI.PS, MSAL.PS, IntuneWin32App)
+# import even when the machine/user policy is Restricted/Undefined - which is common on the 32-bit WOW6432Node hive the
+# ps2exe launcher reads. In-memory, no admin rights, no registry write, gone when the tool exits. Only a GPO-set
+# MachinePolicy/UserPolicy can override it; then we warn and let the caller continue (its own fallbacks may carry on).
+# Idempotent + cheap - safe to call before every module import (SCCM + Intune both use it, so no integration forgets it).
+function Enable-PBProcessScripts {
+    try {
+        if ((Get-ExecutionPolicy -Scope Process) -eq 'Bypass') { return $true }
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop
+        return $true
+    } catch {
+        if (Get-Command Write-Log -ErrorAction SilentlyContinue) { Write-Log "Could not relax the execution policy for this process - a GPO may enforce it: $($_.Exception.Message)" Warning }
+        return $false
+    }
+}
+# F2: the tool's USER-FACING display name (window title, dialog captions, info page). The GPF team wants
+# "Package Assistance" (it's an assistant for them, not a builder); MTB keeps "Package Builder". Driven by the
+# brand's optional ToolName so it's never hardcoded - technical identifiers (PackageBuilder.exe/.pak, folders) are
+# unaffected. Falls back to "Package Builder" when unset.
+function Get-PBToolName {
+    $n = Get-PBBrand -Path 'ToolName' -Default $null
+    if ("$n".Trim()) { return "$n".Trim() }
+    return 'Package Builder'
 }
 function Test-PBConvertFlag {
     param([string]$Flag)      # MtbMappings | VwgVarRename | RegWowHardcode | LogPathMain

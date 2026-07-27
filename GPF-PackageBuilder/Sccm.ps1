@@ -276,8 +276,8 @@ function Connect-Sccm {
         # module is a SCRIPT module (AdminUI.PS.psm1), so the import dies. Lift it for THIS PROCESS ONLY: in-memory,
         # no admin rights, no registry write, gone when the tool exits. Only a GPO-set MachinePolicy/UserPolicy can
         # block this - in that case we warn and still try (the bundled-module fallback below may carry us).
-        try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop }
-        catch { Write-Log "Could not relax the execution policy for this process - a GPO may enforce it: $($_.Exception.Message)" Warning }
+        if (Get-Command Enable-PBProcessScripts -ErrorAction SilentlyContinue) { [void](Enable-PBProcessScripts) }
+        else { try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop } catch { Write-Log "Could not relax the execution policy for this process - a GPO may enforce it: $($_.Exception.Message)" Warning } }
 
         # A machine with the ConfigMgr CONSOLE INSTALLED already has the module on disk (SMS_ADMIN_UI_PATH) -
         # importing our bundled copy there clashes (assembly already loaded). Prefer the installed console's module.

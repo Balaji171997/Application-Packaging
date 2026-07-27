@@ -115,6 +115,21 @@ function Get-PredecessorUninstallPC {
     if ($m.Success) { return $m.Value }
     return $null
 }
+# F9: the predecessor's real ARP DisplayName for a name-based Get-ADTApplication detection. The parsed package AppName
+# ("Animator4") does NOT match the installed app's DisplayName ("Animator4_v2.8.1_64"), so detection fails. The
+# predecessor's own SoftIdent carries it: "HKLM:\...\Uninstall\<subkey> [DisplayVersion=x]". <subkey> is the ARP key -
+# for Inno it is "<DisplayName>_is1"; the DisplayName drops the _is1. An MSI subkey is a {GUID} (use -ProductCode, not a
+# name) -> return '' so the caller keeps its ProductCode path / falls back to the parsed AppName (+ review item).
+function Get-PredecessorDisplayName {
+    param([hashtable]$Model)
+    $si = if ($Model.Session -and $Model.Session.ContainsKey('SoftIdent')) { "$($Model.Session['SoftIdent'])".Trim("'", '"', ' ') } else { '' }
+    if (-not $si) { return '' }
+    $m = [regex]::Match($si, '(?i)\\Uninstall\\([^\\\[\r\n"'']+?)\s*(?:\[|$)')
+    if (-not $m.Success) { return '' }
+    $key = $m.Groups[1].Value.Trim()
+    if ($key -match '^\{[0-9A-Fa-f-]{36}\}$') { return '' }   # MSI ProductCode subkey - not a display name
+    return ($key -replace '(?i)_is1$', '')                    # Inno "<DisplayName>_is1" -> DisplayName
+}
 
 # Body shared by both cases: predecessor Pre + Main + Post uninstall (already
 # stripped of template structure by Read-PredecessorModel). Multiple product
@@ -176,7 +191,15 @@ function New-UninstallPreviousBlock {
     if (-not $WrapperLine) {
         # Case 2: generate detection line with branding key.
         $brandKey = "HKLM:\SOFTWARE\VWG\CM\$($id.FullName)"
-        $pcPart   = if ($pc) { "Get-ADTApplication -ProductCode `"$pc`"" } else { "Get-ADTApplication -Name `"$($id.AppName)`"" }
+        # EXE detection by NAME: use the predecessor's real ARP DisplayName from its SoftIdent (F9); fall back to the
+        # parsed AppName only if the SoftIdent has no usable name (that fallback is flagged in the review items).
+        $pcPart = if ($pc) {
+            "Get-ADTApplication -ProductCode `"$pc`""
+        } else {
+            $dn = Get-PredecessorDisplayName -Model $Model
+            if (-not $dn) { $dn = "$($id.AppName)" }
+            "Get-ADTApplication -Name `"$dn`""
+        }
         $WrapperLine = "If (($pcPart) -and (Test-Path -Path `"$brandKey`")) {"
     }
     # ensure the wrapper line ends with an opening brace
@@ -524,6 +547,10 @@ function Set-GpfSoftIdentTwoPlace {
     # HARD brand guard: MTB hardcodes the arch into the hive and has a different field shape - stripping its
     # WoW6432Node segment here would corrupt an MTB x86 detection key. Never run outside GPF.
     if ((Get-Command Get-PBBrand -ErrorAction SilentlyContinue) -and (Get-PBBrand -Path 'Name' -Default 'MTB') -ne 'GPF') { return $Text }
+    # F40 (GPF team): the $VWG_SoftIdent DECLARATION must always be $Global (some predecessors carry it as a bare
+    # "[type] $VWG_SoftIdent = ..." in CUSTOM VARIABLES). Force ONLY VWG_SoftIdent to $Global - other carried VWG_ vars
+    # are left exactly as they are. Never matches an already-$Global line (that starts "$Global:VWG_") or a reference.
+    $Text = [regex]::Replace($Text, '(?m)^([ \t]*(?:\[[^\]]+\][ \t]*)?)\$VWG_SoftIdent([ \t]*=)', '${1}$Global:VWG_SoftIdent${2}')
     $val = ''
     $cv = [regex]::Match($Text, '(?s)CUSTOM APPLICATION VARIABLES BEGIN(.*?)CUSTOM APPLICATION VARIABLES END')
     if ($cv.Success) {
@@ -616,7 +643,7 @@ function Get-PBHkcuLines {
         $nm = "$($it.Name)" -replace "'", "''"
         if ($Style -eq 'ADT') {
             $litPath = ("$($it.Key)" -replace '^(?i)HKCU:\\', 'HKCU\')
-            $lines.Add("    Set-ADTRegistryKey -SID `$_.SID -LiteralPath '$litPath' -Name '$nm' -Value $($f.Lit) -Type $($f.Type)")
+            $lines.Add("    Set-ADTRegistryKey -SID `$_.SID -Key '$litPath' -Name '$nm' -Value $($f.Lit) -Type $($f.Type)")   # team house style: -Key (not -LiteralPath) for registry
         } else {
             $lines.Add("New-ItemProperty -Path '$($it.Key)' -Name '$nm' -Value $($f.Lit) -PropertyType $($f.Type) -Force | Out-Null")
         }
@@ -700,7 +727,7 @@ function Get-PerUserConfig {
         'AllUsersReg' {
             # Auto-fill with the snapshot-detected HKCU value(s) when available, else a ready-to-edit placeholder line.
             $body = if ($hasHkcu) { Get-PBHkcuLines -Items $HkcuItems -Style 'ADT' }
-                    else { "    Set-ADTRegistryKey -SID `$_.SID -LiteralPath 'HKCU\Software\$v\$a' -Name '<ValueName>' -Value '<Data>' -Type String" }
+                    else { "    Set-ADTRegistryKey -SID `$_.SID -Key 'HKCU\Software\$v\$a' -Name '<ValueName>' -Value '<Data>' -Type String" }
             $note = if ($hasHkcu) { "## The value(s) below were DETECTED by the snapshot - review/adjust them." } else { "## EDIT the registry value(s) this app needs under each user's HKCU (auto-redirected per user via -SID)." }
             $res.PostInstall = @"
 ## Per-user settings applied to EVERY existing user + the default profile (new users inherit). Runs at install time.
@@ -839,14 +866,11 @@ function Format-OutputScript {
     $Text = [regex]::Replace($Text, '(?im)^([ \t]*)Remove-ADTFolder[ \t]+(?:-(?:LiteralPath|Path)[ \t]+)?("[^"]+"|''[^'']+''|\$\S+)[ \t]+-IfEmpty\b[^\r\n]*', {
         param($m)
         $ind = $m.Groups[1].Value; $p = $m.Groups[2].Value
-        # Team house style (QA rule from Vithal): nested Test-Path -> (Get-ChildItem|Measure-Object).Count -eq 0, -Path.
+        # GPF team house style: single If with -PathType Container AND (Get-ChildItem -Force | Measure-Object).Count -eq 0.
         @(
-            "${ind}If (Test-Path -Path $p)"
+            "${ind}if ((Test-Path -Path $p -PathType Container) -and ((Get-ChildItem $p -Force | Measure-Object).Count -eq 0))"
             "${ind}{"
-            "${ind}    If ((Get-ChildItem -Path $p -Force | Measure-Object).Count -eq 0)"
-            "${ind}    {"
-            "${ind}        Remove-ADTFolder -Path $p"
-            "${ind}    }"
+            "${ind}    Remove-ADTFolder -Path $p"
             "${ind}}"
         ) -join "`r`n"
     })
@@ -874,7 +898,9 @@ function Format-AuthorName {
 function Set-WrapperIfBlank {
     param([string]$Text, [string]$Field, [string]$Value)
     if ([string]::IsNullOrEmpty($Value)) { return $Text }
-    $rx = "(?m)$(Get-FieldLinePrefix $Field)'(?:\{[^}]*\}|[ \t]*)'"
+    # "blank"/"BLANK" is a placeholder some predecessors carry (e.g. VWG_Portfv = 'blank') - treat it as empty too, so
+    # it gets filled with the real value (F22). A {placeholder} and '' were already treated as blank.
+    $rx = "(?m)$(Get-FieldLinePrefix $Field)'(?:\{[^}]*\}|[ \t]*|(?i:blank))'"
     return [regex]::Replace($Text, $rx,
         [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $m.Groups[1].Value + "'" + $Value + "'" })
 }
@@ -890,8 +916,14 @@ function Set-GpfWrapperDefaults {
     $full   = "$($NewPkg.Vendor)_$($NewPkg.AppName)_$($NewPkg.Arch)_$($NewPkg.Version)-$($NewPkg.Revision)_$($NewPkg.Lang)"
     # SoftinstTyp: 'MSI' for an MSI install, else 'Legacy' (exe/loose files). Replaces the '{Typ}' token.
     $Text = Set-WrapperIfBlank -Text $Text -Field 'SoftinstTyp' -Value ($(if ($IsMsi) { 'MSI' } else { 'Legacy' }))
-    # Portfv = the vendor (team house style: $appVendor).
-    $Text = Set-WrapperIfBlank -Text $Text -Field 'Portfv' -Value $vendor
+    # Portfv = the vendor (team house style: $appVendor). FORCE it to the current vendor - some predecessors carry a
+    # 'blank'/stale Portfv (F22); the house style is always $appVendor. Only fall back to fill-if-blank if we somehow
+    # have no vendor, so we never write an empty Portfv.
+    if ("$vendor".Trim()) { $Text = Set-SessionValue -Text $Text -Field 'Portfv' -Value "'$vendor'" }
+    else { $Text = Set-WrapperIfBlank -Text $Text -Field 'Portfv' -Value $vendor }
+    # AppAddInfo01-04: team house style keeps these as 'NA' unless a packager sets them. Fill any blank/'blank'/{ph}
+    # value with 'NA' (F22) - a real customised value is preserved.
+    foreach ($n in '01','02','03','04') { $Text = Set-WrapperIfBlank -Text $Text -Field "AppAddInfo$n" -Value 'NA' }
     # OrderNumber = the AES/RITM number.
     $Text = Set-WrapperIfBlank -Text $Text -Field 'OrderNumber' -Value "$($NewPkg.Ritm)"
     # Required install disk space (MB): from the source payload when known, else a safe floor (300, matches house default).
@@ -899,9 +931,17 @@ function Set-GpfWrapperDefaults {
     # Uninstall free space is FORCED to 200 for every package (team finding: EQS hit issues with higher uninstall free
     # space). Overrides any value carried from the predecessor (Set-SessionValue replaces the whole RHS, not fill-if-blank).
     $Text = Set-SessionValue -Text $Text -Field 'FreeSpaceUninst' -Value "'200'"
-    # SoftIdent: an MSI's detection comes from its Uninstall\{ProductCode} key (filled elsewhere / flagged for review);
-    # for a Legacy/exe package with no verified key, default to the team's CM tracking key HKLM:\SOFTWARE\VWG\CM\<FullName>.
-    if (-not $IsMsi) { $Text = Set-WrapperIfBlank -Text $Text -Field 'SoftIdent' -Value "HKLM:\SOFTWARE\VWG\CM\$full" }
+    # SoftIdent: an MSI's detection comes from its Uninstall\{ProductCode} key (filled elsewhere / flagged for review).
+    # F47: for a Legacy/exe package with NO verified key (no snapshot GUID captured), write a best-guess detection in the
+    # real house FORMAT keyed on the app name + package version - '...\Uninstall\<AppName> [DisplayVersion=<version>]' -
+    # so the wrapper never ships an unusable detection AND the semantic review flags it (subkey == app name) for the
+    # packager to install the EXE, read the real uninstall key, and fill it. (The old VWG\CM\<full> tracking path was NOT
+    # a real detection key and slipped past the review because its subkey isn't under \Uninstall\<app>.)
+    if (-not $IsMsi) {
+        $siApp = "$($NewPkg.AppName)".Trim(); $siVer = "$($NewPkg.Version)".Trim()
+        $siGuess = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$siApp$(if ($siVer) { " [DisplayVersion=$siVer]" })"
+        $Text = Set-WrapperIfBlank -Text $Text -Field 'SoftIdent' -Value $siGuess
+    }
     return $Text
 }
 
@@ -912,11 +952,13 @@ function Set-GpfWrapperDefaults {
 # LooseFiles, Multiple. Each returns @{ MainInstall; MainUninstall; MainRepair; PreRepair }.
 ##############################################################
 function Get-MsiCommandSet {
-    param([string]$Msi, [string]$Mst, [string]$ProductCode)
+    param([string]$Msi, [string]$Mst, [string]$ProductCode, [switch]$NoMst)
     $ProductCode = "$ProductCode".Trim()   # a leading/trailing space (e.g. from a parsed SoftIdent GUID) breaks "msiexec /x { GUID}"
-    # We always build an MST per MSI at assemble time, so the install always applies one.
-    # Default to the MSI's path with a .mst extension (preserves any subfolder under DirFiles).
-    if (-not $Mst -and $Msi) { $Mst = [IO.Path]::ChangeExtension($Msi, '.mst') }
+    # F27/F29: when the packager opted OUT of MST generation AND there is no source MST to reuse, install the MSI PLAIN
+    # (no -Transform). $NoMst forces that. Otherwise: use the given $Mst (a reused SOURCE mst, or a specific name), else
+    # default to the MSI's path with a .mst extension (the built transform - preserves any subfolder under DirFiles).
+    if ($NoMst) { $Mst = '' }
+    elseif (-not $Mst -and $Msi) { $Mst = [IO.Path]::ChangeExtension($Msi, '.mst') }
     $install = if ($Mst) {
         "Start-ADTMsiProcess -Action 'Install' -FilePath `"`$(`$adtSession.DirFiles)\$Msi`" -Transform `"`$(`$adtSession.DirFiles)\$Mst`""
     } else {
@@ -967,6 +1009,59 @@ function Get-ScriptReviewFindings {
         }
     }
 
+    # 1b. Predecessor uninstall-previous detection resolved by NAME, not ProductCode (F9). Either the predecessor's real
+    #     ARP DisplayName was recovered from its SoftIdent, or - when the SoftIdent had no usable name - it FELL BACK to
+    #     the parsed package AppName, which usually does NOT match the installed app's DisplayName. Name-based detection
+    #     of the predecessor must always be confirmed against the real Programs-and-Features entry; the bare-AppName
+    #     fallback is flagged more strongly (this was previously unflagged - the "appname fetched as a normal name" miss).
+    if ($IsPredecessor) {
+        $upg   = [regex]::Match($ScriptText, '(?s)#Upgrade\b.*?(?:\r?\n\}|\z)')
+        $scope = if ($upg.Success) { $upg.Value } else { '' }
+        $appNm = [regex]::Match($ScriptText, "(?im)^\s*AppName\s*=\s*'([^']*)'").Groups[1].Value.Trim()
+        foreach ($nm in [regex]::Matches($scope, '(?im)Get-ADTApplication\s+-Name\s+["'']([^"'']+)["'']')) {
+            $nmVal = $nm.Groups[1].Value.Trim()
+            if ($appNm -and ($nmVal -ieq $appNm)) {
+                $out.Add("Predecessor uninstall detection uses the bare package name (Get-ADTApplication -Name '$nmVal') - a FALLBACK because the predecessor's SoftIdent had no usable DisplayName. This likely does NOT match the installed app's real ARP DisplayName (e.g. Inno apps register as '<Name>_<version>'). CHECK AND FILL: read the predecessor's real Programs-and-Features DisplayName and set it here, or the old version won't be detected/removed before install.")
+            } else {
+                $out.Add("Predecessor uninstall detection is by NAME (Get-ADTApplication -Name '$nmVal', taken from the predecessor's SoftIdent) - confirm it matches the installed app's real ARP DisplayName EXACTLY; a mismatch means the old version is not detected/removed before install.")
+            }
+        }
+    }
+
+    # 1c. F52: installation progress bar carried from the predecessor. It's enabled to match the predecessor, but an
+    #     app's install behaviour (duration, prompts) can change version to version - flag it so the packager verifies
+    #     during source validation & testing that the bar still makes sense for this version.
+    if ($IsPredecessor -and [regex]::IsMatch($ScriptText, '(?im)^[ \t]*(?<!#)Show-(?:ADT)?InstallationProgress\b')) {
+        $out.Add("Installation progress bar is ENABLED (carried from the predecessor). App install behaviour can vary version to version - verify during source validation & testing that showing the progress bar is still appropriate for this version (disable it if the install is now silent/short).")
+    }
+
+    # 1d. F54: ProcToBlock (processes blocked during install). When the predecessor carried NO ProcToBlock and ProcToClose
+    #     had nothing to mirror either, the current package ships an empty block-list. Surface it so the packager decides
+    #     whether this app needs process-blocking during install, rather than silently leaving it empty.
+    if ($IsPredecessor) {
+        $pbLine = [regex]::Match($ScriptText, "(?im)$(Get-FieldLinePrefix 'ProcToBlock')(.+?)[ \t]*$")
+        if ($pbLine.Success -and -not [regex]::IsMatch($pbLine.Groups[2].Value, "'[^']+'|`"[^`"]+`"")) {
+            $out.Add("ProcToBlock (apps blocked from launching DURING install) is empty - the predecessor didn't set it and there was nothing to mirror from ProcToClose. Confirm this app doesn't need any process blocked during install, or add the process name(s); leaving it empty means users can launch the app mid-install.")
+        }
+    }
+
+    # 1e. F57-59: predecessor helper files. A carried predecessor often RUNS a helper script/file out of its own
+    #     SupportFiles (e.g. Bentley's sc-uninstall.ps1 in post-uninstallation). Predecessor reuse carries the deployment
+    #     SCRIPT but NOT the helper files sitting beside it, so the reference dangles. Detect any file referenced via the
+    #     SupportFiles dir ($adtSession.DirSupportFiles / $dirSupportFiles / a literal "SupportFiles\<name>") and SUGGEST
+    #     the packager copy each into THIS package's SupportFiles\ (identified during source validation).
+    if ($IsPredecessor) {
+        $sfNames = New-Object System.Collections.Generic.List[string]
+        $sfRx = '(?i)(?:\$(?:adtSession\.)?[Dd]irSupportFiles|\$\([^)]*[Dd]irSupportFiles[^)]*\)|\bSupportFiles)\\+([\w .\-]+\.(?:ps1|cmd|bat|vbs|exe|reg|msi|mst))'
+        foreach ($mm in [regex]::Matches($ScriptText, $sfRx)) {
+            $fn = $mm.Groups[1].Value.Trim()
+            if ($fn -and -not ($sfNames -contains $fn)) { [void]$sfNames.Add($fn) }
+        }
+        if ($sfNames.Count) {
+            $out.Add("The package runs helper file(s) from SupportFiles that the predecessor carried: $($sfNames -join ', '). Predecessor reuse copies the deployment SCRIPT but NOT these helper files - copy each one into THIS package's SupportFiles\ folder (identify them during source validation), or the run will fail with 'file not found'.")
+        }
+    }
+
     # 2. v4 variable scope. If the build auto-moved the offending lines (marker present), just ask to VERIFY.
     #    If something STILL reads $adtSession.DeploymentType in the variables block (the auto-fix skips multi-line
     #    assignments), tell the user to move it - it is EMPTY there on v4.
@@ -1007,7 +1102,7 @@ function Get-ScriptReviewFindings {
         } elseif ($hasMsiPc -and -not $siGuid) {
             $out.Add("Fresh MSI package: the detection key (SoftIdent) does NOT use the MSI ProductCode. Verify it matches what the installer writes to HKLM ...\Uninstall (MSI uses the ProductCode GUID as the subkey) - a mismatch causes SCCM 0x87D00324 'installed but not detected'.")
         } elseif ($subKey -and $app -and ($subKey -ieq $app)) {
-            $out.Add("Detection key (SoftIdent) uses the bare app name ('$subKey') as the uninstall subkey - a best-guess from the package name that likely does NOT match the real registry key the installer creates. Verify it (MSI: use the ProductCode) or detection fails (0x87D00324).")
+            $out.Add("Detection key (SoftIdent) uses the bare app name ('$subKey') as the uninstall subkey - a best-guess from the package name (no snapshot was captured to read the real key). It likely does NOT match what the installer writes. CHECK AND FILL before publishing: install the app, open the real HKLM ...\Uninstall\<key> the installer creates, and copy its exact subkey name + DisplayVersion here (MSI: use the ProductCode GUID) - otherwise detection fails (0x87D00324 'installed but not detected').")
         }
     }
     return $out.ToArray()
@@ -1283,8 +1378,11 @@ function Get-LooseFilesCommandSet {
     if ($zip -notmatch '(?i)\.zip$') { $zip = "$zip.zip" }
     $ins = New-Object System.Collections.Generic.List[string]
     $un  = New-Object System.Collections.Generic.List[string]
-    # Loose payload is zipped into Files\ at build time; extract it at install (team helper).
-    $ins.Add("Expand-MTBZipFile -Path `"`$(`$adtSession.DirFiles)\$zip`" -Destination `"$p`" -Override")
+    # Loose payload is extracted at install from Files\. F25/F34: GPF's Extensions module defines Expand-ZipFile (NO 'MTB'
+    # prefix, same -Path/-Destination/-Override signature); MTB uses Expand-MTBZipFile. Brand-gated so neither template is
+    # crossed. $Destination is the caller-chosen path (GPF: $envTemp\<AppName>_<Version> - a temp staging dir).
+    $expandFn = if ((Get-PBBrand -Path 'Name' -Default 'MTB') -eq 'GPF') { 'Expand-ZipFile' } else { 'Expand-MTBZipFile' }
+    $ins.Add("$expandFn -Path `"`$(`$adtSession.DirFiles)\$zip`" -Destination `"$p`" -Override")
     # Start Menu shortcut(s) - one per chosen target exe (icon taken from the exe itself).
     foreach ($sc in @($Shortcuts)) {
         if (-not $sc) { continue }
@@ -1294,11 +1392,13 @@ function Get-LooseFilesCommandSet {
         $ins.Add("New-ADTShortcut -Path `"`$envCommonStartMenuPrograms\$name.lnk`" -TargetPath `"$tgt`" -IconLocation `"$tgt`"")
         $un.Add("Remove-ADTFile -Path `"`$envCommonStartMenuPrograms\$name.lnk`"")
     }
-    # ARP / Application Wizard entry (PSADT extension; icon read from SupportFiles\Icon.ico).
+    # ARP / Application Wizard entry (PSADT extension; icon read from SupportFiles\Icon.ico). GPF's Extensions module
+    # defines Set-/Remove-ApplicationWizardEntry (NO 'MTB' prefix); MTB uses Set-/Remove-MTBApplicationWizardEntry.
     if ($CreateArp) {
+        $awPrefix = if ((Get-PBBrand -Path 'Name' -Default 'MTB') -eq 'GPF') { '' } else { 'MTB' }
         $appArg = if ($AppName) { " -ApplicationName '$AppName'" } else { '' }
-        $ins.Add("Set-MTBApplicationWizardEntry$appArg")
-        $un.Add("Remove-MTBApplicationWizardEntry")
+        $ins.Add("Set-${awPrefix}ApplicationWizardEntry$appArg")
+        $un.Add("Remove-${awPrefix}ApplicationWizardEntry")
     }
     $un.Add("Remove-ADTFolder -Path `"$p`"")
     $install = ($ins -join "`r`n"); $uninstall = ($un -join "`r`n")
@@ -1319,7 +1419,7 @@ function Get-MultiCommandSet {
     $ordered = @($pre + $rest)
     $oneOf = {
         param($it)
-        if ("$($it.Type)" -eq 'MSI') { Get-MsiCommandSet -Msi $it.MsiFileName -Mst $it.MstFileName -ProductCode $it.ProductCode }
+        if ("$($it.Type)" -eq 'MSI') { Get-MsiCommandSet -Msi $it.MsiFileName -Mst $it.MstFileName -ProductCode $it.ProductCode -NoMst:([bool]$it.NoMst) }
         else {
             $ip = "$($it.InstallParams)"
             if (-not $ip.Trim() -and (Get-Command Get-PrerequisiteSpec -ErrorAction SilentlyContinue)) {
@@ -1347,11 +1447,17 @@ function New-StandardCommands {
         else                                       { $mode = 'None' }
     }
     $cmds = switch ($mode) {
-        'SingleMSI'  { Get-MsiCommandSet -Msi $NewPkg.MsiFileName -Mst $NewPkg.MstFileName -ProductCode $NewPkg.ProductCode }
+        'SingleMSI'  { Get-MsiCommandSet -Msi $NewPkg.MsiFileName -Mst $NewPkg.MstFileName -ProductCode $NewPkg.ProductCode -NoMst:([bool]$NewPkg.NoMst) }
         'SingleEXE'  { Get-ExeCommandSet -Exe $NewPkg.ExeFileName -InstallParams $NewPkg.InstallParams -UninstallParams $NewPkg.UninstallParams -UninstallCommand "$($NewPkg.UninstallCommand)" }
         'LooseFiles' {
             $pf   = if ("$($NewPkg.Arch)" -match '(?i)x86') { '$envProgramFilesX86' } else { '$envProgramFiles' }
-            $path = if ($NewPkg.InstallPath) { $NewPkg.InstallPath } else { "$pf\$($NewPkg.Vendor)\$($NewPkg.AppName)" }
+            # F25/F34: GPF extracts the source zip to a TEMP staging dir ($envTemp\<AppName>_<Version> = C:\Windows\Temp\...
+            # under SYSTEM) rather than straight into Program Files - the team's convention for zipped sources. MTB keeps
+            # the Program Files layout.
+            $isGpf = (Get-Command Get-PBBrand -ErrorAction SilentlyContinue) -and (Get-PBBrand -Path 'Name' -Default 'MTB') -eq 'GPF'
+            $path = if ($NewPkg.InstallPath) { $NewPkg.InstallPath }
+                    elseif ($isGpf) { "`$envTemp\$($NewPkg.AppName)_$($NewPkg.Version)" }
+                    else { "$pf\$($NewPkg.Vendor)\$($NewPkg.AppName)" }
             $zip  = if ($NewPkg.ZipName) { $NewPkg.ZipName } elseif ($NewPkg.FullName) { $NewPkg.FullName } else { $NewPkg.AppName }
             Get-LooseFilesCommandSet -InstallPath $path -ZipName "$zip" -Shortcuts @($NewPkg.Shortcuts) -CreateArp ([bool]$NewPkg.CreateArp) -AppName "$($NewPkg.AppName)"
         }
@@ -1409,6 +1515,39 @@ function Set-ProcToBlockDefault {
     $Text = $Text.Substring(0, $pbm.Index) + $pbm.Groups[1].Value + $pcVal + $Text.Substring($pbm.Index + $pbm.Length)
     if (Get-Command Write-Log -ErrorAction SilentlyContinue) { Write-Log "ProcToBlock defaulted to ProcToClose ($pcVal)." }
     return $Text
+}
+
+# F52: carry the INSTALLATION PROGRESS BAR from the predecessor. The template ships it COMMENTED
+# (#Show-ADTInstallationProgress) inside each section's "If ($VWG_UseDialogs){ }" block; a predecessor that
+# ENABLED it has the call uncommented. When the predecessor had it active in a section (Install/Uninstall/Repair),
+# uncomment the SAME section's template line so the current package keeps the behaviour. Section-scoped via the
+# MAIN-* BEGIN/END markers so enabling install never touches uninstall/repair. Returns the number of sections
+# enabled (>0 -> a review item is raised: app behaviour varies version to version, so the packager must verify).
+function Set-PredecessorProgressBar {
+    param([string]$Text, [hashtable]$Model)
+    if (-not $Text -or -not $Model) { return @{ Text = $Text; Enabled = 0 } }
+    $pred = "$($Model.RawV4Content)"
+    if (-not $pred) { return @{ Text = $Text; Enabled = 0 } }
+    # An ACTIVE progress call = a Show-(ADT)InstallationProgress line NOT commented out (no leading # before it).
+    $activeRx = '(?im)^[ \t]*(?<!#)Show-(?:ADT)?InstallationProgress\b'
+    $count = 0
+    foreach ($sec in @('INSTALLATION','UNINSTALLATION','REPAIR')) {
+        $begin = "MAIN-$sec BEGIN"; $end = "MAIN-$sec END"
+        # does the PREDECESSOR have progress active in this section?
+        $pm = [regex]::Match($pred, "(?s)$([regex]::Escape($begin))(.*?)$([regex]::Escape($end))")
+        if (-not $pm.Success -or -not [regex]::IsMatch($pm.Groups[1].Value, $activeRx)) { continue }
+        # uncomment the template line in the SAME section of $Text (only if still commented)
+        $tm = [regex]::Match($Text, "(?s)($([regex]::Escape($begin)))(.*?)($([regex]::Escape($end)))")
+        if (-not $tm.Success) { continue }
+        $body = $tm.Groups[2].Value
+        $newBody = [regex]::Replace($body, '(?im)^([ \t]*)#([ \t]*Show-(?:ADT)?InstallationProgress\b[^\r\n]*)', '${1}${2}')
+        if ($newBody -ne $body) {
+            $Text = $Text.Substring(0, $tm.Groups[2].Index) + $newBody + $Text.Substring($tm.Groups[2].Index + $tm.Groups[2].Length)
+            $count++
+        }
+    }
+    if ($count -and (Get-Command Write-Log -ErrorAction SilentlyContinue)) { Write-Log "Installation progress bar enabled in $count section(s) to match the predecessor." }
+    return @{ Text = $Text; Enabled = $count }
 }
 
 # Pull the most DISTINCTIVE identifier out of a cleanup command line, used to decide whether the predecessor already
@@ -1982,6 +2121,9 @@ function Build-PredecessorScript {
     # predecessor already does is touched or duplicated. (Per-user config is still left to snippets in reuse mode.)
     $out = Merge-SnapshotDeltas -Text $out -NewPkg $NewPkg -Model $Model
     $out = Set-ProcToBlockDefault -Text $out
+    # F52: carry the installation progress bar when the predecessor had it enabled (section-scoped, review-flagged).
+    $pb = Set-PredecessorProgressBar -Text $out -Model $Model
+    $out = $pb.Text
     # LOG-PATH FORMAT (MTB team convention, ~half of live v3 packages): the old flat "$configToolKitLogDir\$setuplogName"
     # scheme is replaced by the new per-app v4 log dir ($LogPathMain, defined via Get-ADTConfig in each section).
     # BRAND-GATED: the GPF template handles LogName itself ($configToolkitLogDir maps to $adtConfig.Toolkit.LogPath there).

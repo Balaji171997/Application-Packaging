@@ -42,7 +42,7 @@ try {
 
 if (-not (Test-Path $pak)) {
     Add-Type -AssemblyName PresentationFramework
-    [Windows.MessageBox]::Show("PackageBuilder.pak not found next to the launcher:`n$pak", 'Package Builder') | Out-Null
+    [Windows.MessageBox]::Show("PackageBuilder.pak not found next to the launcher:`n$pak", 'Package Assistance') | Out-Null
     return
 }
 

@@ -240,6 +240,9 @@ $script:V3ToV4VariablesGpf = [ordered]@{
     'dirSupportFiles'     = 'adtSession.DirSupportFiles'
     'scriptDirectory'     = 'adtSession.ScriptDirectory'
     'configToolkitLogDir' = 'adtConfig.Toolkit.LogPath'
+    # F12 (GPF team): although their template bridges $deployAppScriptFriendlyName as a $Global var, they want the
+    # PSADT v4 form in Write-ADTLogEntry -Source etc. Convert the bare v3 variable to the session property.
+    'deployAppScriptFriendlyName' = 'adtSession.DeployAppScriptFriendlyName'
 }
 
 
@@ -508,6 +511,19 @@ function Convert-V3ToV4Content {
     $result = [regex]::Replace($result,
         "(Start-ADTMsiProcess\b[^\r\n]*?)-FilePath(\s+(?:'|`")\{[0-9A-Fa-f-]{36}\}(?:'|`"))",
         '$1-ProductCode$2')
+    # -- LAYER 1b-VAR (F36): the same, but when the ProductCode is held in a VARIABLE, e.g.
+    #      $MSIGUID = '{A886A286-...}'  ...  Start-ADTMsiProcess -Action 'Uninstall' -FilePath $MSIGUID
+    #    SCOPED so it is safe: ONLY variables that are ASSIGNED a bare {GUID} literal somewhere in this script are
+    #    retargeted, so a legitimate "-FilePath $exePath / $msiPath" (a real file) is never touched.
+    $guidVars = @{}
+    foreach ($am in [regex]::Matches($result, '(?m)^\s*\$(\w+)\s*=\s*[''"]\s*\{[0-9A-Fa-f-]{36}\}\s*[''"]\s*$')) { $guidVars[$am.Groups[1].Value.ToLower()] = $true }
+    if ($guidVars.Count) {
+        $result = [regex]::Replace($result, "(Start-ADTMsiProcess\b[^\r\n]*?)-FilePath(\s+\`$(\w+))", {
+            param($m)
+            if ($guidVars.ContainsKey($m.Groups[3].Value.ToLower())) { return $m.Groups[1].Value + '-ProductCode' + $m.Groups[2].Value }
+            return $m.Value
+        })
+    }
 
     # Remove the leftover v3 SoftIdent declaration - MTB ONLY (SoftIdent moves into $adtSession there).
     # GPF predecessors legitimately (re)define [string]$VWG_SoftIdent with the runtime WoW token - KEEP it.
@@ -664,16 +680,13 @@ function Convert-V3ToV4Content {
         param($m)
         $indent = $m.Groups[1].Value
         $path   = $m.Groups[2].Value
-        if ($ReportOnly) { $changes.Add("Shape: Remove-Folder -IfEmpty -> nested Test-Path/Get-ChildItem block") }
-        # Team house style (QA rule from Vithal): nested Test-Path -> (Get-ChildItem|Measure-Object).Count -eq 0, Allman
-        # braces, -Path not -LiteralPath.
+        if ($ReportOnly) { $changes.Add("Shape: Remove-Folder -IfEmpty -> GPF empty-folder block") }
+        # GPF team house style: a SINGLE If with -PathType Container AND (Get-ChildItem -Force | Measure-Object).Count -eq 0,
+        # -Path (not -LiteralPath), Allman braces. (MTB uses Vithal's nested form - kept separate in the MTB mappings.)
         return @(
-            "${indent}If (Test-Path -Path $path)"
+            "${indent}if ((Test-Path -Path $path -PathType Container) -and ((Get-ChildItem $path -Force | Measure-Object).Count -eq 0))"
             "${indent}{"
-            "${indent}    If ((Get-ChildItem -Path $path -Force | Measure-Object).Count -eq 0)"
-            "${indent}    {"
-            "${indent}        Remove-ADTFolder -Path $path"
-            "${indent}    }"
+            "${indent}    Remove-ADTFolder -Path $path"
             "${indent}}"
         ) -join "`r`n"
     })

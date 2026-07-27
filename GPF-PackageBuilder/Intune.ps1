@@ -93,11 +93,22 @@ function Connect-Intune {
             if (-not $iwa)  { $iwa  = Get-ChildItem -Path $dir -Recurse -Filter 'IntuneWin32App.psd1' -ErrorAction SilentlyContinue | Select-Object -First 1 }
         }
         if (-not $msal -or -not $iwa) { Write-Log "Intune modules not found (need MSAL.PS + IntuneWin32App under the tool's Lib\ or Intune.ModulePath)." Error; return $false }
+        # EXECUTION POLICY: MSAL.PS + IntuneWin32App are SCRIPT modules, so on a machine whose (often 32-bit WOW6432Node)
+        # policy is Restricted/Undefined the import dies with "running scripts is disabled on this system" (same root cause
+        # as the ConfigMgr console module). Lift it for THIS PROCESS ONLY before importing - identical to the SCCM path.
+        if (Get-Command Enable-PBProcessScripts -ErrorAction SilentlyContinue) { [void](Enable-PBProcessScripts) }
         # Stage from the share to a local cache first (avoids the UNC "Cannot add type" compile failure). MSAL.PS BEFORE
         # IntuneWin32App (the latter depends on it).
         $msalPath = Get-LocalModuleManifest $msal.FullName
         $iwaPath  = Get-LocalModuleManifest $iwa.FullName
-        try { Import-Module $msalPath -ErrorAction Stop; Import-Module $iwaPath -ErrorAction Stop } catch { Write-Log "Importing Intune modules failed: $($_.Exception.Message)" Error; return $false }
+        try { Import-Module $msalPath -ErrorAction Stop; Import-Module $iwaPath -ErrorAction Stop }
+        catch {
+            $msg = "$($_.Exception.Message)"
+            $hint = if ($msg -match '(?i)running scripts is disabled|execution of scripts is disabled|UnauthorizedAccess') {
+                ' The execution policy is blocking the script module import - it is enforced by a GPO (MachinePolicy/UserPolicy) that a per-process Bypass cannot override; have "PowerShell script execution" allowed centrally for this machine.'
+            } else { '' }
+            Write-Log "Importing Intune modules failed: $msg.$hint" Error; return $false
+        }
     }
     # Must be the real tenant (e.g. contoso.onmicrosoft.com or the tenant GUID) - exactly like the
     # working migrator tool. 'common' misroutes an external/guest (ext id) sign-in to the home tenant.
@@ -139,7 +150,15 @@ function Invoke-Graph {
     $hdr = Get-IntuneAuthHeader
     if (-not $hdr) { throw 'Not connected to Intune.' }
     $p = @{ Method=$Method; Uri=$Uri; Headers=$hdr; ErrorAction='Stop' }
-    if ($Body) { $p['Body'] = $(if ($Body -is [string]) { $Body } else { $Body | ConvertTo-Json -Depth 12 }); $p['ContentType']='application/json' }
+    if ($Body) {
+        $json = if ($Body -is [string]) { "$Body" } else { $Body | ConvertTo-Json -Depth 20 -Compress }
+        # Send the JSON as explicit UTF-8 BYTES (not a string): Windows PowerShell 5.1's Invoke-RestMethod encodes a
+        # STRING body as ASCII, which mangles any non-ASCII character (®/™/accents/NBSP - common in a vendor's
+        # description/publisher) into invalid bytes, so Graph rejects the payload with HTTP 400 "Unable to read JSON
+        # request payload." Bytes + an explicit charset make the body byte-exact and parseable.
+        $p['Body'] = [Text.Encoding]::UTF8.GetBytes($json)
+        $p['ContentType'] = 'application/json; charset=utf-8'
+    }
     $reauthed = $false
     for ($try=1; $try -le 4; $try++) {
         try { return Invoke-RestMethod @p }
@@ -156,6 +175,13 @@ function Invoke-Graph {
             }
             if ($try -ge 4 -or ($sc -and $sc -lt 500 -and $sc -ne 429)) {
                 if ($detail) { $detail = ($detail -replace '\s+',' ').Trim(); if ($detail.Length -gt 600) { $detail = $detail.Substring(0,600) } }
+                # DIAGNOSTIC for the "unable to read JSON request payload" 400: log exactly what we sent (Content-Type +
+                # body byte length + a head/tail snippet) so a repeat failure shows the real cause instead of guessing.
+                if ($sc -eq 400 -and $detail -match '(?i)payload|Content-Type' -and $p.ContainsKey('Body')) {
+                    $bb = $p['Body']; $len = if ($bb -is [byte[]]) { $bb.Length } else { "$bb".Length }
+                    $snip = try { $s = if ($bb -is [byte[]]) { [Text.Encoding]::UTF8.GetString($bb) } else { "$bb" }; if ($s.Length -gt 300) { $s.Substring(0,200) + ' … ' + $s.Substring($s.Length-80) } else { $s } } catch { '<unreadable>' }
+                    Write-Log "Intune Graph 400 payload diag: ContentType='$($p.ContentType)' BodyBytes=$len BodyType=$($bb.GetType().Name) Snippet=$snip" Warning
+                }
                 throw "Graph $Method -> HTTP $sc$(if($detail){": $detail"})"
             }
             # 429 throttling: honor Graph's Retry-After when present; otherwise backoff.

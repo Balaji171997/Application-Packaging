@@ -18,6 +18,7 @@
     "SnippetsPath": "",
     "Brand": {
         "Name": "GPF",
+        "ToolName": "Package Assistance",
         "TemplateRoot": "PSADT_Template_GPF",
         "OrderNumberLabel": "AES",
         "OutgoingPrefix": { "INA": "Audi", "VWG": "Group package", "G1V": "VW" },

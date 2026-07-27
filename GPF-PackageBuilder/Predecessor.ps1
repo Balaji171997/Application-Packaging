@@ -320,8 +320,55 @@ function Format-PredecessorSeq {
     return $sb.ToString().TrimEnd()
 }
 
+# F45: brand-agnostic predecessor-zip extractor. Extracts to the local work cache (cached - re-extract skipped) and
+# returns the INNER package root: the folder holding Content\Invoke-AppDeployToolkit.ps1 / Content\Deploy-Application.ps1
+# (or a top-level deployment script), else the extraction root. Returns '' when nothing usable is inside. The GPF brand
+# has its own Expand-GpfPredecessorZip (identical logic) used during candidate enumeration; this one covers the shared
+# Read-PredecessorModel path so a zip reaching the loader (auto OR manual browse, either brand) is handled.
+function Expand-PredecessorZip {
+    param([string]$ZipPath)
+    if (-not $ZipPath -or -not (Test-Path -LiteralPath $ZipPath)) { return '' }
+    try {
+        $base = if (Get-Command Get-WorkPath -ErrorAction SilentlyContinue) { Get-WorkPath 'PredCache' } else { Join-Path $env:TEMP 'PB_PredCache' }
+        if (-not (Test-Path -LiteralPath $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
+        $cache = Join-Path $base ([IO.Path]::GetFileNameWithoutExtension($ZipPath))
+        if (-not (Test-Path -LiteralPath $cache)) { Expand-Archive -LiteralPath $ZipPath -DestinationPath $cache -Force }
+        # The package ROOT is the folder that holds Content\<script> (preferred) or a bare <script> at its own root.
+        # A folder literally named 'Content' is NEVER the root - its PARENT is (a zip made from a package folder's
+        # CONTENTS puts Content\ at the cache root). Check the cache root itself FIRST, then recurse; and exclude
+        # 'Content'-named folders from the bare-script match so we never return ...\Content as the root.
+        $isRoot = {
+            param($d)
+            (Test-Path (Join-Path $d 'Content\Invoke-AppDeployToolkit.ps1')) -or
+            (Test-Path (Join-Path $d 'Content\Deploy-Application.ps1')) -or
+            (Test-Path (Join-Path $d 'Invoke-AppDeployToolkit.ps1')) -or
+            (Test-Path (Join-Path $d 'Deploy-Application.ps1'))
+        }
+        $inner = $null
+        if (& $isRoot $cache) { $inner = Get-Item -LiteralPath $cache }
+        if (-not $inner) {
+            $inner = Get-ChildItem -LiteralPath $cache -Directory -Recurse -ErrorAction SilentlyContinue | Where-Object {
+                        (Test-Path (Join-Path $_.FullName 'Content\Invoke-AppDeployToolkit.ps1')) -or
+                        (Test-Path (Join-Path $_.FullName 'Content\Deploy-Application.ps1')) -or
+                        ($_.Name -ne 'Content' -and ((Test-Path (Join-Path $_.FullName 'Invoke-AppDeployToolkit.ps1')) -or
+                                                     (Test-Path (Join-Path $_.FullName 'Deploy-Application.ps1')))) } | Select-Object -First 1
+        }
+        if ($inner) { return $inner.FullName }
+    } catch {}
+    return ''
+}
+
 function Read-PredecessorModel {
     param([string]$PackagePath, [string]$PackageName, [string]$Content)
+
+    # F45: a predecessor handed to us as a ZIP (e.g. a zipped package sitting in the request's Predecessor\ folder, or one
+    # the packager browsed to by hand) must be extracted first - otherwise the Get-ChildItem -Recurse below finds no
+    # deployment script and the load fails with "cannot be found". Extract once to the work cache and use the inner root.
+    if (-not $Content -and $PackagePath -and (Test-Path -LiteralPath $PackagePath -PathType Leaf) -and ($PackagePath -match '(?i)\.zip$')) {
+        $inner = Expand-PredecessorZip -ZipPath $PackagePath
+        if ($inner) { $PackagePath = $inner }
+        else { Write-Log "Predecessor zip '$([IO.Path]::GetFileName($PackagePath))' has no deployment script inside." Error; return $null }
+    }
 
     if (-not $Content) {
         $ps1 = Get-ChildItem -Path $PackagePath -Filter 'Invoke-AppDeployToolkit.ps1' -Recurse -ErrorAction SilentlyContinue |
@@ -329,6 +376,18 @@ function Read-PredecessorModel {
         if (-not $ps1) {
             $ps1 = Get-ChildItem -Path $PackagePath -Filter 'Deploy-Application.ps1' -Recurse -ErrorAction SilentlyContinue |
                    Select-Object -First 1   # v3 packages
+        }
+        # F45: no loose deployment script - the package may be a ZIP sitting inside this folder (the packager pointed at
+        # the Predecessor\ folder, not the package). Extract the newest zip and look inside it before giving up.
+        if (-not $ps1 -and (Test-Path -LiteralPath $PackagePath -PathType Container)) {
+            $pz = @(Get-ChildItem -LiteralPath $PackagePath -Filter '*.zip' -File -ErrorAction SilentlyContinue | Sort-Object Name -Descending) | Select-Object -First 1
+            if ($pz) {
+                $inner = Expand-PredecessorZip -ZipPath $pz.FullName
+                if ($inner) {
+                    $ps1 = Get-ChildItem -Path $inner -Filter 'Invoke-AppDeployToolkit.ps1' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if (-not $ps1) { $ps1 = Get-ChildItem -Path $inner -Filter 'Deploy-Application.ps1' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 }
+                }
+            }
         }
         if (-not $ps1) { Write-Log "No Invoke-AppDeployToolkit.ps1 / Deploy-Application.ps1 under $PackagePath" Error; return $null }
         $Content = Read-FileSmart -Path $ps1.FullName

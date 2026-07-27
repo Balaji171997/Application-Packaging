@@ -64,7 +64,7 @@ if (-not (Get-Command Invoke-PS2EXE -ErrorAction SilentlyContinue)) {
 }
 $exe  = Join-Path $root 'PackageBuilder.exe'
 $icon = Get-ChildItem -Path (Join-Path $root 'Lib') -Filter 'PackageBuilder.ico' -ErrorAction SilentlyContinue | Select-Object -First 1
-$args = @{ InputFile = $mergedPath; OutputFile = $exe; STA = $true; noConsole = $true; title = 'Package Builder' }
+$args = @{ InputFile = $mergedPath; OutputFile = $exe; STA = $true; noConsole = $true; title = 'Package Assistance' }
 if ($icon) { $args['iconFile'] = $icon.FullName }
 Invoke-PS2EXE @args
 if (Test-Path $exe) {

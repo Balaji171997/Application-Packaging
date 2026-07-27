@@ -61,12 +61,25 @@ function Expand-GpfPredecessorZip {
     try {
         $cache = Join-Path (Get-WorkPath 'PredCache') ([IO.Path]::GetFileNameWithoutExtension($ZipPath))
         if (-not (Test-Path -LiteralPath $cache)) { Expand-Archive -LiteralPath $ZipPath -DestinationPath $cache -Force }
-        $inner = Get-ChildItem -LiteralPath $cache -Directory -Recurse -ErrorAction SilentlyContinue | Where-Object {
-                    (Test-Path (Join-Path $_.FullName 'Content\Invoke-AppDeployToolkit.ps1')) -or
-                    (Test-Path (Join-Path $_.FullName 'Content\Deploy-Application.ps1')) -or
-                    (Test-Path (Join-Path $_.FullName 'Invoke-AppDeployToolkit.ps1')) -or
-                    (Test-Path (Join-Path $_.FullName 'Deploy-Application.ps1')) } | Select-Object -First 1
-        if (-not $inner -and ((Test-Path (Join-Path $cache 'Content')) -or (Test-Path (Join-Path $cache 'Deploy-Application.ps1')) -or (Test-Path (Join-Path $cache 'Invoke-AppDeployToolkit.ps1')))) { $inner = Get-Item -LiteralPath $cache }
+        # Package ROOT = a folder holding Content\<script> (preferred) or a bare <script>. A folder named 'Content' is
+        # NEVER the root (its PARENT is - a zip of a package folder's CONTENTS puts Content\ at the cache root). Check the
+        # cache root FIRST, then recurse, excluding 'Content'-named folders from the bare-script match.
+        $isRoot = {
+            param($d)
+            (Test-Path (Join-Path $d 'Content\Invoke-AppDeployToolkit.ps1')) -or
+            (Test-Path (Join-Path $d 'Content\Deploy-Application.ps1')) -or
+            (Test-Path (Join-Path $d 'Invoke-AppDeployToolkit.ps1')) -or
+            (Test-Path (Join-Path $d 'Deploy-Application.ps1'))
+        }
+        $inner = $null
+        if (& $isRoot $cache) { $inner = Get-Item -LiteralPath $cache }
+        if (-not $inner) {
+            $inner = Get-ChildItem -LiteralPath $cache -Directory -Recurse -ErrorAction SilentlyContinue | Where-Object {
+                        (Test-Path (Join-Path $_.FullName 'Content\Invoke-AppDeployToolkit.ps1')) -or
+                        (Test-Path (Join-Path $_.FullName 'Content\Deploy-Application.ps1')) -or
+                        ($_.Name -ne 'Content' -and ((Test-Path (Join-Path $_.FullName 'Invoke-AppDeployToolkit.ps1')) -or
+                                                     (Test-Path (Join-Path $_.FullName 'Deploy-Application.ps1')))) } | Select-Object -First 1
+        }
         if ($inner) { return $inner.FullName }
     } catch {}
     return ''
