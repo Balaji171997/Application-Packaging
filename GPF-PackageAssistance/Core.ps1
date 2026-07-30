@@ -1,10 +1,10 @@
-##############################################################
+﻿##############################################################
 # Core.ps1
 # Config, logging, package-name parse, and the version-swap
 # utilities that implement Plan section 1 (one-dot-prefix swap).
 ##############################################################
 
-$script:BuildStamp = 'GPF-2026-07-24.r31'  # shown in the WINDOW TITLE so you always know which build/pak you run
+$script:BuildStamp = 'GPF-2026-07-30.r41'  # shown in the WINDOW TITLE so you always know which build/pak you run
 
 # SNIPPET OWNERS - only these Windows usernames see the Add / Edit / Delete snippet buttons (everyone else just USES the
 # shared library). Baked into the ENCRYPTED pak (users get exe+pak only, so they can't read/change this - unlike
@@ -61,7 +61,7 @@ function Get-WorkRoot {
     if ($script:WorkRoot) { return $script:WorkRoot }
     $r = $null
     try { if (Get-Command Get-Setting -ErrorAction SilentlyContinue) { $r = Get-Setting 'WorkRoot' } } catch {}
-    if (-not $r) { $r = 'C:\temp\PackageBuilder' }
+    if (-not $r) { $r = 'C:\temp\GPF-PackageAssistance' }   # GPF build default (settings.json WorkRoot overrides); everything - Logs/Temp/PredCache/Build - lives here
     $script:WorkRoot = $r; return $r
 }
 function Get-WorkPath {
@@ -125,7 +125,7 @@ function Invoke-SelfStage {
     $local = if ($Local) { $Local } else { Get-LocalStageRoot }
     try {
         if (-not (Test-Path $local)) { New-Item $local -ItemType Directory -Force | Out-Null }
-        foreach ($f in 'PackageBuilder.exe','PackageBuilder.exe.config','PackageBuilder.pak','settings.json','snippets.json','KnowledgeBase.Recommend.json',
+        foreach ($f in 'PackageAssistance.exe','PackageAssistance.exe.config','PackageAssistance.pak','settings.json','snippets.json','KnowledgeBase.Recommend.json',
                        'Lib\ICSharpCode.AvalonEdit.dll','Lib\PackageBuilder.ico') {
             Copy-IfNewer -Source (Join-Path $Root $f) -Dest (Join-Path $local $f)
         }
@@ -136,7 +136,7 @@ function Invoke-SelfStage {
         foreach ($ex in @(Get-ChildItem -LiteralPath $Root -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '(?i)^PsExec.*\.exe$' })) { Copy-IfNewer -Source $ex.FullName -Dest (Join-Path $local $ex.Name) }
         foreach ($td in 'PsExec','Tools') { $s = Join-Path $Root $td; if (Test-Path $s) { Copy-TreeNewer -Source $s -Dest (Join-Path $local $td) } }
         Set-StageSource -LocalRoot $local -Source $Root
-        $exe = Join-Path $local 'PackageBuilder.exe'
+        $exe = Join-Path $local 'PackageAssistance.exe'
         if (Test-Path $exe) { return $exe }
     } catch { if (Get-Command Write-Log -ErrorAction SilentlyContinue) { Write-Log "Self-stage to local failed: $($_.Exception.Message). Running from the current location." Warning } }
     return $null
@@ -182,9 +182,9 @@ function Unblock-PBPath {
 
 #region Logging -------------------------------------------------
 $script:LogFilePath = $null
-function Get-LogPath { if (-not $script:LogFilePath) { $script:LogFilePath = Join-Path (Get-WorkPath 'Logs') 'PackageBuilder.log' }; return $script:LogFilePath }
+function Get-LogPath { if (-not $script:LogFilePath) { $script:LogFilePath = Join-Path (Get-WorkPath 'Logs') 'PackageAssistance.log' }; return $script:LogFilePath }
 function Initialize-Log {
-    try { $script:LogFilePath = Join-Path (Get-WorkPath 'Logs') 'PackageBuilder.log'; "" | Out-File $script:LogFilePath -Encoding utf8 -Force } catch {}
+    try { $script:LogFilePath = Join-Path (Get-WorkPath 'Logs') 'PackageAssistance.log'; "" | Out-File $script:LogFilePath -Encoding utf8 -Force } catch {}
 }
 function Write-Log {
     param([Parameter(Position=0)][string]$Message, [Parameter(Position=1)][string]$Level = 'Info')
@@ -283,7 +283,7 @@ function Initialize-Config {
     param([string]$Path)
     $script:SettingsPath = $Path
     $defaults = [ordered]@{
-        WorkRoot             = 'C:\temp\PackageBuilder'
+        WorkRoot             = 'C:\temp\GPF-PackageAssistance'
         LocalWorkingDir      = (Join-Path (Get-WorkRoot) 'Build')
         DefaultMsiProperties = @('ALLUSERS=1','REBOOT=ReallySuppress')
         AutoDetectAuthor     = $true
@@ -340,6 +340,7 @@ function Initialize-Config {
     }
     $script:Settings = $h
     $script:WorkRoot = $null   # re-resolve WorkRoot now that settings are loaded (honours a custom value)
+    $script:LogFilePath = $null   # re-resolve the log path too, so the log lands under the settings WorkRoot (was cached to the default before settings loaded)
 }
 
 function Get-Setting {
@@ -392,6 +393,70 @@ function Enable-PBProcessScripts {
         return $false
     }
 }
+
+# MAX_PATH-safe zip extraction. PSADT predecessor packages nest deeply (Content\PSAppDeployToolkit\... + long log names),
+# and when a package is zipped WITH a top folder named after the 40+ char package, the extracted path routinely exceeds
+# 260 chars. Expand-Archive (PS 5.1) then FAILS and leaves an EMPTY destination. We extract entry-by-entry (creating each
+# parent dir first), which - combined with a SHORT destination (Get-PredZipCache: an 8-char hash, not the long package
+# name) - keeps every path well under 260, so it just works and never leaves a half-empty cache. For an extreme entry
+# that would still exceed 260, we fall back to a \\?\ long-path FileStream for that one file. Returns $true on success.
+function Expand-PBArchive {
+    param([Parameter(Mandatory)][string]$ZipPath, [Parameter(Mandatory)][string]$Destination)
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
+        # Start from a clean dest so ExtractToDirectory (which throws on a pre-existing conflicting file) always succeeds.
+        if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue }
+        try {
+            # Canonical extractor: correctly handles ALL entry-type quirks (incl. PS 5.1 Compress-Archive's directory
+            # entries that lack a trailing '/'). Safe here because the SHORT cache keeps every path well under 260.
+            [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $Destination)
+        } catch [System.IO.PathTooLongException] {
+            # Rare: an entry would still exceed 260. Fall back to entry-by-entry with \\?\ FileStreams (which accept
+            # extended-length paths, unlike ExtractToFile). Real team packages have proper trailing-'/' directory entries.
+            $full = [IO.Path]::GetFullPath($Destination).TrimEnd('\')
+            [void][IO.Directory]::CreateDirectory($full)
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+            try {
+                foreach ($e in $zip.Entries) {
+                    $rel = ($e.FullName -replace '/', '\').TrimEnd('\'); if (-not $rel) { continue }
+                    $target = "$full\$rel"
+                    if ([string]::IsNullOrEmpty($e.Name)) { [void][IO.Directory]::CreateDirectory("\\?\$target"); continue }   # dir entry
+                    $dir = Split-Path -Parent $target; if ($dir) { [void][IO.Directory]::CreateDirectory("\\?\$dir") }
+                    $es = $e.Open(); try { $fs = [IO.File]::Create("\\?\$target"); try { $es.CopyTo($fs) } finally { $fs.Dispose() } } finally { $es.Dispose() }
+                }
+            } finally { $zip.Dispose() }
+        }
+        return $true
+    } catch {
+        if (Get-Command Write-Log -ErrorAction SilentlyContinue) { Write-Log "Zip extraction failed ($([IO.Path]::GetFileName($ZipPath))): $($_.Exception.Message)" Warning }
+        return $false
+    }
+}
+
+# Predecessor-zip cache dir = the PredCache base + an 8-char hash of the zip path (NOT the long package name), so the
+# extracted tree stays far under MAX_PATH for every downstream Get-ChildItem/Copy. Deterministic -> the same zip reuses
+# its cache.
+function Get-PredZipCache {
+    param([Parameter(Mandatory)][string]$ZipPath)
+    $base = if (Get-Command Get-WorkPath -ErrorAction SilentlyContinue) { Get-WorkPath 'PredCache' } else { Join-Path $env:TEMP 'PB_PredCache' }
+    if (-not (Test-Path -LiteralPath $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
+    $sha = [Security.Cryptography.SHA1]::Create()
+    try { $h = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("$ZipPath".ToLower()))).Replace('-','').Substring(0,8) }
+    finally { $sha.Dispose() }
+    return (Join-Path $base $h)
+}
+# A cache is COMPLETE only if a deployment script actually extracted into it - guards against the "folder exists but is
+# empty" state a failed Expand-Archive leaves behind (which otherwise gets reused forever).
+function Test-PredZipComplete {
+    param([Parameter(Mandatory)][string]$CacheDir)
+    if (-not (Test-Path -LiteralPath $CacheDir)) { return $false }
+    foreach ($n in 'Invoke-AppDeployToolkit.ps1','Deploy-Application.ps1') {
+        if (Get-ChildItem -LiteralPath $CacheDir -Recurse -File -Filter $n -ErrorAction SilentlyContinue | Select-Object -First 1) { return $true }
+    }
+    return $false
+}
+
 # F2: the tool's USER-FACING display name (window title, dialog captions, info page). The GPF team wants
 # "Package Assistance" (it's an assistant for them, not a builder); MTB keeps "Package Builder". Driven by the
 # brand's optional ToolName so it's never hardcoded - technical identifiers (PackageBuilder.exe/.pak, folders) are
@@ -399,7 +464,9 @@ function Enable-PBProcessScripts {
 function Get-PBToolName {
     $n = Get-PBBrand -Path 'ToolName' -Default $null
     if ("$n".Trim()) { return "$n".Trim() }
-    return 'Package Builder'
+    # This is the GPF build - the team wants "Package Assistance" everywhere. Default to it so the name is correct even if
+    # a portable settings.json wasn't refreshed with Brand.ToolName (the MTB build's copy keeps "Package Builder").
+    return 'Package Assistance'
 }
 function Test-PBConvertFlag {
     param([string]$Flag)      # MtbMappings | VwgVarRename | RegWowHardcode | LogPathMain

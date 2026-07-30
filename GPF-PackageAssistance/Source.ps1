@@ -571,13 +571,24 @@ function Resolve-Source {
     # the extracted content (Files\ then ships the extracted payload, not the .zip). Only when there is no loose
     # installer already - a .zip sitting NEXT to an .exe/.msi is supplementary and is left as-is.
     $effRoot = $RootPath
+    $zipPayload = $null
+    $isGpf = (Get-Command Get-PBBrand -ErrorAction SilentlyContinue) -and (Get-PBBrand -Path 'Name' -Default 'MTB') -eq 'GPF'
     try {
         $allFiles     = @(Get-ChildItem -LiteralPath $RootPath -File -Recurse -Depth 8 -ErrorAction SilentlyContinue)
         $hasInstaller = @($allFiles | Where-Object { $script:InstallerExts -contains $_.Extension.ToLower() }).Count -gt 0
         $zips         = @($allFiles | Where-Object { $_.Extension.ToLower() -eq '.zip' })
         if ($zips.Count -gt 0 -and -not $hasInstaller) {
-            $stage = Expand-SourceZips -Zips $zips
-            if ($stage) { $effRoot = $stage; Write-Log "ZIP source: resolving installer from extracted content at $effRoot" }
+            if ($isGpf) {
+                # GPF: NEVER extract the source zip here. The team convention is to ship the zip VERBATIM in Files\ and
+                # Expand-ZipFile it at INSTALL time (to $envTemp\<app>_<version>), so extracting a multi-GB payload during
+                # fetch is both wasteful (froze the UI on a 5 GB zip) and wrong (it shipped extracted content, not the zip).
+                # Keep it as a single loose-zip payload; the index can be browsed on demand to pick the inner installer.
+                $zipPayload = ($zips | Sort-Object Length -Descending | Select-Object -First 1).FullName
+                Write-Log "GPF ZIP source: keeping '$([IO.Path]::GetFileName($zipPayload))' as-is (extracted at install, not fetch)." Success
+            } else {
+                $stage = Expand-SourceZips -Zips $zips
+                if ($stage) { $effRoot = $stage; Write-Log "ZIP source: resolving installer from extracted content at $effRoot" }
+            }
         }
     } catch {}
 
@@ -675,7 +686,51 @@ function Resolve-Source {
         Installers  = $installers
         DocItems    = $docItems.ToArray()
         IconsPath   = $iconFolder
+        ZipPayload  = $zipPayload   # GPF: the source is a single .zip kept VERBATIM (Expand-ZipFile at install, not fetch)
     }
+}
+
+# Installer-type entries at the FIRST MEANINGFUL LEVEL inside a zip, read from the central directory (INSTANT - no
+# extraction). Rule (user): if the zip wraps a single top folder, step ONE level into it; then list the installer-type
+# files sitting AT that level only (never the deep app binaries under it). "Installer type" includes scripts the team
+# uses as installers: .exe/.msi/.msp AND .bat/.cmd/.ps1. Returns @{ RelPath; Name; Extension } - the RelPath is what the
+# install command runs after Expand-ZipFile (i.e. $envTemp\<App>_<Ver>\<RelPath>). Empty when the zip is unreadable.
+function Get-ZipInstallerEntries {
+    param([string]$ZipPath)
+    if (-not $ZipPath -or -not (Test-Path -LiteralPath $ZipPath)) { return @() }
+    try { Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue } catch {}
+    $rx = '(?i)\.(exe|msi|msp|bat|cmd|ps1)$'
+    try {
+        $z = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+        try {
+            # SINGLE pass over the (possibly huge) entry list: track top-level segments + any root file, and collect the
+            # installer-type candidates as we go (each remembers its own top segment + one-level-in flag).
+            $tops = New-Object System.Collections.Generic.HashSet[string]
+            $rootFile = $false
+            $cands = New-Object System.Collections.Generic.List[object]
+            foreach ($e in $z.Entries) {
+                if (-not $e.Name) { continue }                 # directory entry
+                $fn  = ($e.FullName -replace '\\', '/')        # normalise: real zips use '/', .NET CreateFromDirectory uses '\'
+                $sl  = $fn.IndexOf('/')
+                $top = if ($sl -ge 0) { $fn.Substring(0, $sl) } else { $fn }
+                [void]$tops.Add($top)
+                if ($sl -lt 0) { $rootFile = $true }
+                if ($e.Name -match $rx) {
+                    $secondSl = if ($sl -ge 0) { $fn.IndexOf('/', $sl + 1) } else { -1 }
+                    $cands.Add([pscustomobject]@{ FullName=$fn; Top=$top; HasRootSlash=($sl -ge 0); OneLevelIn=($sl -ge 0 -and $secondSl -lt 0); AtRoot=($sl -lt 0); Name=$e.Name; SizeKB=[math]::Round($e.Length/1KB) })
+                }
+            }
+            $singleTop = ($tops.Count -eq 1 -and -not $rootFile)   # zip wraps ONE top folder, nothing loose at the root
+            $out = New-Object System.Collections.Generic.List[object]
+            foreach ($c in $cands) {
+                $keep = if ($singleTop) { $c.OneLevelIn } else { $c.AtRoot }   # one step into the wrapper, else zip-root files
+                if (-not $keep) { continue }
+                [void]$out.Add([pscustomobject]@{ RelPath=($c.FullName -replace '/', '\'); Name=$c.Name; Extension=[IO.Path]::GetExtension($c.Name).ToLower(); SizeKB=$c.SizeKB })
+            }
+        } finally { $z.Dispose() }
+    } catch { return @() }
+    # real installers first (exe/msi), then scripts; by name
+    return @($out | Sort-Object @{e={ if ($_.Extension -in '.msi','.exe') {0} else {1} }}, Name)
 }
 
 # Path of $Full relative to $Base (e.g. 'sub\App.msi'); just the filename if not under $Base.

@@ -137,6 +137,108 @@ function Get-UninstallBody {
     return $body.Trim()
 }
 
+# F9: the predecessor's real ARP DisplayName for a name-based Get-ADTApplication detection. The parsed package AppName
+# ("Animator4") often does NOT match the installed app's DisplayName ("Animator4_v2.8.1_64"), so name detection fails.
+# The predecessor's own SoftIdent carries it: "HKLM:\...\Uninstall\<subkey> [DisplayVersion=x]". <subkey> is the ARP key -
+# for Inno it is "<DisplayName>_is1"; the DisplayName drops the _is1. An MSI subkey is a {GUID} (use -ProductCode, not a
+# name) -> return '' so the caller keeps its ProductCode path / falls back to the parsed AppName.
+function Get-PredecessorDisplayName {
+    param([hashtable]$Model)
+    $si = if ($Model.Session -and $Model.Session.ContainsKey('SoftIdent')) { "$($Model.Session['SoftIdent'])".Trim("'", '"', ' ') } else { '' }
+    if (-not $si) { return '' }
+    $m = [regex]::Match($si, '(?i)\\Uninstall\\([^\\\[\r\n"'']+?)\s*(?:\[|$)')
+    if (-not $m.Success) { return '' }
+    $key = $m.Groups[1].Value.Trim()
+    if ($key -match '^\{[0-9A-Fa-f-]{36}\}$') { return '' }   # MSI ProductCode subkey - not a display name
+    return ($key -replace '(?i)_is1$', '')                    # Inno "<DisplayName>_is1" -> DisplayName
+}
+
+# Author names arrive from the matrix as "Last, First"; the package wants "Last First" (no comma, single spaces).
+function Format-AuthorName {
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $Name }
+    return (($Name -replace ',', ' ') -replace '\s+', ' ').Trim()
+}
+
+# Ensure a real Uninstall DETECTION key carries [DisplayVersion=<version>] - kept even when the predecessor lacked it or
+# we only swapped the ProductCode. A branding key (no \Uninstall\) or an already-tagged value is left untouched. Uses the
+# team's canonical NO-SPACE form "[DisplayVersion=x]" (matches the Get-... detection builder), and trims the version.
+function Add-SoftIdentDisplayVersion {
+    param([string]$Value, [string]$Version)
+    $v = "$Value"
+    if ($v -notmatch '(?i)\\Uninstall\\') { return $v }        # not a real uninstall detection key (branding key etc.)
+    if ($v -match '(?i)\[DisplayVersion') { return $v }        # already present
+    $ver = "$Version".Trim(); if (-not $ver) { return $v }
+    return ($v.TrimEnd() + " [DisplayVersion=$ver]")
+}
+
+# Drop a predecessor's bare "##Uninstalling "<X>" if present" self-uninstall guard from a (pre-install) body - on reuse
+# it duplicates the generated immediate-predecessor uninstall block and reads as a current-version uninstall in pre-install.
+# CONSERVATIVE: consumes ONLY the guard's OWN known statements. The FIRST line that is not part of the guard (a custom
+# comment, a different statement, the next section) STOPS the removal - so no legitimate pre-install code is ever lost.
+function Remove-SelfUninstallGuard {
+    param([string]$Body)
+    if (-not $Body -or $Body -notmatch '(?im)^[ \t]*##\s*Uninstalling\s+"[^"]*"\s+if\s+present\b') { return $Body }
+    $lines = $Body -split "`r?`n"
+    $out = New-Object System.Collections.Generic.List[string]
+    $i = 0
+    while ($i -lt $lines.Count) {
+        if ($lines[$i] -match '^[ \t]*##\s*Uninstalling\s+"[^"]*"\s+if\s+present\b') {
+            $i++            # skip the header
+            while ($i -lt $lines.Count) {
+                $t = $lines[$i].Trim()
+                if ($t -eq '') { $i++; continue }                                                     # blank inside the guard
+                if ($t -match "^Start-ADT(MsiProcess|Process)\b.*(?i)uninstall") { $i++; continue }    # the uninstall call itself
+                if ($t -match '^##\s*Removing Folder if present\b') { $i++; if ($i -lt $lines.Count -and $lines[$i].Trim() -match '^Remove-ADTFolder\b') { $i++ }; continue }
+                if ($t -match '^#\s*Removing TAG registry\b')       { $i++; if ($i -lt $lines.Count -and $lines[$i].Trim() -match '^Remove-ADTRegistryKey\b') { $i++ }; continue }
+                if ($t -match '^#\s*Removing registry( key)? IfEmpty\b') {
+                    $i++                                                                               # consume the following If(Test-Path){...} by brace depth
+                    $depth = 0; $started = $false
+                    while ($i -lt $lines.Count) {
+                        $depth += ([regex]::Matches($lines[$i],'\{')).Count - ([regex]::Matches($lines[$i],'\}')).Count
+                        if ($depth -gt 0) { $started = $true }
+                        $i++
+                        if ($started -and $depth -le 0) { break }
+                    }
+                    continue
+                }
+                break                                                                                 # NOT a guard part -> stop; everything else stays intact
+            }
+            while ($i -lt $lines.Count -and $lines[$i].Trim() -eq '') { $i++ }                         # trailing blank(s)
+            continue
+        }
+        $out.Add($lines[$i]); $i++
+    }
+    return ($out -join "`r`n")
+}
+
+# Carry the installation progress bar: if the PREDECESSOR had an ACTIVE (non-commented) Show-ADTInstallationProgress in a
+# MAIN section, uncomment the template's placeholder in the SAME section of the new script. No-op when the predecessor
+# had none, or the template line is already active. Returns @{ Text; Enabled = <#sections uncommented> }.
+function Set-PredecessorProgressBar {
+    param([string]$Text, [hashtable]$Model)
+    if (-not $Text -or -not $Model) { return @{ Text = $Text; Enabled = 0 } }
+    $pred = "$($Model.RawV4Content)"
+    if (-not $pred) { return @{ Text = $Text; Enabled = 0 } }
+    $activeRx = '(?im)^[ \t]*(?<!#)Show-(?:ADT)?InstallationProgress\b'
+    $count = 0
+    foreach ($sec in @('INSTALLATION','UNINSTALLATION','REPAIR')) {
+        $begin = "MAIN-$sec BEGIN"; $end = "MAIN-$sec END"
+        $pm = [regex]::Match($pred, "(?s)$([regex]::Escape($begin))(.*?)$([regex]::Escape($end))")
+        if (-not $pm.Success -or -not [regex]::IsMatch($pm.Groups[1].Value, $activeRx)) { continue }
+        $tm = [regex]::Match($Text, "(?s)($([regex]::Escape($begin)))(.*?)($([regex]::Escape($end)))")
+        if (-not $tm.Success) { continue }
+        $body = $tm.Groups[2].Value
+        $newBody = [regex]::Replace($body, '(?im)^([ \t]*)#([ \t]*Show-(?:ADT)?InstallationProgress\b[^\r\n]*)', '${1}${2}')
+        if ($newBody -ne $body) {
+            $Text = $Text.Substring(0, $tm.Groups[2].Index) + $newBody + $Text.Substring($tm.Groups[2].Index + $tm.Groups[2].Length)
+            $count++
+        }
+    }
+    if ($count -and (Get-Command Write-Log -ErrorAction SilentlyContinue)) { Write-Log "Installation progress bar enabled in $count section(s) to match the predecessor." }
+    return @{ Text = $Text; Enabled = $count }
+}
+
 # Build the uninstall-previous block.
 #   $WrapperLine : Case 1 -> the predecessor's existing (fixed-up) If(...) line.
 #                  Case 2 -> $null, we generate it (with branding key).
@@ -159,7 +261,15 @@ function New-UninstallPreviousBlock {
     if (-not $WrapperLine) {
         # Case 2: generate detection line with branding key.
         $brandKey = "HKLM:\SOFTWARE\VWG\CM\$($id.FullName)"
-        $pcPart   = if ($pc) { "Get-ADTApplication -ProductCode `"$pc`"" } else { "Get-ADTApplication -Name `"$($id.AppName)`"" }
+        # EXE detection by NAME: use the predecessor's real ARP DisplayName from its SoftIdent (F9); fall back to the
+        # parsed AppName only when the SoftIdent has no usable name.
+        $pcPart   = if ($pc) {
+            "Get-ADTApplication -ProductCode `"$pc`""
+        } else {
+            $dn = Get-PredecessorDisplayName -Model $Model
+            if (-not $dn) { $dn = "$($id.AppName)" }
+            "Get-ADTApplication -Name `"$dn`""
+        }
         $WrapperLine = "If (($pcPart) -and (Test-Path -Path `"$brandKey`")) {"
     }
     # ensure the wrapper line ends with an opening brace
@@ -269,6 +379,61 @@ function Remove-PreRepairNoise {
     # is kept (team finding: the predecessor's reboot was being lost). #+ = one-or-more '#', so bare Set-MTBReboot survives.
     $Body = [regex]::Replace($Body, '(?im)^[ \t]*#+[ \t]*Set-MTBReboot\b[^\r\n]*\r?\n?', '')
     return $Body
+}
+
+# PREDECESSOR REUSE - reconcile the reboot in ONE POST section body.
+# The template's POST-INSTALL / POST-UNINSTALL section ends (after "## Branding Detection Registry Key / Set-MTBDetectionKey")
+# with a COMMENTED placeholder:  ##Handling for required reboot  /  #Set-MTBReboot . When a predecessor is reused its own
+# body - injected ABOVE the branding key - carries ITS OWN Set-MTBReboot, so the built section has TWO reboot lines.
+# Team rule (user): keep exactly ONE, at the template's end position, and set that line's COMMENT STATE from the
+# predecessor's - predecessor reboot LIVE => uncomment the template line; predecessor reboot COMMENTED (or none authored
+# live) => keep it commented. Drop the predecessor's standalone reboot line (and an orphan "##Handling for required reboot"
+# header directly above it). If the section has 0 or 1 reboot line there is nothing to reconcile - returned unchanged
+# (so fresh builds, which only have the template placeholder, are never touched).
+function Sync-MTBRebootSection {
+    param([string]$Mid)
+    if (-not $Mid) { return $Mid }
+    $nl = "`r`n"
+    $lines = $Mid -split "`r?`n", -1
+    $reb = @()
+    for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '(?i)^[ \t]*#*[ \t]*Set-MTBReboot\b') { $reb += $i } }
+    if ($reb.Count -lt 2) { return $Mid }                      # 0/1 reboot -> nothing to reconcile
+    $phIdx    = $reb[$reb.Count - 1]                            # template placeholder = LAST (after Set-MTBDetectionKey)
+    $predIdxs = $reb[0..($reb.Count - 2)]                       # predecessor's = every earlier reboot line
+    $predLive = $false
+    foreach ($pi in $predIdxs) { if ($lines[$pi] -notmatch '(?i)^[ \t]*#') { $predLive = $true } }
+    # Set the template placeholder's comment state to match the predecessor's.
+    if ($predLive) { $lines[$phIdx] = [regex]::Replace($lines[$phIdx], '(?i)^([ \t]*)#+[ \t]*(Set-MTBReboot)', '${1}${2}') }
+    elseif ($lines[$phIdx] -notmatch '(?i)^[ \t]*#') { $lines[$phIdx] = [regex]::Replace($lines[$phIdx], '(?i)^([ \t]*)(Set-MTBReboot)', '${1}#${2}') }
+    # Drop the predecessor reboot line(s) + any "##Handling for required reboot" header sitting immediately above one.
+    $drop = @{}
+    foreach ($pi in $predIdxs) {
+        $drop[$pi] = $true
+        if (($pi - 1) -ge 0 -and $lines[$pi - 1] -match '(?i)^[ \t]*#+[ \t]*Handling for required reboot\b') { $drop[$pi - 1] = $true }
+    }
+    $kept = for ($i = 0; $i -lt $lines.Count; $i++) { if (-not $drop.ContainsKey($i)) { $lines[$i] } }
+    $res = ($kept -join $nl)
+    $res = [regex]::Replace($res, '(\r?\n){3,}', ($nl + $nl))  # collapse blank-line runs left by the removal
+    return $res
+}
+
+# Apply the POST-section reboot reconciliation to the whole built script (POST-INSTALL and POST-UNINSTALL each get their
+# own placeholder + own predecessor reboot). Only the two POST sections have the "##Handling for required reboot"
+# placeholder; PRE sections keep their live template reboot untouched.
+function Sync-MTBReboot {
+    param([string]$Script)
+    if (-not $Script) { return $Script }
+    foreach ($f in 'PostInstallCode', 'PostUninstallCode') {
+        $sec = $script:SectionMarkers | Where-Object F -eq $f | Select-Object -First 1
+        if (-not $sec) { continue }
+        $m = [regex]::Match($Script, "(?s)($($sec.B))(.*?)($($sec.E))")
+        if (-not $m.Success) { continue }
+        $newMid = Sync-MTBRebootSection -Mid $m.Groups[2].Value
+        if ($newMid -ne $m.Groups[2].Value) {
+            $Script = $Script.Remove($m.Index, $m.Length).Insert($m.Index, $m.Groups[1].Value + $newMid + $m.Groups[3].Value)
+        }
+    }
+    return $Script
 }
 
 function Insert-IntoPreInstall {
@@ -587,6 +752,16 @@ function Format-OutputScript {
     # template into the string, leaving a literal U+FEFF before "<#" that stops the
     # parser seeing the comment-based help block. The file's real BOM is re-added at save.
     $Text = $Text.TrimStart([char]0xFEFF)
+    # Normalise INVISIBLE characters a predecessor / pasted vendor text may carry (Word-pasted comments or strings) that
+    # PowerShell rejects as an "invalid character" at parse time (and that surface as "illegal characters in path" when
+    # they land inside a path literal): non-breaking spaces -> a normal space; zero-width chars, LTR/RTL direction marks
+    # and any stray INLINE BOM -> removed. .NET regex interprets the \uXXXX escapes. Done BEFORE Invoke-Formatter (NBSP chokes it).
+    $Text = [regex]::Replace($Text, '[\u00A0\u2007\u202F]', ' ')
+    $Text = [regex]::Replace($Text, '[\u200B\u200C\u200D\u200E\u200F\u2060\uFEFF]', '')
+    # Strip a stray trailing space INSIDE a detection "[DisplayVersion = <ver> ]" bracket (engineer report: a space after
+    # the version breaks downstream logic). Only the whitespace right before the closing ']' is removed - the template's
+    # "= " spacing and the version value are left exactly as-is, so nothing that reads the key is affected.
+    $Text = [regex]::Replace($Text, '(\[DisplayVersion[ \t]*=[ \t]*[^\]\r\n]*?)[ \t]+\]', '${1}]')
     # Normalise to CRLF first: assembled scripts mix \r\n and \n (template + injected
     # bodies), and Invoke-Formatter refuses input with mixed line endings.
     $Text = [regex]::Replace($Text, "\r\n?|\n", "`r`n")
@@ -605,7 +780,7 @@ function Format-OutputScript {
 function Set-TemplatePlaceholders {
     param([string]$Text, [hashtable]$NewPkg)
     $Text = $Text.Replace('{ScriptDate}', (Get-Date -Format 'MM/dd/yyyy'))
-    if ($NewPkg.Author) { $Text = $Text.Replace('{ScriptAuthor}', $NewPkg.Author) }
+    if ($NewPkg.Author) { $Text = $Text.Replace('{ScriptAuthor}', (Format-AuthorName $NewPkg.Author)) }
     $Text = $Text.Replace('{Revision}', "$($NewPkg.Revision)")
     $Text = $Text.Replace('{Action}',   'New package')
     return $Text
@@ -1211,7 +1386,10 @@ function Build-FreshScript {
     foreach ($f in @('AppVendor','Vendor'),@('AppName','AppName'),@('AppArch','Arch'),
                    @('AppLang','Lang'),@('AppRevision','Revision'),@('AppVersion','Version'),
                    @('OrderNumber','Ritm'),@('AppScriptAuthor','Author')) {
-        $out = Set-SessionField $out $f[0] "$($NewPkg[$f[1]])"
+        # Author -> "Last First" (no comma); every other identity field is TRIMMED so a stray trailing space (e.g. a
+        # version pasted as "1.0 ") never reaches $adtSession.AppVersion, the log/zip folder path or the detection key.
+        $val = if ($f[0] -eq 'AppScriptAuthor') { Format-AuthorName "$($NewPkg[$f[1]])" } else { "$($NewPkg[$f[1]])".Trim() }
+        $out = Set-SessionField $out $f[0] $val
     }
     $out = Set-SessionField $out 'AppScriptDate' (Get-Date -Format 'MM/dd/yyyy')
     # Auto-fill required disk space (MB) from the source payload size when provided.
@@ -1351,8 +1529,8 @@ function Build-PredecessorScript {
         [string]$Template,
         [bool]$AddUninstallPrevious = $true
     )
-    $predVer = "$($Model.Identity.Version)"
-    $newVer  = "$($NewPkg.Version)"
+    $predVer = "$($Model.Identity.Version)".Trim()
+    $newVer  = "$($NewPkg.Version)".Trim()   # trim: a stray trailing space in the version corrupts folder/zip paths + the detection key
 
     # Build the OLD->NEW swap map (filenames, MSTs, ProductCodes). Three cases:
     #   MULTI: pair the predecessor's install SEQUENCE with the new package's installers BY ORDER and swap EVERY
@@ -1426,6 +1604,9 @@ function Build-PredecessorScript {
             foreach ($b in $split.Blocks) { $preservedOldBlocks.Add($b) }
             $body = $split.Body
             $body = [regex]::Replace($body, '(?im)^[ \t]*#+[ \t]*Unin\w*ation of predecessor package[^\r\n]*\r?\n?', '')
+            # Drop the predecessor's bare "##Uninstalling <...> if present" self-uninstall guard (redundant with the
+            # generated immediate-predecessor block; on reuse it reads as a current-version uninstall in pre-install).
+            $body = Remove-SelfUninstallGuard -Body $body
         }
         if ($s.F -in 'MainInstallCode','MainUninstallCode','MainRepairCode','PreRepairCode') {
             # PreRepair is the "uninstall-then-reinstall" of the CURRENT package, so its ProductCode/filenames must be
@@ -1462,7 +1643,9 @@ function Build-PredecessorScript {
     foreach ($f in @('AppVendor','Vendor'),@('AppName','AppName'),@('AppArch','Arch'),
                    @('AppLang','Lang'),@('AppRevision','Revision'),@('OrderNumber','Ritm'),
                    @('AppScriptAuthor','Author')) {
-        $out = Set-SessionField $out $f[0] "$($NewPkg[$f[1]])"
+        # Author -> "Last First" (no comma); other identity fields TRIMMED (stray trailing space corrupts paths/keys).
+        $val = if ($f[0] -eq 'AppScriptAuthor') { Format-AuthorName "$($NewPkg[$f[1]])" } else { "$($NewPkg[$f[1]])".Trim() }
+        $out = Set-SessionField $out $f[0] $val
     }
     $out = Set-SessionField $out 'AppScriptDate' (Get-Date -Format 'MM/dd/yyyy')
     $out = [regex]::Replace($out, "(?m)(AppVersion\s*=\s*')[^']*(')", "`${1}$newVer`${2}")
@@ -1477,6 +1660,11 @@ function Build-PredecessorScript {
         $out = [regex]::Replace($out, "(?im)(^[ \t]*SoftIdent[ \t]*=[ \t]*'[^']*\[DisplayVersion[ \t]*=[ \t]*)[^\]']+(\])", "`${1}$newVer`${2}")
         if ($out -ne $before) { Write-Log "SoftIdent DisplayVersion bumped to the new version ($newVer) - predecessor-carried detection." Success }
     }
+    # Ensure a real Uninstall detection SoftIdent carries [DisplayVersion=<newVer>] even when the predecessor's had NONE
+    # (we only swapped its ProductCode / it never had the tag). No-op for branding-only keys or an already-tagged value.
+    $out = [regex]::Replace($out, "(?m)(^[ \t]*SoftIdent[ \t]*=[ \t]*')([^']*)(')", {
+        param($m) $m.Groups[1].Value + (Add-SoftIdentDisplayVersion -Value $m.Groups[2].Value -Version $newVer) + $m.Groups[3].Value
+    })
     # SoftIdent keeps the predecessor's hive/structure; swap its ProductCode old->new (version
     # is handled by the global swap). Detection blocks are injected LATER and keep the pred PC.
     $predPC = Get-PredecessorUninstallPC -Model $Model
@@ -1565,9 +1753,16 @@ function Build-PredecessorScript {
     # predecessor already does is touched or duplicated. (Per-user config is still left to snippets in reuse mode.)
     $out = Merge-SnapshotDeltas -Text $out -NewPkg $NewPkg -Model $Model
     $out = Set-ProcToBlockDefault -Text $out
+    # Carry the installation progress bar when the predecessor had it enabled (uncomment the template's
+    # #Show-ADTInstallationProgress in the matching MAIN section). No-op when the predecessor had none.
+    $pb = Set-PredecessorProgressBar -Text $out -Model $Model
+    $out = $pb.Text
     # LOG-PATH FORMAT (team convention, ~half of live v3 packages): the old flat "$configToolKitLogDir\$setuplogName"
     # scheme is replaced by the new per-app v4 log dir ($LogPathMain, defined via Get-ADTConfig in each section).
     $out = Convert-LogPathFormat -Text $out
+    # POST-section reboot: keep ONE Set-MTBReboot at the template's end position (after Set-MTBDetectionKey), drop the
+    # predecessor's duplicate, and inherit its comment state (predecessor live -> uncomment; commented -> keep #).
+    $out = Sync-MTBReboot -Script $out
     $out = Format-OutputScript -Text $out
     Write-Log "Built predecessor script: v$predVer -> v$newVer, installerSwap=$doInstallerSwap, uninstallPrev=$AddUninstallPrevious" Success
     return $out

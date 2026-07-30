@@ -329,10 +329,16 @@ function Expand-PredecessorZip {
     param([string]$ZipPath)
     if (-not $ZipPath -or -not (Test-Path -LiteralPath $ZipPath)) { return '' }
     try {
-        $base = if (Get-Command Get-WorkPath -ErrorAction SilentlyContinue) { Get-WorkPath 'PredCache' } else { Join-Path $env:TEMP 'PB_PredCache' }
-        if (-not (Test-Path -LiteralPath $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
-        $cache = Join-Path $base ([IO.Path]::GetFileNameWithoutExtension($ZipPath))
-        if (-not (Test-Path -LiteralPath $cache)) { Expand-Archive -LiteralPath $ZipPath -DestinationPath $cache -Force }
+        # SHORT cache path (8-char hash of the zip, NOT the 40+ char package name): the packages nest deeply and are zipped
+        # WITH a top folder named after themselves, so a long cache base + that doubled name blows past MAX_PATH (260) - the
+        # extracted tree then can't be enumerated/copied. A short subfolder keeps every downstream path well under 260.
+        $cache = Get-PredZipCache -ZipPath $ZipPath
+        # (Re)extract when missing OR when a prior run left an INCOMPLETE cache (folder exists but no deployment script -
+        # exactly the "extracted but empty" failure). Use the MAX_PATH-safe extractor.
+        if (-not (Test-Path -LiteralPath $cache) -or -not (Test-PredZipComplete -CacheDir $cache)) {
+            if (Test-Path -LiteralPath $cache) { Remove-Item -LiteralPath $cache -Recurse -Force -ErrorAction SilentlyContinue }
+            [void](Expand-PBArchive -ZipPath $ZipPath -Destination $cache)
+        }
         # The package ROOT is the folder that holds Content\<script> (preferred) or a bare <script> at its own root.
         # A folder literally named 'Content' is NEVER the root - its PARENT is (a zip made from a package folder's
         # CONTENTS puts Content\ at the cache root). Check the cache root itself FIRST, then recurse; and exclude

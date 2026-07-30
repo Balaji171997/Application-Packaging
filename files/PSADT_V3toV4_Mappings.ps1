@@ -85,8 +85,8 @@ $script:V3ToV4Functions = [ordered]@{
     # -- Application Detection --
     # v3's -Exact / -WildCard / -RegEx name-match SWITCHES became a single v4 -NameMatch VALUE parameter. Leaving the
     # bare switch (e.g. Get-ADTApplication -Name X -Exact) throws "parameter cannot be found" on v4.
-    'Get-InstalledApplication'      = @{ NewName = 'Get-ADTApplication';      Params = @{ '-Exact' = "-NameMatch 'Exact'"; '-WildCard' = "-NameMatch 'WildCard'"; '-RegEx' = "-NameMatch 'Regex'" } }
-    'Remove-MSIApplications'        = @{ NewName = 'Uninstall-ADTApplication'; Params = @{ '-Exact' = "-NameMatch 'Exact'"; '-WildCard' = "-NameMatch 'WildCard'"; '-RegEx' = "-NameMatch 'Regex'" } }   # Remove-ADTMsiApplications does NOT exist in v4
+    'Get-InstalledApplication'      = @{ NewName = 'Get-ADTApplication';      Params = @{ '-Exact' = "-NameMatch Exact"; '-WildCard' = "-NameMatch WildCard"; '-RegEx' = "-NameMatch Regex" } }
+    'Remove-MSIApplications'        = @{ NewName = 'Uninstall-ADTApplication'; Params = @{ '-Exact' = "-NameMatch Exact"; '-WildCard' = "-NameMatch WildCard"; '-RegEx' = "-NameMatch Regex" } }   # Remove-ADTMsiApplications does NOT exist in v4
 
     # -- Registry --
     # Set-RegistryKey keeps -Value (that's the DATA in both v3 and v4). Get-RegistryKey's v3 -Value is the value NAME ->
@@ -322,6 +322,35 @@ function Add-AdtApplicationNameParam {
         $pos = $call.IndexOf($lit)
         if ($pos -lt 0) { return $call }
         return $call.Substring(0, $pos) + '-Name ' + $call.Substring($pos)
+    })
+}
+
+# Canonicalize Get-ADTApplication / Uninstall-ADTApplication to the PREFERRED v4 syntax, so the order is stable no matter
+# which v3 form we started from (positional "-WildCard '*X*'" comes out -NameMatch-first; explicit "-Name X -Exact" comes
+# out -Name-first). Team house style + PSADT's own doc example ("Get-ADTApplication -Name 'Adobe Acrobat Reader' -NameMatch
+# 'Exact'"): -Name FIRST, then -NameMatch with a BAREWORD (unquoted) ValidateSet value (Exact/WildCard/Regex/Contains).
+# Only rewrites calls that have BOTH -Name and -NameMatch (leaves -ProductCode / -Name-only / dynamic-value calls alone).
+function Set-AdtApplicationNameOrder {
+    param([string]$Content)
+    if (-not $Content) { return $Content }
+    $rx = New-Object System.Text.RegularExpressions.Regex '(?i)(Get-ADTApplication|Uninstall-ADTApplication)\b([^\r\n\)]*)'
+    return $rx.Replace($Content, [System.Text.RegularExpressions.MatchEvaluator]{
+        param($m)
+        $cmd  = $m.Groups[1].Value
+        $args = $m.Groups[2].Value
+        $nameM  = [regex]::Match($args, "(?i)-Name\s+('[^']*'|`"[^`"]*`"|\`$\w[\w.]*)")
+        $matchM = [regex]::Match($args, "(?i)-NameMatch\s+('[^']*'|`"[^`"]*`"|\w+)")
+        if (-not ($nameM.Success -and $matchM.Success)) { return $m.Value }   # need both to canonicalize
+        $nameVal  = $nameM.Groups[1].Value
+        $matchVal = $matchM.Groups[1].Value.Trim("'", '"')                    # unquote the ValidateSet value
+        # Strip the two params out of the arg tail, keep anything else in place, then re-emit -Name then -NameMatch first.
+        $rest = $args
+        $rest = [regex]::Replace($rest, "(?i)\s*-Name\s+('[^']*'|`"[^`"]*`"|\`$\w[\w.]*)", '')
+        $rest = [regex]::Replace($rest, "(?i)\s*-NameMatch\s+('[^']*'|`"[^`"]*`"|\w+)", '')
+        $rest = $rest.Trim()
+        $out  = "$cmd -Name $nameVal -NameMatch $matchVal"
+        if ($rest) { $out += " $rest" }
+        return $out
     })
 }
 function Convert-HKCUAllUsers {
@@ -736,6 +765,8 @@ function Convert-V3ToV4Content {
     $result = Convert-HKCUAllUsers -Content $result
     # Give Get-ADTApplication/Uninstall-ADTApplication their explicit -Name (v3's positional name breaks on v4).
     $result = Add-AdtApplicationNameParam -Content $result
+    # Then normalise to the preferred order/syntax: -Name first, -NameMatch bareword value.
+    $result = Set-AdtApplicationNameOrder -Content $result
     return $result
 }
 

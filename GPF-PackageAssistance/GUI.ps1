@@ -1,4 +1,4 @@
-##############################################################
+﻿##############################################################
 # GUI.ps1  -  Package Builder wizard (Step 1 + Step 2 live; 3/4 stubbed)
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -STA -File GUI.ps1
 ##############################################################
@@ -81,6 +81,7 @@ $script:State = @{
     PkgName=''; Parsed=$null; Ritm=''
     PredecessorPath=$null; PredecessorModel=$null; AddUninstallPrevious=$false; ReusePkg=$null
     SourceFolder=$null; Resolved=$null; ChosenInstallers=@(); LooseFiles=$false
+    ZipPayload=$null; ZipInstallers=@()   # GPF: a Sources\Files\*.zip kept VERBATIM + the installer entries selected inside it
     SourceNotes=@()     # review notes tied to the source (e.g. MSI extracted from a wrapper EXE)
     GpfRequest=$null    # GPF brand: the harvested AES request (OrderNumber/FilesDir/Icons/Docs/PredecessorPath)
     # Step 2 (Detection): installer type, product code, MST flags
@@ -129,7 +130,7 @@ function Get-PBState { return $script:State }
 function Get-PBMainWindow { return $script:Win }
 
 $script:StepOwns   = @{
-    1 = @('PredecessorPath','PredecessorModel','SourceFolder','Resolved','ChosenInstallers','LooseFiles','AddUninstallPrevious','SourceNotes','ReusePkg','GpfRequest')
+    1 = @('PredecessorPath','PredecessorModel','SourceFolder','Resolved','ChosenInstallers','LooseFiles','ZipPayload','ZipInstallers','AddUninstallPrevious','SourceNotes','ReusePkg','GpfRequest')
     2 = @('InstallerType','ProductCode','RemoveShortcut','RemoveRun32','RemoveRun64','RemoveStartup','RemoveStray','InstallParams','UninstallParams','InstallerArgs','MsiProps','MsiFlags','MstApplyExtras','MstReviewNotes','SnapshotNotes','SnapshotUninstall','SnapshotDisplayVersion','SnapshotCleanupCommands','SnapshotReport','SnapshotExclusions','SnapshotShortcuts','SnapshotLeftoverCandidates','SnapshotLeftoverChecked','SnapshotInstalledMB','SnapshotHkcu','SnapshotUserFiles','PerUserMode','LooseArp','LooseShortcut','LooseTargets')
     3 = @('ScriptText')
     4 = @('CreatedPath','PublishBase')   # stale publish targets must die with upstream changes -
@@ -810,7 +811,7 @@ if (Test-Path $icoPath) {
     catch { Write-Log "Window icon load failed ($($_.Exception.Message)) - using default." Warning }
 }
 # Build stamp in the title: instantly answers "is my exe running the latest pak?" after an update.
-try { $script:Win.Title = "$(if (Get-Command Get-PBToolName -EA SilentlyContinue) { Get-PBToolName } else { 'Package Builder' })  -  build $($script:BuildStamp)" } catch {}
+try { $script:Win.Title = "$(if (Get-Command Get-PBToolName -EA SilentlyContinue) { Get-PBToolName } else { 'Package Assistance' })  -  build $($script:BuildStamp)" } catch {}
 foreach ($n in 'N1','N2','N3','N4','P1','P2','P3','P4','TabsP4','TxtPkg','LblParsed','BtnPred','BtnFetch','BtnAddInst','ChkAddUninstall',
                 'BtnPredCmds','LblReview','LblCreateResult','BtnCopyOutgoing','TxtPubPkgName','BtnLoadOutgoing','BtnBrowsePkg','PnlPublish','TxtPubProductName','TxtPubPublisher','TxtPubVersion','TxtPubProductCode',
                 'TxtPubBrandingKey','TxtPubUninstallKey','TxtPubDetectVersion','TxtPubInstall','TxtPubUninstall','TxtPubRepair','TxtPubDescription','CmbDetectType','ChkPubAllowInteract',
@@ -1415,6 +1416,37 @@ function Set-ResolvedSource {
     $script:State.SourceFolder = $Folder
     $res = Resolve-Source -RootPath $Folder
     $script:State.Resolved = $res
+    $script:State.ZipPayload = $null; $script:State.ZipInstallers = @()
+    # GPF ZIP PAYLOAD (F25/F34): the source is a single .zip kept VERBATIM. Read the installer entries INSIDE it (one step
+    # into the wrapper folder - INSTANT, no extraction), auto-pick a single msi/exe, else let the packager choose. The zip
+    # is Expand-ZipFile'd to $envTemp\<App>_<Ver> at install and the chosen installer(s) run from there.
+    if ("$($res.ZipPayload)".Trim()) {
+        $script:State.ZipPayload = $res.ZipPayload
+        $zipEntries = @(Get-ZipInstallerEntries -ZipPath $res.ZipPayload)
+        $zipReal    = @($zipEntries | Where-Object { $_.Extension -in '.msi','.exe' })
+        $picked = @()
+        if ($zipEntries.Count -eq 0) {
+            # nothing recognisable inside - keep the zip as a plain loose payload (packager writes the command)
+            $script:State.ChosenInstallers = @([pscustomobject]@{ Name=[IO.Path]::GetFileName($res.ZipPayload); FullName=$res.ZipPayload; Extension='.zip' })
+            $script:State.LooseFiles = $true
+            $LblSrc.Text = "[zip] $([IO.Path]::GetFileName($res.ZipPayload)) - kept as-is; no installer detected inside (fill the install command)."
+            $LblSrc.Foreground='#CE9178'; Invalidate-From 2; return
+        }
+        elseif ($zipEntries.Count -eq 1 -or $zipReal.Count -eq 1) {
+            $picked = if ($zipEntries.Count -eq 1) { @($zipEntries) } else { @($zipReal) }   # single installer (or a single real msi/exe) -> auto
+        }
+        else {
+            $picked = @(Show-InstallerPicker -Installers $zipEntries)   # multiple -> prompt
+            if (-not $picked -or $picked.Count -eq 0) { $LblSrc.Text='No installer selected from the zip.'; $LblSrc.Foreground='#F48771'; return }
+        }
+        $script:State.ZipInstallers    = $picked
+        $script:State.ChosenInstallers = @($picked | ForEach-Object { [pscustomobject]@{ Name=$_.Name; FullName=("$($res.ZipPayload)".TrimEnd('\') + '\' + "$($_.RelPath)".TrimStart('\')); Extension=$_.Extension; RelPath=$_.RelPath; InZip=$true } })
+        $script:State.LooseFiles = $false
+        Invalidate-From 2
+        $LblSrc.Text = "[zip] $([IO.Path]::GetFileName($res.ZipPayload)) -> run: $(($picked | ForEach-Object { $_.Name }) -join ', ')   (zip kept as-is; extracted to `$envTemp at install)"
+        $LblSrc.Foreground='#CE9178'
+        return
+    }
     if (-not $res.Valid) { $LblSrc.Text = "Source at $Folder - no installer found."; $LblSrc.Foreground='#F48771'; return }
     $sel = Select-Installers -Installers $res.Installers
     $script:State.LooseFiles = $false
@@ -1902,12 +1934,25 @@ function Build-Step3Script {
     $ins = @($script:State.ChosenInstallers)
     # FreeSpace = max(installer payload, measured installed footprint from the snapshot, 150 MB floor). The snapshot
     # footprint matters when a small installer expands to GBs on disk; 0 when no snapshot ran, so it never lowers the value.
-    if ($ins.Count -gt 0) { $newPkg.FreeSpace = Get-PayloadSizeMB -ChosenInstallers $ins -InstalledMB ([int]$script:State.SnapshotInstalledMB) }   # required disk space (MB) from payload
+    if (@($script:State.ZipInstallers).Count -and "$($script:State.ZipPayload)".Trim() -and (Test-Path -LiteralPath "$($script:State.ZipPayload)")) {
+        # ZIP PAYLOAD: size from the .zip itself (it's Expand-ZipFile'd at install) - the pseudo "installer" paths inside
+        # the zip aren't on disk. Rough x3 for compressed->extracted+installed, floored at 300 MB.
+        $zmb = [math]::Round((Get-Item -LiteralPath "$($script:State.ZipPayload)").Length/1MB)
+        $newPkg.FreeSpace = [Math]::Max(300, $zmb * 3)
+    }
+    elseif ($ins.Count -gt 0) { $newPkg.FreeSpace = Get-PayloadSizeMB -ChosenInstallers $ins -InstalledMB ([int]$script:State.SnapshotInstalledMB) }   # required disk space (MB) from payload
     # Install-command paths are the installer's location relative to the copied payload root,
     # so an MSI/EXE in a subfolder keeps that subfolder under $adtSession.DirFiles. Manual mode
     # copies flat, so paths are just file names. (MST defaults to <relpath>.mst in the builder.)
     $payloadRoot = if ($script:State.Resolved -and -not $script:State.Resolved.Manual) { $script:State.Resolved.PayloadRoot } else { $null }
-    if ($script:State.LooseFiles) {
+    if (@($script:State.ZipInstallers).Count -and "$($script:State.ZipPayload)".Trim()) {
+        # GPF ZIP PAYLOAD: the source is a single .zip kept VERBATIM in Files\; Expand-ZipFile it at install to
+        # $envTemp\<App>_<Ver> and run the installer(s) the packager selected from inside it.
+        $newPkg.InstallerMode = 'ZipPayload'
+        $newPkg.ZipName      = [IO.Path]::GetFileName("$($script:State.ZipPayload)")
+        $newPkg.ZipRunItems  = @($script:State.ZipInstallers | ForEach-Object { @{ RelPath = $_.RelPath; Extension = $_.Extension; Name = $_.Name } })
+    }
+    elseif ($script:State.LooseFiles) {
         # User chose loose files: script copies the payload (+ optional shortcut(s)/ARP).
         $newPkg.InstallerMode = 'LooseFiles'
         $newPkg.CreateArp = [bool]$script:State.LooseArp
@@ -1961,6 +2006,15 @@ function Build-Step3Script {
             }
             '.exe' { $newPkg.ExeFileName = $rel; $newPkg.InstallParams = $script:State.InstallParams; $newPkg.UninstallParams = $script:State.UninstallParams
                      $newPkg.UninstallCommand = "$($script:State.SnapshotUninstall)" }   # snapshot-captured full uninstall -> written into the ps1
+            '.zip' {
+                # GPF zip source (F25/F34): the source IS a single .zip - keep it VERBATIM in Files\ and Expand-ZipFile it
+                # at install to $envTemp\<App>_<Version>. Route through LooseFiles so New-PayloadZip copies the zip as-is
+                # (not extracted) and Get-LooseFilesCommandSet emits the Expand-ZipFile line. The packager fills the actual
+                # install command for the extracted payload (surfaced as a review item below).
+                $newPkg.InstallerMode = 'LooseFiles'
+                $newPkg.ZipName   = $ins[0].Name
+                $newPkg.CreateArp = [bool]$script:State.LooseArp
+            }
         }
     }
     # Snapshot cleanups / exclusions -> the ps1. MOST go to POST-INSTALLATION (remove desktop/uninstall shortcut,
@@ -4965,11 +5019,11 @@ $BtnMoveToDev.add_Click({
     Start-SccmManageJob -Action 'move' -Op @{ FullName=$app; Target='Dev' }
 })
 $BtnOpenCmTrace.add_Click({
-    $log = if (Get-Command Get-LogPath -ErrorAction SilentlyContinue) { Get-LogPath } else { 'C:\temp\PackageBuilder\Logs\PackageBuilder.log' }
+    $log = if (Get-Command Get-LogPath -ErrorAction SilentlyContinue) { Get-LogPath } else { 'C:\temp\GPF-PackageAssistance\Logs\PackageAssistance.log' }
     if (Get-Command Open-CMTrace -ErrorAction SilentlyContinue) { Open-CMTrace -LogPath $log } elseif (Test-Path $log) { Start-Process $log }
 })
 $BtnOpenWork.add_Click({
-    $w = if (Get-Command Get-WorkPath -ErrorAction SilentlyContinue) { Get-WorkPath } else { 'C:\temp\PackageBuilder' }
+    $w = if (Get-Command Get-WorkPath -ErrorAction SilentlyContinue) { Get-WorkPath } else { 'C:\temp\GPF-PackageAssistance' }
     try { Start-Process explorer.exe $w } catch { $LblPublishLog.Text = "Work folder: $w"; $LblPublishLog.Foreground = '#888' }
 })
 # Launch + screenshot the app's installed Start-Menu shortcuts on a BACKGROUND runspace (apps need seconds to

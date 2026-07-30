@@ -694,7 +694,7 @@ Assert "saved report carries ChangeSet (tree on load)" ((@($csLoaded.Files | Whe
 # ---- SELF-STAGE (run-from-share -> local): CORE copied first, heavy publish modules DEFERRED until needed ----
 $stg = Join-Path $env:TEMP ('pbstage_' + [Guid]::NewGuid().ToString('N').Substring(0,8))
 $shareD = Join-Path $stg 'share'; $localD = Join-Path $stg 'local'
-foreach ($rel in 'PackageBuilder.exe','PackageBuilder.exe.config','PackageBuilder.pak','settings.json','snippets.json','KnowledgeBase.Recommend.json',
+foreach ($rel in 'PackageAssistance.exe','PackageAssistance.exe.config','PackageAssistance.pak','settings.json','snippets.json','KnowledgeBase.Recommend.json',
                  'Lib\ICSharpCode.AvalonEdit.dll','Lib\PackageBuilder.ico','Lib\PSADT_Template\Content\Invoke-AppDeployToolkit.ps1',
                  'Lib\ConfigurationManagerPrelive\ConfigurationManager.psd1','Lib\PowerShell Module\MSAL.PS 4.37.0.0\MSAL.PS.psd1','Lib\IntuneWinAppUtil.exe',
                  'PsExec64.exe','Tools\extra-helper.exe') {
@@ -703,12 +703,12 @@ foreach ($rel in 'PackageBuilder.exe','PackageBuilder.exe.config','PackageBuilde
 }
 # DEPLOYMENT REALITY: the deployed pak ships Hidden+ReadOnly. Copy-IfNewer's timestamp compare used Get-Item WITHOUT
 # -Force, which THROWS "cannot find path" on a Hidden file -> the self-stage crashed with a dialog. Reproduce it.
-(Get-Item -LiteralPath (Join-Path $shareD 'PackageBuilder.pak') -Force).Attributes = 'Hidden, ReadOnly'
+(Get-Item -LiteralPath (Join-Path $shareD 'PackageAssistance.pak') -Force).Attributes = 'Hidden, ReadOnly'
 $rl = Invoke-SelfStage -Root $shareD -Local $localD -Force
-Assert "self-stage: returns local exe path"             ("$rl" -eq (Join-Path $localD 'PackageBuilder.exe'))
-Assert "self-stage: core exe+pak copied"                ((Test-Path (Join-Path $localD 'PackageBuilder.exe')) -and (Test-Path (Join-Path $localD 'PackageBuilder.pak')))
-Assert "self-stage: HIDDEN pak copied (no 'cannot find path' crash)" (Test-Path (Join-Path $localD 'PackageBuilder.pak'))
-Assert "self-stage: exe.config copied (UNC-share launcher config)"   (Test-Path (Join-Path $localD 'PackageBuilder.exe.config'))
+Assert "self-stage: returns local exe path"             ("$rl" -eq (Join-Path $localD 'PackageAssistance.exe'))
+Assert "self-stage: core exe+pak copied"                ((Test-Path (Join-Path $localD 'PackageAssistance.exe')) -and (Test-Path (Join-Path $localD 'PackageAssistance.pak')))
+Assert "self-stage: HIDDEN pak copied (no 'cannot find path' crash)" (Test-Path (Join-Path $localD 'PackageAssistance.pak'))
+Assert "self-stage: exe.config copied (UNC-share launcher config)"   (Test-Path (Join-Path $localD 'PackageAssistance.exe.config'))
 Assert "self-stage: 3 JSON configs copied"              ((Test-Path (Join-Path $localD 'settings.json')) -and (Test-Path (Join-Path $localD 'snippets.json')) -and (Test-Path (Join-Path $localD 'KnowledgeBase.Recommend.json')))
 Assert "self-stage: AvalonEdit + template copied"       ((Test-Path (Join-Path $localD 'Lib\ICSharpCode.AvalonEdit.dll')) -and (Test-Path (Join-Path $localD 'Lib\PSADT_Template\Content\Invoke-AppDeployToolkit.ps1')))
 Assert "self-stage: ConfigMgr DEFERRED (not copied)"    (-not (Test-Path (Join-Path $localD 'Lib\ConfigurationManagerPrelive\ConfigurationManager.psd1')))
@@ -1856,13 +1856,59 @@ try {
         Assert "NF F52: enables progress in the section predecessor had it" ($nfPb.Enabled -ge 1)
         $nfSecI = [regex]::Match($nfPb.Text,'(?s)MAIN-INSTALLATION BEGIN(.*?)MAIN-INSTALLATION END').Groups[1].Value
         Assert "NF F52: install progress line uncommented" ($nfSecI -match '(?m)^[ \t]*Show-ADTInstallationProgress')
+        # Predecessor reuse: the template's bare Main "Installation of ..." log is upgraded to "... is successful." so the
+        # carried command lands BETWEEN Start/success (gold layout) instead of leaving two consecutive template logs (iDEX).
+        $nfLogUp = Set-GpfMainSuccessLog -Text $nfTpl
+        $nfSec = ($script:SectionMarkers | Where-Object { $_.F -eq 'MainInstallCode' })
+        $nfMi = Set-SectionBody -Template $nfLogUp -Begin $nfSec.B -End $nfSec.E -Body "Start-ADTMsiProcess -Action 'Install' -FilePath `"x.msi`"" -Pre $nfSec.Pre
+        $nfMiSec = [regex]::Match($nfMi,'(?s)MAIN-INSTALLATION BEGIN(.*?)MAIN-INSTALLATION END').Groups[1].Value
+        Assert "NF log: reuse main log upgraded + command between Start/success" (($nfMiSec -match 'Installation of \$appVendor \$appName \$appVersion is successful') -and ($nfMiSec -notmatch 'Installation of \$appVendor \$appName \$appVersion\."') -and ($nfMiSec.IndexOf('Start-ADTMsiProcess') -lt $nfMiSec.IndexOf('is successful')) -and ($nfMiSec.IndexOf('Start-ADTMsiProcess') -gt $nfMiSec.IndexOf('Start Installation')))
+        # SoftIdent: a real …\Uninstall\{GUID} detection key must carry [DisplayVersion=<new ver>] even if the predecessor
+        # only had a bare ProductCode; a VWG\CM branding key must NOT get one.
+        $nfU = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{E042B62E-F230-4A0E-A38D-7D5E788F27A7}'
+        $nfSi = [regex]::Replace($nfTpl, "(?im)($(Get-FieldLinePrefix 'SoftIdent'))[""'][^""']*[""']", "`${1}'$nfU'")
+        $nfSiOut = Set-GpfSoftIdentTwoPlace -Text $nfSi -Arch 'x64' -Version '2.8.2'
+        Assert "NF SoftIdent: bare Uninstall\{GUID} gets [DisplayVersion]" (($nfSiOut -match 'Uninstall\\\{E042B62E-F230-4A0E-A38D-7D5E788F27A7\} \[DisplayVersion=2\.8\.2\]') -and -not (($nfSiOut -split "`r?`n") | Where-Object { $_ -match 'Uninstall\\\{E042B62E' -and $_ -notmatch 'DisplayVersion' }))
     }
+    Assert "NF SoftIdent: helper adds DV to Uninstall key"        ((Add-SoftIdentDisplayVersion -Value 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{AAAA1111-2222-3333-4444-555566667777}' -Version '3.0') -match '\[DisplayVersion=3\.0\]')
+    Assert "NF SoftIdent: helper leaves VWG\CM branding key alone" ((Add-SoftIdentDisplayVersion -Value 'HKLM:\SOFTWARE\VWG\CM\Vendor_App_x64_1.0-0001_MUL' -Version '3.0') -notmatch 'DisplayVersion')
+    Assert "NF SoftIdent: helper no double DV"                    ((Add-SoftIdentDisplayVersion -Value 'HKLM:\...\Uninstall\{G} [DisplayVersion=1.0]' -Version '3.0') -notmatch 'DisplayVersion=3\.0')
+    # GPF zip source: resolver keeps a Sources\Files\*.zip VERBATIM (no fetch-time extraction), and the zip index reader
+    # surfaces installer entries shallowest-first (top-level real entry points before deep app binaries).
+    $zsTmp = Join-Path $env:TEMP ("nfzs_" + [guid]::NewGuid().ToString('N').Substring(0,8))
+    try {
+        $zsSf = Join-Path $zsTmp 'Sources\Files'; New-Item -ItemType Directory -Path $zsSf -Force | Out-Null
+        $zsStage = Join-Path $zsTmp 'stage\App'; New-Item -ItemType Directory -Path (Join-Path $zsStage 'bin\deep') -Force | Out-Null
+        'x' | Set-Content (Join-Path $zsStage 'Setup.exe'); 'x' | Set-Content (Join-Path $zsStage 'bin\deep\Helper.exe')
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::CreateFromDirectory((Join-Path $zsTmp 'stage'), (Join-Path $zsSf 'Payload.zip'))
+        $zsRes = Resolve-Source -RootPath (Join-Path $zsTmp 'Sources')
+        Assert "NF zipsrc: GPF keeps source zip verbatim (ZipPayload set, no extract)" ([bool]$zsRes.ZipPayload -and (@($zsRes.Installers).Count -eq 1) -and ($zsRes.Installers[0].Name -eq 'Payload.zip'))
+        $zsEnt = Get-ZipInstallerEntries -ZipPath $zsRes.ZipPayload
+        # one step into the single wrapper folder: Setup.exe shows, deep bin\deep\Helper.exe does NOT
+        Assert "NF zipsrc: one-step reader shows Setup.exe, hides deep Helper.exe" ((@($zsEnt).Count -eq 1) -and ($zsEnt[0].Name -eq 'Setup.exe'))
+    } finally { Remove-Item -LiteralPath $zsTmp -Recurse -Force -EA SilentlyContinue }
+    # ZipPayload install command: Expand-ZipFile to $envTemp\<App>_<Ver> then run the selected inner installers by type
+    $zpCmd = New-StandardCommands -NewPkg @{ InstallerMode='ZipPayload'; AppName='App'; Version='1.0'; ZipName='Files.zip'; ZipRunItems=@(
+        @{ RelPath='Pkg\install.msi'; Extension='.msi'; Name='install.msi' },
+        @{ RelPath='Pkg\SC-Preinstall.ps1'; Extension='.ps1'; Name='SC-Preinstall.ps1' },
+        @{ RelPath='Pkg\run.cmd'; Extension='.cmd'; Name='run.cmd' }) }
+    Assert "NF zippay: Expand-ZipFile to `$envTemp\<App>_<Ver>" ($zpCmd.MainInstall -match 'Expand-ZipFile[\s\S]*Destination "\$envTemp\\App_1\.0"')
+    Assert "NF zippay: msi -> Start-ADTMsiProcess" ($zpCmd.MainInstall -match "Start-ADTMsiProcess -Action 'Install' -FilePath `"\`$envTemp\\App_1\.0\\Pkg\\install\.msi`"")
+    Assert "NF zippay: ps1 -> powershell -File"   ($zpCmd.MainInstall -match "powershell\.exe[\s\S]*Pkg\\SC-Preinstall\.ps1")
+    Assert "NF zippay: cmd -> cmd /c"             ($zpCmd.MainInstall -match "cmd\.exe`" -ArgumentList '/c'")
     Assert "NF F52: no-op when predecessor had no progress" ((Set-PredecessorProgressBar -Text $nfTpl -Model @{ RawV4Content = $nfTpl }).Enabled -eq 0)
     # F52 review item: active progress on predecessor reuse
     Assert "NF F52: review item on active progress" (((Get-ScriptReviewFindings -ScriptText "    AppName='X'`r`n        Show-ADTInstallationProgress`r`n" -IsPredecessor $true) -join "`n") -match 'progress bar is ENABLED')
     # F54 review item: empty ProcToBlock on predecessor reuse flagged; populated one not flagged
     Assert "NF F54: empty ProcToBlock flagged"     (((Get-ScriptReviewFindings -ScriptText "    AppName='X'`r`n    [string[]] `$Global:VWG_ProcToBlock = @()`r`n" -IsPredecessor $true) -join "`n") -match 'ProcToBlock .* is empty')
     Assert "NF F54: populated ProcToBlock not flagged" (((Get-ScriptReviewFindings -ScriptText "    AppName='X'`r`n    [string[]] `$Global:VWG_ProcToBlock = @('firefox')`r`n" -IsPredecessor $true) -join "`n") -notmatch 'ProcToBlock .* is empty')
+    # Invalid characters: Format-OutputScript strips invisible chars a predecessor may carry (NBSP -> space; zero-width /
+    # direction marks / inline BOM -> removed) so the generated script parses.
+    $nfBad = "Write-Host$([char]0x00A0)'x'$([char]0x200B)  # c$([char]0xFEFF)"
+    $nfClean = Format-OutputScript -Text $nfBad
+    Assert "NF chars: output has no invisible chars"  (-not ($nfClean.ToCharArray() | Where-Object { [int]$_ -gt 127 }))
+    Assert "NF chars: NBSP became a normal space"      ($nfClean -match "Write-Host 'x'")
     # F45: zipped predecessor is detected/extracted (both a .zip file path AND a folder holding a package .zip)
     $f45tmp = Join-Path $env:TEMP ("PBnf45_" + [guid]::NewGuid().ToString('N').Substring(0,8))
     try {
@@ -1872,7 +1918,7 @@ try {
         $f45zip = Join-Path $f45tmp "$f45pkg.zip"
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         [System.IO.Compression.ZipFile]::CreateFromDirectory((Join-Path $f45tmp $f45pkg), $f45zip)
-        Remove-Item (Join-Path 'C:\temp\PackageBuilder\PredCache' $f45pkg) -Recurse -Force -EA SilentlyContinue
+        Remove-Item (Get-PredZipCache -ZipPath $f45zip) -Recurse -Force -EA SilentlyContinue
         Assert "NF F45: Expand-PredecessorZip -> Content-at-root package root" ((Test-Path (Join-Path (Expand-PredecessorZip -ZipPath $f45zip) 'Content\Invoke-AppDeployToolkit.ps1')))
         Assert "NF F45: model loads from a .zip file path" ((Read-PredecessorModel -PackagePath $f45zip -PackageName $f45pkg).Identity.AppName -eq 'ZipPred')
         $f45pf = Join-Path $f45tmp 'Predecessor'; New-Item -ItemType Directory -Path $f45pf -Force | Out-Null
@@ -1880,6 +1926,28 @@ try {
         Assert "NF F45: model loads from folder holding a package .zip" ((Read-PredecessorModel -PackagePath $f45pf -PackageName $f45pkg).Identity.AppName -eq 'ZipPred')
         Assert "NF F45: bad zip path -> '' (no throw)" ((Expand-PredecessorZip -ZipPath (Join-Path $f45tmp 'nope.zip')) -eq '')
     } finally { Remove-Item -LiteralPath $f45tmp -Recurse -Force -EA SilentlyContinue }
+    # Predecessor-zip MAX_PATH fix: deeply-nested package zipped WITH a long top folder must still extract (short cache +
+    # \\?\ extractor), AND a prior EMPTY/incomplete cache must be re-extracted (not reused). Build a zip whose top folder
+    # is the 46-char package name + a nested Content\Invoke, then extract, empty the cache, and re-extract.
+    $zpTmp = Join-Path $env:TEMP ("PBzip_" + [guid]::NewGuid().ToString('N').Substring(0,8))
+    try {
+        $zpName = 'SAP_EnableNowProducer_x86_10.4.0.0133-0001_MUL'
+        $zpStage = Join-Path $zpTmp "$zpName\Content"; New-Item -ItemType Directory -Path $zpStage -Force | Out-Null
+        "[String]`$appName='EnableNowProducer'" | Set-Content -Path (Join-Path $zpStage 'Invoke-AppDeployToolkit.ps1') -Encoding UTF8
+        $zpZip = Join-Path $zpTmp "$zpName.zip"
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::CreateFromDirectory((Join-Path $zpTmp $zpName), $zpZip, 'Optimal', $true)  # includeBaseDir -> top folder = pkg name
+        $zpCache = Get-PredZipCache -ZipPath $zpZip
+        if (Test-Path $zpCache) { Remove-Item $zpCache -Recurse -Force -EA SilentlyContinue }
+        $zpInner = Expand-GpfPredecessorZip -ZipPath $zpZip
+        Assert "NF zipfix: extracts (short cache) + finds inner root" ($zpInner -and (Test-Path (Join-Path $zpInner 'Content\Invoke-AppDeployToolkit.ps1')))
+        Assert "NF zipfix: cache path stays short (<120)" ($zpCache.Length -lt 120)
+        # empty the cache (folder remains) -> next call must RE-extract, not reuse the empty folder
+        Get-ChildItem $zpCache -Force | Remove-Item -Recurse -Force -EA SilentlyContinue
+        Assert "NF zipfix: emptied cache detected incomplete" (-not (Test-PredZipComplete -CacheDir $zpCache))
+        $zpInner2 = Expand-GpfPredecessorZip -ZipPath $zpZip
+        Assert "NF zipfix: re-extracts an emptied cache" ($zpInner2 -and (Test-Path (Join-Path $zpInner2 'Content\Invoke-AppDeployToolkit.ps1')))
+    } finally { Remove-Item -LiteralPath $zpTmp -Recurse -Force -EA SilentlyContinue }
     # F57-59: predecessor SupportFiles helper scripts (e.g. sc-uninstall.ps1) suggested for copy; only on reuse
     $nfSf = "    AppName='Bentley'`r`nStart-ADTProcess -FilePath 'powershell.exe' -ArgumentList `"-File `$(`$adtSession.DirSupportFiles)\sc-uninstall.ps1`""
     Assert "NF F57: sc-uninstall.ps1 helper suggested (reuse)" (((Get-ScriptReviewFindings -ScriptText $nfSf -IsPredecessor $true) -join "`n") -match 'sc-uninstall\.ps1')
@@ -1888,21 +1956,81 @@ try {
     Assert "NF F27: generate ON -> -Transform <msi>.mst" ((New-StandardCommands -NewPkg @{ InstallerMode='SingleMSI'; MsiFileName='app.msi'; ProductCode='{PC}' }).MainInstall -match 'app\.mst')
     Assert "NF F27: generate OFF + no src -> no -Transform" ((New-StandardCommands -NewPkg @{ InstallerMode='SingleMSI'; MsiFileName='app.msi'; ProductCode='{PC}'; GenerateMst=$false; NoMst=$true }).MainInstall -notmatch '-Transform')
     Assert "NF F27: generate OFF + src -> reuse source mst" (((New-StandardCommands -NewPkg @{ InstallerMode='SingleMSI'; MsiFileName='Firefox.msi'; ProductCode='{PC}'; GenerateMst=$false; MstFileName='firefox-esr.mst' }).MainInstall -match 'firefox-esr\.mst') -and ((New-StandardCommands -NewPkg @{ InstallerMode='SingleMSI'; MsiFileName='Firefox.msi'; ProductCode='{PC}'; GenerateMst=$false; MstFileName='firefox-esr.mst' }).MainInstall -notmatch 'Firefox\.mst'))
-    # F2: GPF tool display name = "Package Assistance" (brand ToolName); default stays "Package Builder"
+    # F2: GPF tool display name = "Package Assistance" - from Brand.ToolName AND as the GPF build's hardcoded default
+    # (so it's correct even if a portable settings.json lacks ToolName).
     if (Get-Command Get-PBToolName -EA SilentlyContinue) {
         Assert "NF F2: GPF tool name = Package Assistance" ((Get-PBToolName) -eq 'Package Assistance')
+        $__b = $script:Settings; $script:Settings = @{ Brand = @{ Name='GPF' } }   # no ToolName
+        Assert "NF F2: default (no ToolName) still Package Assistance" ((Get-PBToolName) -eq 'Package Assistance')
+        $script:Settings = $__b
     }
     # F25/F34: GPF loose/zip source -> Expand-ZipFile (no MTB) to $envTemp\<App>_<Ver>, referencing the source zip name
     $nfLz = New-StandardCommands -NewPkg @{ InstallerMode='LooseFiles'; AppName='TmxDIKAB'; Version='2408.1700'; Arch='x64'; Vendor='Siemens'; ZipName='TmxDIKAB_source.zip'; CreateArp=$true }
     Assert "NF F25: GPF Expand-ZipFile (no MTB)"         (($nfLz.MainInstall -match 'Expand-ZipFile ') -and ($nfLz.MainInstall -notmatch 'Expand-MTBZipFile'))
     Assert "NF F25: GPF extract to `$envTemp\<App>_<Ver>" ($nfLz.MainInstall -match 'Destination "\$envTemp\\TmxDIKAB_2408\.1700"')
     Assert "NF F25: GPF references source zip name"      ($nfLz.MainInstall -match 'TmxDIKAB_source\.zip')
+    # Remove-BrandingREG -> Remove-Branding (GPF modern branding removal; -BrandingKey dropped, -Name/-AdditionalRegPaths kept)
+    $nfRb = Convert-V3ToV4Content -Content 'Remove-BrandingREG -Name "*iDEX*" -BrandingKey "HKLM:\Software\VWG\CM" -AdditionalRegPaths "HKLM:\Software\$($VWG_CurrentRegWow)VWG\InstalledProducts", "HKLM:\Software\$($VWG_CurrentRegWow)VWG\CM"'
+    Assert "NF branding: GPF Remove-BrandingREG -> Remove-Branding" (($nfRb -match '(?<!REG)\bRemove-Branding\b') -and ($nfRb -notmatch 'Remove-BrandingREG') -and ($nfRb -notmatch '-BrandingKey') -and ($nfRb -match '-Name "\*iDEX\*"') -and ($nfRb -match '-AdditionalRegPaths') -and ($nfRb -match [regex]::Escape('$($VWG_CurrentRegWow)')))
+    # Set-EnvironmentVariable: GPF keeps it (valid Extensions fn); MTB converts to Set-ADTEnvironmentVariable (checked in the MTB block below)
+    Assert "NF env: GPF keeps Set-EnvironmentVariable" ((Convert-V3ToV4Content -Content 'Set-EnvironmentVariable -EnvironmentVariable "X" -EnvironmentValue "Y"') -match '\bSet-EnvironmentVariable\b')
+    # Doc harvest: exclude dependency-named folders (like predecessor); accept "Software Package Request Form" as an
+    # alternative install-instructions doc name. Build a mini request tree and run Resolve-GpfRequest.
+    $nfDoc = Join-Path $env:TEMP ("PBnfdoc_" + [guid]::NewGuid().ToString('N').Substring(0,8))
+    try {
+        $nfReq = Join-Path $nfDoc 'AES-1-020607-A GNS_Animator4_x64_2.8.2-0001_en-US'
+        $nfVs  = Join-Path $nfReq 'Vendor_Sources'
+        New-Item -ItemType Directory -Path (Join-Path $nfVs 'Dependencies') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $nfVs 'Files') -Force | Out-Null
+        'x' | Set-Content (Join-Path $nfVs 'Files\Software Package Request Form.docx')
+        'x' | Set-Content (Join-Path $nfVs 'Files\Install Instructions.docx')
+        'x' | Set-Content (Join-Path $nfVs 'Dependencies\Install Instructions.docx')
+        $nfRes = Resolve-GpfRequest -RequestPath $nfReq
+        Assert "NF docs: alt-named 'Software Package Request Form' = install instructions" ([bool](@($nfRes.DocItems | Where-Object { $_ -match 'Software Package Request Form\.docx' }).Count))
+        Assert "NF docs: dependency-folder doc EXCLUDED" (-not [bool](@($nfRes.DocItems | Where-Object { $_ -match '[\\/]Dependencies[\\/]' }).Count))
+    } finally { Remove-Item -LiteralPath $nfDoc -Recurse -Force -EA SilentlyContinue }
     # Intune/SCCM module import: execution-policy is lifted for THIS PROCESS before importing script modules (MSAL.PS /
     # ConfigMgr) - both integrations must call the shared guard so "running scripts is disabled" can't block the import.
     Assert "NF Intune: Enable-PBProcessScripts exists"   ([bool](Get-Command Enable-PBProcessScripts -EA SilentlyContinue))
     $nfToolRoot = Split-Path (Resolve-Module 'PSADT_V3toV4_Mappings.ps1') -Parent
     Assert "NF Intune: guard runs BEFORE MSAL import"    ((Get-Content (Join-Path $nfToolRoot 'Intune.ps1') -Raw) -match 'Enable-PBProcessScripts[\s\S]{0,400}Import-Module \$msalPath')
     Assert "NF SCCM: still lifts policy (shared guard)"  ((Get-Content (Join-Path $nfToolRoot 'Sccm.ps1') -Raw) -match 'Enable-PBProcessScripts')
+    # PREDECESSOR REUSE, Main section (-DropTemplateLogs): team decision "use whatever the predecessor has and remove our
+    # v4 template log lines". The iDEX predecessor owns DIFFERENTLY-WORDED logging ("Installation finished successfully
+    # with: [exitcode]" / "failed with") that bodyOwnsAction CANNOT detect - the flag drops the template Start/Installation-of
+    # scaffold anyway, keeps the predecessor's own logs, and the layout stays clean (self-contained; no AUDI corpus needed).
+    $nfReuseTpl = ('#*====================================MAIN-INSTALLATION BEGIN====',
+                 "`t    # user dialogs (deprecated)", "`t    If (`$VWG_UseDialogs){", "`t    }", '', '',
+                 '        Write-ADTLogEntry -Message "Start Installation $appVendor $appName $appVersion." -Severity 2 -Source $adtSession.DeployAppScriptFriendlyName',
+                 '        ', '                ', '',
+                 '        Write-ADTLogEntry -Message "Installation of $appVendor $appName $appVersion." -Severity 2 -Source $adtSession.DeployAppScriptFriendlyName',
+                 '    ', '#*====================================MAIN-INSTALLATION END====') -join "`r`n"
+    $nfIdexBody = ('$ret = Start-ADTProcess -FilePath "$($adtSession.DirFiles)\$Installer" -ArgumentList $InstallerParams -WindowStyle Hidden -PassThru',
+                   'If ( $ret.ExitCode -eq 0 -or $ret.ExitCode -eq 3010 ) {',
+                   '    Write-ADTLogEntry -Message "Installation finished successfully with: [$($ret.ExitCode)]" -Source ''INSTALLATION'' -Severity 2',
+                   '} else {',
+                   '    Write-ADTLogEntry -Message "Installation failed with Exitocde: [$($ret.ExitCode)]" -Source ''INSTALLATION'' -Severity 3',
+                   '}') -join "`r`n"
+    $nfRB = '#\*=+\s*MAIN-INSTALLATION BEGIN\s*=+'; $nfRE = '#\*=+\s*MAIN-INSTALLATION END\s*=+'
+    $nfROut = Set-SectionBody -Template $nfReuseTpl -Begin $nfRB -End $nfRE -Body $nfIdexBody -Pre $true -DropTemplateLogs $true
+    $nfRMid = [regex]::Match($nfROut, '(?s)MAIN-INSTALLATION BEGIN=+(.*?)#\*=+MAIN-INSTALLATION END').Groups[1].Value
+    Assert 'NF reuse: template Start scaffold dropped'         ($nfRMid -notmatch 'Start Installation \$appVendor')
+    Assert 'NF reuse: template Installation-of scaffold dropped' ($nfRMid -notmatch 'Installation of \$appVendor \$appName \$appVersion')
+    Assert 'NF reuse: predecessor own log KEPT'                ($nfRMid -match 'Installation finished successfully with')
+    Assert 'NF reuse: predecessor install command KEPT'       ($nfRMid -match 'Start-ADTProcess -FilePath .*\$Installer')
+    Assert 'NF reuse: kept UseDialogs scaffolding'            ($nfRMid -match 'If \(\$VWG_UseDialogs\)')
+    Assert 'NF reuse: no ragged whitespace-only lines'        (@(($nfRMid -split "`r?`n") | Where-Object { $_ -match '^[ \t]+$' }).Count -eq 0)
+    Assert 'NF reuse: single blank gap (no 3+ newlines)'      ($nfRMid -notmatch "`r`n`r`n`r`n")
+    Assert 'NF reuse: exactly the two predecessor logs'       (([regex]::Matches($nfRMid,'Write-ADTLogEntry')).Count -eq 2)
+    # EMPTY body under -DropTemplateLogs -> section PRISTINE (predecessor authored nothing here; e.g. iDEX has no Repair).
+    $nfREmpty = [regex]::Match((Set-SectionBody -Template $nfReuseTpl -Begin $nfRB -End $nfRE -Body '' -Pre $true -DropTemplateLogs $true), '(?s)MAIN-INSTALLATION BEGIN=+(.*?)#\*=+MAIN-INSTALLATION END').Groups[1].Value
+    Assert 'NF reuse: EMPTY body keeps template scaffold'     (($nfREmpty -match 'Start Installation \$appVendor') -and ($nfREmpty -match 'Installation of \$appVendor \$appName \$appVersion'))
+    # bare command under -DropTemplateLogs -> scaffold dropped, command kept (use whatever predecessor has, even with no log).
+    $nfRBare = [regex]::Match((Set-SectionBody -Template $nfReuseTpl -Begin $nfRB -End $nfRE -Body 'Start-ADTMsiProcess -Action ''Install'' -FilePath "x.msi"' -Pre $true -DropTemplateLogs $true), '(?s)MAIN-INSTALLATION BEGIN=+(.*?)#\*=+MAIN-INSTALLATION END').Groups[1].Value
+    Assert 'NF reuse: bare command kept, scaffold dropped'    (($nfRBare -match 'Start-ADTMsiProcess') -and ($nfRBare -notmatch '\$appVendor \$appName \$appVersion'))
+    # NOT reuse (DropTemplateLogs=$false) + bare command -> old behaviour: template scaffold KEPT (fresh path untouched).
+    $nfRKeep = Set-SectionBody -Template $nfReuseTpl -Begin $nfRB -End $nfRE -Body 'Start-ADTMsiProcess -Action ''Install'' -FilePath "x.msi"' -Pre $true -DropTemplateLogs $false
+    Assert 'NF reuse: NOT-reuse keeps template scaffold'      ($nfRKeep -match 'Start Installation \$appVendor')
 } finally { $script:Settings = $__saved }
 # F25/F34: MTB loose-files path stays on Program Files + Expand-MTBZipFile (brand isolation) - checked with MTB settings
 $__savedMtb = $script:Settings
@@ -1910,6 +2038,8 @@ $script:Settings = @{ Brand = @{ Name='MTB' } }
 try {
     $nfMtbLz = New-StandardCommands -NewPkg @{ InstallerMode='LooseFiles'; AppName='App'; Version='1.0'; Arch='x64'; Vendor='Acme'; FullName='Acme_App_x64_1.0-0001_MUL'; CreateArp=$true }
     Assert "NF F25: MTB keeps Expand-MTBZipFile + Program Files" (($nfMtbLz.MainInstall -match 'Expand-MTBZipFile ') -and ($nfMtbLz.MainInstall -match '\$envProgramFiles\\Acme\\App') -and ($nfMtbLz.MainInstall -notmatch '\$envTemp'))
+    # env: MTB converts Set-EnvironmentVariable -> Set-ADTEnvironmentVariable (-Variable/-Value); GPF-only Remove-BrandingREG block must NOT touch MTB
+    Assert "NF env: MTB Set-EnvironmentVariable -> Set-ADTEnvironmentVariable" ((Convert-V3ToV4Content -Content 'Set-EnvironmentVariable -EnvironmentVariable "X" -EnvironmentValue "Y"') -match 'Set-ADTEnvironmentVariable')
 } finally { $script:Settings = $__savedMtb }
 
 Write-Host ""

@@ -62,7 +62,7 @@ if (-not (Get-Command Invoke-PS2EXE -ErrorAction SilentlyContinue)) {
         return
     }
 }
-$exe  = Join-Path $root 'PackageBuilder.exe'
+$exe  = Join-Path $root 'PackageAssistance.exe'
 $icon = Get-ChildItem -Path (Join-Path $root 'Lib') -Filter 'PackageBuilder.ico' -ErrorAction SilentlyContinue | Select-Object -First 1
 $args = @{ InputFile = $mergedPath; OutputFile = $exe; STA = $true; noConsole = $true; title = 'Package Assistance' }
 if ($icon) { $args['iconFile'] = $icon.FullName }
@@ -70,5 +70,5 @@ Invoke-PS2EXE @args
 if (Test-Path $exe) {
     Write-Host "EXE built: $exe" -ForegroundColor Green
     Remove-Item $mergedPath -Force -ErrorAction SilentlyContinue   # nothing readable left behind
-    Write-Host 'Ship list: PackageBuilder.exe, settings.json, snippets.json, Lib\, PSADT_Template\, ConfigurationManagerPrelive\'
+    Write-Host 'Ship list: PackageAssistance.exe, PackageAssistance.exe.config, PackageAssistance.pak, settings.json, snippets.json, Lib\, PSADT_Template_GPF\'
 }

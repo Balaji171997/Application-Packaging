@@ -1332,6 +1332,17 @@ function Replace-InstallerInChain {
 function Parse-Current {
     $name = $TxtPkg.Text.Trim()
     $script:State.PkgName = $name
+    # MTB: the package name becomes a folder name AND the branding detection key (HKLM:\SOFTWARE\VWG\CM\<name>), so it must
+    # be clean - Vendor_App_Arch_Version-Release_Lang with NO spaces or special characters. Reject anything outside
+    # letters/numbers/dot/dash/underscore up-front with a clear error, so the user fixes the name before building.
+    $badChars = @([regex]::Matches($name, '[^A-Za-z0-9._-]'))
+    if ($name -and $badChars.Count) {
+        $script:State.Parsed = @{ IsValid = $false; FullName = $name }
+        $uniq = (@($badChars | ForEach-Object { if ($_.Value -eq ' ') { 'space' } else { "'$($_.Value)'" } } | Select-Object -Unique) -join ', ')
+        $LblParsed.Text = "Invalid character(s) in the package name: $uniq. Use only letters, numbers, dot (.), dash (-) and underscore (_) - no spaces or special characters. Please change the name."
+        $LblParsed.Foreground = '#F48771'
+        return $false
+    }
     $p = Parse-PackageName $name
     $script:State.Parsed = $p
     if ($p.IsValid) {

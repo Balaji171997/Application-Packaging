@@ -59,8 +59,15 @@ function Expand-GpfPredecessorZip {
     param([string]$ZipPath)
     if (-not $ZipPath -or -not (Test-Path -LiteralPath $ZipPath)) { return '' }
     try {
-        $cache = Join-Path (Get-WorkPath 'PredCache') ([IO.Path]::GetFileNameWithoutExtension($ZipPath))
-        if (-not (Test-Path -LiteralPath $cache)) { Expand-Archive -LiteralPath $ZipPath -DestinationPath $cache -Force }
+        # SHORT cache path (8-char hash, not the 40+ char package name) + MAX_PATH-safe extractor + re-extract when a prior
+        # run left the cache empty/incomplete. See Get-PredZipCache / Expand-PBArchive (Core.ps1). Deeply-nested PSADT
+        # packages zipped WITH a top folder named after themselves otherwise blow past 260 chars -> empty cache -> "Content
+        # not found" on the reused stale folder.
+        $cache = Get-PredZipCache -ZipPath $ZipPath
+        if (-not (Test-Path -LiteralPath $cache) -or -not (Test-PredZipComplete -CacheDir $cache)) {
+            if (Test-Path -LiteralPath $cache) { Remove-Item -LiteralPath $cache -Recurse -Force -ErrorAction SilentlyContinue }
+            [void](Expand-PBArchive -ZipPath $ZipPath -Destination $cache)
+        }
         # Package ROOT = a folder holding Content\<script> (preferred) or a bare <script>. A folder named 'Content' is
         # NEVER the root (its PARENT is - a zip of a package folder's CONTENTS puts Content\ at the cache root). Check the
         # cache root FIRST, then recurse, excluding 'Content'-named folders from the bare-script match.
@@ -100,8 +107,13 @@ function Get-GpfPredecessorContainer {
            Where-Object { $_.BaseName -match '(?i)^predecessor' } | Sort-Object Name -Descending)
     if ($z.Count) {
         try {
-            $cache = Join-Path (Get-WorkPath 'PredCache') ([IO.Path]::GetFileNameWithoutExtension($z[0].Name))
-            if (-not (Test-Path -LiteralPath $cache)) { Expand-Archive -LiteralPath $z[0].FullName -DestinationPath $cache -Force }
+            # SHORT cache + MAX_PATH-safe extract (see Core.ps1). A whole "Predecessor.zip" wraps deeply-nested packages;
+            # extracting under the long zip name blows past 260 chars and leaves an empty cache.
+            $cache = Get-PredZipCache -ZipPath $z[0].FullName
+            if (-not (Test-Path -LiteralPath $cache) -or -not (@(Get-ChildItem -LiteralPath $cache -Force -ErrorAction SilentlyContinue).Count)) {
+                if (Test-Path -LiteralPath $cache) { Remove-Item -LiteralPath $cache -Recurse -Force -ErrorAction SilentlyContinue }
+                [void](Expand-PBArchive -ZipPath $z[0].FullName -Destination $cache)
+            }
             $inPred = Get-ChildItem -LiteralPath $cache -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '(?i)^predecessor$' } | Select-Object -First 1
             if ($inPred) { return $inPred.FullName }
             return $cache
@@ -270,17 +282,24 @@ function Resolve-GpfRequest {
     # INSTALL INSTRUCTIONS: usually shipped inside the application folders - mostly Vendor_Sources - as a document.
     # Search the payload trees for instruction-named docs and bring the FILES into Documents. CURRENT request only
     # (predecessor documents are never fetched).
+    # Paths to EXCLUDE from document harvesting: a "Predecessor" folder (only the CURRENT request's docs belong in the
+    # package) AND any folder whose name contains "dependency"/"dependencies" (team rule: never copy documents/files out of
+    # a dependency folder - they belong to a bundled dependency app, not this package). Matches the word anywhere in a
+    # path SEGMENT ('App_Dependencies', '3rd Party Dependency', ...); the 'c' in "dependenc" avoids matching "independent".
+    $excludeDoc = '(?i)([\\/]predecessor[\\/]|[\\/][^\\/]*dependenc)'
     foreach ($root in @($r.VendorSourcesDir, $src, $r.PayloadRoot) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique) {
         foreach ($d in (Get-ChildItem -LiteralPath $root -File -Recurse -Depth 3 -ErrorAction SilentlyContinue |
                         Where-Object { $_.Extension -match '(?i)^\.(docx|doc|pdf|txt)$' -and
-                                       $_.FullName -notmatch '(?i)[\\/]predecessor[\\/]' -and   # CURRENT request only - never a predecessor's doc
-                                       $_.BaseName -match '(?i)install.*instru|instru.*install|installation.*guide|install.?instructions|how.?to.?install' })) {
+                                       $_.FullName -notmatch $excludeDoc -and   # CURRENT request only - never a predecessor's / dependency's doc
+                                       # Install-instruction doc names. The team may also NAME the instructions document
+                                       # "Software Package Request Form" (alternative), so it counts as install instructions too.
+                                       $_.BaseName -match '(?i)install.*instru|instru.*install|installation.*guide|install.?instructions|how.?to.?install|software.?package.?request' })) {
             if (-not ($docs -contains $d.FullName)) { [void]$docs.Add($d.FullName); [void]$r.Notes.Add("Install instructions found: $($d.Name) (from $((Split-Path $root -Leaf)))") }
         }
     }
-    # Final guard: NEVER ship a predecessor's document. Drop any collected item that sits under a "Predecessor" folder
-    # (team finding: only the CURRENT request's documents belong in the package's Documents folder).
-    $r.DocItems = @($docs | Where-Object { "$_" -notmatch '(?i)[\\/]predecessor[\\/]' })
+    # Final guard: NEVER ship a predecessor's OR a dependency folder's document. Drop any collected item under such a folder
+    # (team finding: only the CURRENT request's own documents belong in the package's Documents folder).
+    $r.DocItems = @($docs | Where-Object { "$_" -notmatch $excludeDoc })
 
     # --- Predecessor (source-location PRIORITY): the request's own Predecessor container - a normal "Predecessor\" folder
     # OR a zipped "Predecessor*.zip" whole folder. The package(s) inside may themselves be normal subfolders or zips.

@@ -555,7 +555,7 @@ function New-IntuneApp {
                 @{ returnCode=3010; type='softReboot' }, @{ returnCode=1641; type='hardReboot' },
                 @{ returnCode=1618; type='retry' }, @{ returnCode=60012; type='retry' })
             detectionRules          = @(Get-IntuneDetectionRules -Fields $Fields)
-            notes                   = 'Created by Package Builder.'
+            notes                   = "Created by $(if (Get-Command Get-PBToolName -EA SilentlyContinue) { Get-PBToolName } else { 'Package Assistance' })."
         }
         $icon = Get-IconBase64 -PackagePath $LocalPackagePath
         if ($icon.Count) { $body['largeIcon'] = $icon }

@@ -11,7 +11,7 @@
 param([string]$OutFile)
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-if (-not $OutFile) { $OutFile = Join-Path $root 'PackageBuilder.pak' }
+if (-not $OutFile) { $OutFile = Join-Path $root 'PackageAssistance.pak' }
 
 # --- 1. Merge (same model Build-Exe.ps1 proved: engine modules embedded, GUI body verbatim).
 $engineFiles = @('Core.ps1','Theme.ps1','Predecessor.ps1','Build.ps1','Source.ps1','MstBuilder.ps1','BundledMsi.ps1',

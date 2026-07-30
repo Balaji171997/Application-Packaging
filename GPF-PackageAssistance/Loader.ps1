@@ -23,7 +23,7 @@ elseif ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
     return
 }
 
-$pak = Join-Path $root 'PackageBuilder.pak'
+$pak = Join-Path $root 'PackageAssistance.pak'
 
 # Optional self-update from a maintainer share (settings.json -> "UpdatePath").
 try {
@@ -31,7 +31,7 @@ try {
     if (Test-Path $settings) {
         $cfg = (Get-Content $settings -Raw).TrimStart([char]0xFEFF) | ConvertFrom-Json
         if ($cfg.UpdatePath) {
-            $remote = Join-Path "$($cfg.UpdatePath)" 'PackageBuilder.pak'
+            $remote = Join-Path "$($cfg.UpdatePath)" 'PackageAssistance.pak'
             if ((Test-Path $remote) -and (-not (Test-Path $pak) -or
                 (Get-Item $remote).LastWriteTimeUtc -gt (Get-Item $pak).LastWriteTimeUtc)) {
                 Copy-Item $remote $pak -Force
@@ -42,7 +42,7 @@ try {
 
 if (-not (Test-Path $pak)) {
     Add-Type -AssemblyName PresentationFramework
-    [Windows.MessageBox]::Show("PackageBuilder.pak not found next to the launcher:`n$pak", 'Package Assistance') | Out-Null
+    [Windows.MessageBox]::Show("PackageAssistance.pak not found next to the launcher:`n$pak", 'Package Assistance') | Out-Null
     return
 }
 

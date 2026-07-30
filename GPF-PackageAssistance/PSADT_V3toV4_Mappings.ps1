@@ -538,6 +538,21 @@ function Convert-V3ToV4Content {
         $result = [regex]::Replace($result, '(?i)\s*-AdditionalRegPaths\s+"(?:[^"]*)"(?:\s*,\s*"(?:[^"]*)")*', '')
     }
 
+    # LAYER 1c-GPF: modernise the LOWER-LEVEL, registry-ONLY Remove-BrandingREG to the current top-level Remove-Branding.
+    # Remove-Branding removes the WMI VWG_SoftwareBranding instance AND (via its own internal Remove-BrandingREG call) the
+    # registry keys, so the branding is fully cleaned. Drop -BrandingKey (Remove-Branding has no such param - it uses the
+    # house default HKLM:\SOFTWARE\VWG\CM internally); keep -Name and -AdditionalRegPaths (Remove-Branding accepts both).
+    # GPF-only (MTB uses the separate Remove-MTBDetectionKey model). Both names are still valid GPF exports, so this is a
+    # convention upgrade, not a break-fix.
+    if (-not $flagMtb -and $result -match '(?i)\bRemove-BrandingREG\b') {
+        $before = $result
+        # 1) drop the -BrandingKey "<path>" argument on each Remove-BrandingREG call (position-agnostic, single line)
+        $result = [regex]::Replace($result, '(?im)(Remove-BrandingREG\b[^\r\n]*?)[ \t]*-BrandingKey[ \t]+"[^"]*"', '${1}')
+        # 2) rename the call
+        $result = [regex]::Replace($result, '(?i)\bRemove-BrandingREG\b', 'Remove-Branding')
+        if ($ReportOnly -and $result -ne $before) { $changes.Add('Remove-BrandingREG -> Remove-Branding (GPF: modern WMI+registry branding removal; -BrandingKey dropped, uses the house default)') }
+    }
+
     # Team v3 vars not in v4 -> hardcode the WOW path (Wow6432Node\ / SysWOW64).
     # GPF defines $VWG_CurrentRegWow in their v4 extensions -> keep the token verbatim (gated).
     if ($flagWow) { $result = Convert-VWGRegWOW -Content $result }

@@ -220,7 +220,7 @@ $indent
 
 # --- Replace the authored region between two markers in the template.
 function Set-SectionBody {
-    param([string]$Template, [string]$Begin, [string]$End, [string]$Body, [bool]$Pre)
+    param([string]$Template, [string]$Begin, [string]$End, [string]$Body, [bool]$Pre, [bool]$DropTemplateLogs = $false)
     $m = [regex]::Match($Template, "(?s)($Begin)(.*?)($End)")
     if (-not $m.Success) { return $Template }
     $head = $m.Groups[1].Value
@@ -245,8 +245,25 @@ function Set-SectionBody {
     # echo "$appVendor $appName $appVersion" are DUPLICATES (the hand-authored predecessor has only the real ones).
     # Drop them so the section reads exactly like the predecessor (team finding: extra Start/Installation-of log
     # lines appeared ABOVE the authored ones in Main-Install/Uninstall/Repair).
-    if ($bodyOwnsAction) {
+    # $DropTemplateLogs = PREDECESSOR REUSE for a Main section: the team decision is "use whatever the predecessor has and
+    # remove OUR v4 template log lines" - so drop the template's Start/Installation-of scaffold logs unconditionally (the
+    # predecessor carries its own, converted). Whatever regexes catch or not, the predecessor's own logs stay (they don't
+    # echo $appVendor $appName $appVersion), only the template scaffold is removed. Empty bodies never reach here (returned
+    # PRISTINE above), so a section the predecessor left blank keeps the template scaffold.
+    if ($bodyOwnsAction -or $DropTemplateLogs) {
         $mid = [regex]::Replace($mid, '(?im)^[ \t]*Write-ADTLogEntry\b[^\r\n]*\$appVendor[ \t]+\$appName[ \t]+\$appVersion[^\r\n]*\r?\n?', '')
+    }
+    if ($DropTemplateLogs) {
+        # PREDECESSOR REUSE, Main section: the team decision is "use whatever the predecessor has" - the scaffold
+        # logs are now gone (above), so keep only the template's remaining scaffolding (the UseDialogs block) and
+        # append the predecessor body after it. Removing the log LINES left the whitespace-only lines that sat
+        # around them (the template indents the region), so first blank those out and collapse any run of blank
+        # lines, then drop trailing blanks and add exactly one clean blank line before the body. Dedicated path -
+        # the fresh/owns-action success/marker logic below is skipped entirely for reuse.
+        $mid = [regex]::Replace($mid, '(?m)^[ \t]+\r?$', '')
+        $mid = [regex]::Replace($mid, '(\r?\n)(\r?\n)+', "`r`n`r`n")
+        $newMid = $mid.TrimEnd("`r","`n") + "`r`n`r`n" + $bodyTrim + "`r`n"
+        return $Template.Remove($m.Index, $m.Length).Insert($m.Index, $head + $newMid + $tail)
     }
     $succ = [regex]::Match($mid, '(?m)^[ \t]*Write-ADTLogEntry\b.*?successful.*$')
     if ($succ.Success -and $bodyOwnsSuccess) {
@@ -541,8 +558,22 @@ function Add-GpfCustomVar {
 # detection (variables, -and/-or, Test-Path) yields no match and is left completely alone. The token copy is added only
 # for a real ...\Uninstall\... detection key, never for a VWG\CM branding key (which stays plain, Freia style).
 # Idempotent, and a no-op on the MTB template (no CUSTOM APPLICATION VARIABLES fence, different field shape).
+# A real registry DETECTION key (…\Uninstall\{GUID} or …\Uninstall\<name>) should always carry the house
+# [DisplayVersion=<ver>] suffix, so SCCM/Intune match on name+version. If the value is missing it (e.g. a predecessor
+# whose SoftIdent was just a bare ProductCode, or one whose ProductCode we swapped), add it with the NEW package version.
+# NEVER touch a VWG\CM branding key (those are name-only tracking keys and must stay without a DisplayVersion), nor a
+# value that already has the suffix, nor a non-Uninstall path.
+function Add-SoftIdentDisplayVersion {
+    param([string]$Value, [string]$Version)
+    $v = "$Value"
+    if ($v -notmatch '(?i)\\Uninstall\\') { return $v }        # not a real uninstall detection key (e.g. VWG\CM branding)
+    if ($v -match '(?i)\[DisplayVersion') { return $v }        # already present
+    $ver = "$Version".Trim(); if (-not $ver) { return $v }
+    return ($v.TrimEnd() + " [DisplayVersion=$ver]")
+}
+
 function Set-GpfSoftIdentTwoPlace {
-    param([string]$Text, [string]$Arch)
+    param([string]$Text, [string]$Arch, [string]$Version)
     if (-not $Text) { return $Text }
     # HARD brand guard: MTB hardcodes the arch into the hive and has a different field shape - stripping its
     # WoW6432Node segment here would corrupt an MTB x86 detection key. Never run outside GPF.
@@ -562,6 +593,9 @@ function Set-GpfSoftIdentTwoPlace {
         if ($w.Success) { $val = $w.Groups[2].Value }
     }
     if (-not "$val".Trim()) { return $Text }
+    # Ensure a real Uninstall detection key carries [DisplayVersion=<new version>] (kept even if the predecessor lacked
+    # it / we only swapped the ProductCode). Branding keys (VWG\CM) are left untouched.
+    $val = Add-SoftIdentDisplayVersion -Value $val -Version $Version
     $Text = Set-SessionValue -Text $Text -Field 'SoftIdent' -Value (Format-GpfSoftIdentPlain -Value $val)
     if (("$Arch" -match '(?i)x86|32') -and ($val -match '(?i)\\Uninstall\\')) {
         $Text = Add-GpfCustomVar -Text $Text -Line ('[string]$Global:VWG_SoftIdent   =  ' + (Format-BrandSoftIdent -Value $val -Arch $Arch))
@@ -815,6 +849,11 @@ function Format-OutputScript {
     # template into the string, leaving a literal U+FEFF before "<#" that stops the
     # parser seeing the comment-based help block. The file's real BOM is re-added at save.
     $Text = $Text.TrimStart([char]0xFEFF)
+    # Normalise INVISIBLE characters a predecessor may carry (Word-pasted comments/strings, copied text) that PowerShell
+    # rejects as an "invalid character" at parse time: non-breaking spaces -> a normal space; zero-width chars, LTR/RTL
+    # direction marks and any stray INLINE BOM -> removed. Done BEFORE Invoke-Formatter (which also chokes on a NBSP).
+    $Text = [regex]::Replace($Text, '[\u00A0\u2007\u202F]', ' ')                       # NBSP variants -> space
+    $Text = [regex]::Replace($Text, '[\u200B\u200C\u200D\u200E\u200F\u2060\uFEFF]', '')   # zero-width / direction marks / inline BOM -> gone
     # Normalise to CRLF first: assembled scripts mix \r\n and \n (template + injected
     # bodies), and Invoke-Formatter refuses input with mixed line endings.
     $Text = [regex]::Replace($Text, "\r\n?|\n", "`r`n")
@@ -1406,6 +1445,33 @@ function Get-LooseFilesCommandSet {
     # + folder before the reinstall). Only branding key / reboot are kept out of Pre-Repair.
     return @{ MainInstall = $install; MainUninstall = $uninstall; MainRepair = $install; PreRepair = $uninstall }
 }
+
+# ZIP PAYLOAD command set (GPF): the source is a single .zip kept VERBATIM in Files\; at install we Expand-ZipFile it to
+# $envTemp\<App>_<Version> and RUN the installer(s) the packager selected from inside it (their path is inside the zip).
+# .msi -> Start-ADTMsiProcess; .exe -> Start-ADTProcess (+ a review to fill the silent switches); .bat/.cmd -> cmd /c;
+# .ps1 -> powershell -ExecutionPolicy Bypass -File. Uninstall/repair are review-stubbed (the packager knows the app's
+# uninstall). GPF uses Expand-ZipFile (no MTB); the zip name + extract dir come from the caller.
+function Get-ZipPayloadCommandSet {
+    param([string]$ZipName, [string]$ExtractDir, [object[]]$RunItems)
+    $expandFn = if ((Get-PBBrand -Path 'Name' -Default 'MTB') -eq 'GPF') { 'Expand-ZipFile' } else { 'Expand-MTBZipFile' }
+    $ins = New-Object System.Collections.Generic.List[string]
+    $ins.Add("$expandFn -Path `"`$(`$adtSession.DirFiles)\$ZipName`" -Destination `"$ExtractDir`" -Override")
+    foreach ($it in @($RunItems)) {
+        $rel = "$($it.RelPath)".TrimStart('\'); if (-not $rel) { continue }
+        $p   = "$ExtractDir\$rel"
+        switch -Regex ("$($it.Extension)".ToLower()) {
+            '\.msi$' { $ins.Add("Start-ADTMsiProcess -Action 'Install' -FilePath `"$p`"") }
+            '\.exe$' { $ins.Add("## REVIEW: set the silent install switches for $($it.Name) (from the vendor's install instructions).") ; $ins.Add("Start-ADTProcess -FilePath `"$p`" -ArgumentList '/S'") }
+            '\.(bat|cmd)$' { $ins.Add("Start-ADTProcess -FilePath `"`$envWinDir\System32\cmd.exe`" -ArgumentList '/c', `"$p`"") }
+            '\.ps1$' { $ins.Add("Start-ADTProcess -FilePath 'powershell.exe' -ArgumentList '-ExecutionPolicy', 'Bypass', '-File', `"$p`"") }
+            default  { $ins.Add("Start-ADTProcess -FilePath `"$p`"") }
+        }
+    }
+    $install = ($ins -join "`r`n")
+    $un = "## REVIEW: add the uninstall for this payload (e.g. run its uninstaller / MsiExec /X, or Remove-ADTFolder for a copy-only payload)."
+    return @{ MainInstall = $install; MainUninstall = $un; MainRepair = $install; PreRepair = '' }
+}
+
 function Get-MultiCommandSet {
     param([array]$Order)
     # PREREQUISITE auto-chaining: a recognised runtime (vc_redist, .NET, WebView2, DirectX) MUST install BEFORE the app.
@@ -1447,6 +1513,12 @@ function New-StandardCommands {
         else                                       { $mode = 'None' }
     }
     $cmds = switch ($mode) {
+        'ZipPayload' {
+            # GPF: source kept as one verbatim .zip; Expand-ZipFile to $envTemp\<App>_<Ver> at install, then run the
+            # packager-selected installer(s) from inside it.
+            $ed = "`$envTemp\$($NewPkg.AppName)_$($NewPkg.Version)"
+            Get-ZipPayloadCommandSet -ZipName "$($NewPkg.ZipName)" -ExtractDir $ed -RunItems @($NewPkg.ZipRunItems)
+        }
         'SingleMSI'  { Get-MsiCommandSet -Msi $NewPkg.MsiFileName -Mst $NewPkg.MstFileName -ProductCode $NewPkg.ProductCode -NoMst:([bool]$NewPkg.NoMst) }
         'SingleEXE'  { Get-ExeCommandSet -Exe $NewPkg.ExeFileName -InstallParams $NewPkg.InstallParams -UninstallParams $NewPkg.UninstallParams -UninstallCommand "$($NewPkg.UninstallCommand)" }
         'LooseFiles' {
@@ -1746,7 +1818,7 @@ function Build-FreshScript {
     # Never ship blank/'{Typ}' GPF wrapper values (Freia/Gandalf fresh-build findings).
     $out = Set-GpfWrapperDefaults -Text $out -NewPkg $NewPkg -IsMsi ([bool]($NewPkg.ProductCode -or $NewPkg.MsiFileName))
     # Final enforcement of the GPF SoftIdent convention (wrapper PLAIN, x86-only tokened copy in CUSTOM VARIABLES).
-    $out = Set-GpfSoftIdentTwoPlace -Text $out -Arch "$($NewPkg.Arch)"
+    $out = Set-GpfSoftIdentTwoPlace -Text $out -Arch "$($NewPkg.Arch)" -Version "$($NewPkg.Version)"
     return (Format-OutputScript -Text $out)
 }
 
@@ -1918,6 +1990,11 @@ function Build-PredecessorScript {
     # predecessor's own copy (incl. the "Uninsallation" typo) so it is not left orphaned.
     $uninstallHeader = '## Uninstallation of predecessor package'
     $out = $Template
+    # GPF PREDECESSOR REUSE (team decision): for the MAIN sections, use whatever the predecessor authored (its own log
+    # lines, already v4-converted) and REMOVE our v4 template's Start/Installation-of scaffold logs - so the section reads
+    # exactly like the hand-authored predecessor, with no duplicated template logs (iDEX finding). Passed to Set-SectionBody
+    # as $DropTemplateLogs below, ONLY for Main-Install/Uninstall/Repair. (Pre/Post keep the template scaffolding.)
+    $isGpfReuse = (Get-Command Get-PBBrand -ErrorAction SilentlyContinue) -and (Get-PBBrand -Path 'Name' -Default 'MTB') -eq 'GPF'
     foreach ($s in $script:SectionMarkers) {
         $body = "$($Model.Code.$($s.F))"
         if ($s.F -eq 'PreInstallCode') {
@@ -1945,7 +2022,8 @@ function Build-PredecessorScript {
         if ($s.F -eq 'PreRepairCode') {
             $body = Remove-PreRepairNoise -Body $body
         }
-        $out = Set-SectionBody -Template $out -Begin $s.B -End $s.E -Body $body -Pre $s.Pre
+        $dropLogs = $isGpfReuse -and ($s.F -in 'MainInstallCode','MainUninstallCode','MainRepairCode')
+        $out = Set-SectionBody -Template $out -Begin $s.B -End $s.E -Body $body -Pre $s.Pre -DropTemplateLogs $dropLogs
     }
 
     # 2. Session block. The (blank) template's $adtSession is replaced by the predecessor's
@@ -2147,7 +2225,7 @@ function Build-PredecessorScript {
     $out = Set-GpfWrapperDefaults -Text $out -NewPkg $NewPkg -IsMsi ([bool]($NewPkg.ProductCode -or $NewPkg.MsiFileName -or (Get-PredecessorUninstallPC -Model $Model)))
     # Same SoftIdent convention on the REUSE path: a predecessor that hardcoded WoW6432Node (or carried the token in
     # the wrapper) is normalised to wrapper-PLAIN + x86-only tokened copy in CUSTOM APPLICATION VARIABLES.
-    $out = Set-GpfSoftIdentTwoPlace -Text $out -Arch "$($NewPkg.Arch)"
+    $out = Set-GpfSoftIdentTwoPlace -Text $out -Arch "$($NewPkg.Arch)" -Version "$($NewPkg.Version)"
     $out = Format-OutputScript -Text $out
     Write-Log "Built predecessor script: v$predVer -> v$newVer, installerSwap=$doInstallerSwap, uninstallPrev=$AddUninstallPrevious" Success
     return $out

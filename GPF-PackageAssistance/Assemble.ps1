@@ -351,7 +351,19 @@ function New-Package {
     }
 
     # 3. Source -> Files\  (zip for loose, otherwise installers + payload).
-    if ($LooseFiles) {
+    if ("$($NewPkg.InstallerMode)" -eq 'ZipPayload' -and "$($Resolved.ZipPayload)".Trim() -and (Test-Path -LiteralPath "$($Resolved.ZipPayload)")) {
+        # GPF ZIP PAYLOAD: copy the source .zip VERBATIM into Files\ under its own name (Files\Files.zip stays Files.zip) -
+        # NO extraction, NO re-zip. The ps1 Expand-ZipFile's it to $envTemp\<App>_<Ver> at install and runs the selected
+        # installer(s). Docs/icons still come across.
+        $zpName = [IO.Path]::GetFileName("$($Resolved.ZipPayload)")
+        Copy-Item -LiteralPath "$($Resolved.ZipPayload)" -Destination (Join-Path $filesDir $zpName) -Force
+        Write-Log "ZIP payload -> Files\$zpName (kept verbatim, extracted at install)." Success
+        if ($Resolved) {
+            foreach ($item in @($Resolved.DocItems)) { if ($item -and (Test-Path $item)) { Copy-Item -LiteralPath $item -Destination $docsDir -Recurse -Force } }
+            if ($Resolved.IconsPath -and (Test-Path $Resolved.IconsPath)) { Copy-Item -Path "$($Resolved.IconsPath)\*" -Destination $iconsDir -Recurse -Force }
+        }
+    }
+    elseif ($LooseFiles) {
         $srcRoot = if ($Resolved -and $Resolved.PayloadRoot) { $Resolved.PayloadRoot } else { Get-CommonParent -Files $ChosenInstallers }
         if (-not $srcRoot -and $Resolved) { $srcRoot = $Resolved.RootPath }
         # F25/F34: preserve a zipped source's ORIGINAL name when set ($NewPkg.ZipName - GPF keeps the source's own name so

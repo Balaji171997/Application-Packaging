@@ -1,6 +1,6 @@
 {
-    "WorkRoot": "C:\\temp\\GPF-PackageBuilder",
-    "LocalWorkingDir": "C:\\temp\\GPF-PackageBuilder\\Build",
+    "WorkRoot": "C:\\temp\\GPF-PackageAssistance",
+    "LocalWorkingDir": "C:\\temp\\GPF-PackageAssistance\\Build",
     "DefaultMsiProperties": [
         "ALLUSERS=1",
         "REBOOT=ReallySuppress",
@@ -12,7 +12,7 @@
     "DefaultAuthor": "",
     "PredecessorPath": "C:\\Users\\AW140\\Downloads\\OtherBrand\\Outgoing",
     "OutputBasePath": "c:\\temp",
-    "RepositoryPath": "C:\\Users\\AW140\\Downloads\\OtherBrand\\Incoming",
+    "RepositoryPath": "C:\\Users\\AW140\\Downloads\\SecondtestCases",
     "OutgoingPath": "C:\\Users\\AW140\\Downloads\\OtherBrand\\Outgoing",
     "SharePointPath": "",
     "SnippetsPath": "",

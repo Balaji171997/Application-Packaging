@@ -1488,14 +1488,19 @@ Assert "Execute-Process -Arguments -> -ArgumentList"        ($epC -match "-Argum
 Assert "Execute-Process -SecureParameters -> -SecureArgumentList" ($epC -match '-SecureArgumentList')
 
 $exC = Convert-V3ToV4Content -Content ("If (Get-InstalledApplication -Name 'X' -Exact) { }`r`nRemove-MSIApplications -Name 'Y' -Exact")
-Assert "-Exact -> -NameMatch 'Exact' before ')'"        ($exC -match "Get-ADTApplication -Name 'X' -NameMatch 'Exact'\)")
-Assert "-Exact -> -NameMatch 'Exact' at EOL (uninstall)" ($exC -match "Uninstall-ADTApplication -Name 'Y' -NameMatch 'Exact'")
+# PREFERRED SYNTAX (team house style + PSADT doc example "Get-ADTApplication -Name 'Adobe Acrobat Reader' -NameMatch 'Exact'"):
+# -Name FIRST, then -NameMatch with a BAREWORD ValidateSet value (no quotes).
+Assert "-Exact -> -Name first, -NameMatch Exact (bareword) before ')'" ($exC -match "Get-ADTApplication -Name 'X' -NameMatch Exact\)")
+Assert "-Exact -> -Name first, bareword Exact at EOL (uninstall)"      ($exC -match "Uninstall-ADTApplication -Name 'Y' -NameMatch Exact")
 Assert "no bare -Exact switch survives"                 ($exC -notmatch '(?<![\w])-Exact(?![\w])')
+Assert "NameMatch value is NOT quoted"                  ($exC -notmatch "-NameMatch '")
 # v3's app NAME was POSITIONAL (Get-InstalledApplication -WildCard '*X*'); v4 Get-ADTApplication -Name is NOT positional
 # (position 0 is -FilterScript), so the bare name must gain an explicit -Name or it binds to -FilterScript and breaks.
 $posN = Convert-V3ToV4Content -Content "if(!(Get-InstalledApplication -WildCard '*CodeMeter Runtime Kit*')){}"
 Assert "positional name gains explicit -Name"           ($posN -match "-Name '\*CodeMeter Runtime Kit\*'")
-Assert "positional name keeps -NameMatch"               ($posN -match "-NameMatch 'WildCard'")
+# Positional -WildCard came out -NameMatch-FIRST before the fix; now canonicalized to -Name first, bareword WildCard.
+Assert "positional: -Name FIRST then -NameMatch WildCard" ($posN -match "Get-ADTApplication -Name '\*CodeMeter Runtime Kit\*' -NameMatch WildCard")
+Assert "positional: WildCard NOT quoted"                ($posN -notmatch "-NameMatch 'WildCard'")
 Assert "positional name: exactly ONE -Name"             ((([regex]::Matches($posN,'(?<!\w)-Name(?!Match)\b')).Count) -eq 1)
 Assert "positional name output parses"                  ($(($pe=$null);[void][System.Management.Automation.Language.Parser]::ParseInput($posN,[ref]$null,[ref]$pe);$pe.Count -eq 0))
 $posNoSwitch = Convert-V3ToV4Content -Content "Get-InstalledApplication '*CodeMeter*'"
@@ -1536,6 +1541,83 @@ if ($v4set.Count -gt 50) {
 # ---- Pre-Repair must not carry branding removal / reboot ----
 $prn = Remove-PreRepairNoise "## Branding Uninstall`r`nRemove-MTBDetectionKey `"X`"`r`n#Set-MTBReboot`r`nStart-ADTProcess -FilePath x"
 Assert "PreRepair drops MTBDetectionKey/Reboot" (($prn -notmatch 'MTBDetectionKey') -and ($prn -notmatch 'MTBReboot') -and ($prn -match 'Start-ADTProcess'))
+
+# ---- Predecessor reuse: POST-section Set-MTBReboot reconciliation (keep ONE at the end after Set-MTBDetectionKey,
+#      drop the predecessor's duplicate, inherit its comment state) ----
+$rebTpl = @"
+    ## <Perform Post-Installation tasks here>
+    __PRED__
+
+		## Branding Detection Registry Key
+		Set-MTBDetectionKey
+
+		##Handling for required reboot
+        #Set-MTBReboot
+"@
+# predecessor reboot LIVE -> ONE reboot, uncommented, positioned AFTER Set-MTBDetectionKey
+$rbA = Sync-MTBRebootSection -Mid ($rebTpl -replace '__PRED__','Set-MTBReboot -ForceExitScript -OnlyOnPendingReboot -MandatoryDeviceRestart')
+Assert "reboot reuse: pred LIVE -> exactly ONE Set-MTBReboot" ((([regex]::Matches($rbA,'(?im)^[ \t]*#*[ \t]*Set-MTBReboot\b')).Count) -eq 1)
+Assert "reboot reuse: pred LIVE -> kept line uncommented"     ($rbA -match '(?im)^[ \t]*Set-MTBReboot\b')
+Assert "reboot reuse: kept reboot AFTER Set-MTBDetectionKey"  ($rbA.IndexOf('Set-MTBDetectionKey') -lt $rbA.IndexOf('Set-MTBReboot'))
+# predecessor reboot COMMENTED -> ONE reboot, still commented
+$rbB = Sync-MTBRebootSection -Mid ($rebTpl -replace '__PRED__','#Set-MTBReboot')
+Assert "reboot reuse: pred COMMENTED -> exactly ONE Set-MTBReboot" ((([regex]::Matches($rbB,'(?im)^[ \t]*#*[ \t]*Set-MTBReboot\b')).Count) -eq 1)
+Assert "reboot reuse: pred COMMENTED -> kept line commented"       ($rbB -match '(?im)^[ \t]*#[ \t]*Set-MTBReboot\b')
+# no predecessor reboot (fresh-like single placeholder) -> untouched
+$rbFresh = "`t`t##Handling for required reboot`r`n        #Set-MTBReboot"
+Assert "reboot reuse: single placeholder untouched"          ((Sync-MTBRebootSection -Mid $rbFresh) -eq $rbFresh)
+# whole-script driver reconciles POST-INSTALL and leaves PRE-INSTALL live template reboot alone
+$rebFull = @"
+#*====================================PRE-INSTALLATION BEGIN====
+    Set-MTBReboot -ForceExitScript -OnlyOnPendingReboot -MandatoryDeviceRestart
+#*====================================PRE-INSTALLATION END====
+#*====================================POST-INSTALLATION BEGIN====
+    ## <Perform Post-Installation tasks here>
+    Set-MTBReboot -ForceExitScript -OnlyOnPendingReboot -MandatoryDeviceRestart
+
+		## Branding Detection Registry Key
+		Set-MTBDetectionKey
+
+		##Handling for required reboot
+        #Set-MTBReboot
+#*====================================POST-INSTALLATION END====
+"@
+$rebFullOut = Sync-MTBReboot -Script $rebFull
+$preMid  = [regex]::Match($rebFullOut,'(?s)PRE-INSTALLATION BEGIN=+(.*?)#\*=+\s*PRE-INSTALLATION END').Groups[1].Value
+$postMid = [regex]::Match($rebFullOut,'(?s)POST-INSTALLATION BEGIN=+(.*?)#\*=+\s*POST-INSTALLATION END').Groups[1].Value
+Assert "reboot reuse: PRE-INSTALL live reboot untouched"     ((([regex]::Matches($preMid,'(?im)^[ \t]*#*[ \t]*Set-MTBReboot\b')).Count) -eq 1)
+Assert "reboot reuse: POST-INSTALL reduced to ONE reboot"    ((([regex]::Matches($postMid,'(?im)^[ \t]*#*[ \t]*Set-MTBReboot\b')).Count) -eq 1)
+
+# ---- Generic fixes ported from GPF + engineer requests -------------------------------------------------------------
+# F9: uninstall-previous detection uses the predecessor's real ARP DisplayName (from its SoftIdent), not the bare AppName.
+Assert "F9: Inno _is1 subkey -> DisplayName" ((Get-PredecessorDisplayName -Model @{ Session=@{ SoftIdent="'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Animator4_v2.8.1_64_is1 [DisplayVersion=2.8.1]'" } }) -eq 'Animator4_v2.8.1_64')
+Assert "F9: MSI {GUID} subkey -> '' (keep ProductCode)" ((Get-PredecessorDisplayName -Model @{ Session=@{ SoftIdent="'HKLM:\...\Uninstall\{11111111-1111-1111-1111-111111111111}'" } }) -eq '')
+Assert "F9: no SoftIdent -> ''"              ((Get-PredecessorDisplayName -Model @{ Session=@{} }) -eq '')
+# Format-AuthorName: "Last, First" -> "Last First"
+Assert "author: comma stripped + collapsed" ((Format-AuthorName 'Prajapati, Sunil') -eq 'Prajapati Sunil')
+Assert "author: empty stays empty"          ([string]::IsNullOrEmpty((Format-AuthorName '')))
+# Add-SoftIdentDisplayVersion: add [DisplayVersion=x] to a real Uninstall key when missing; leave branding/tagged alone.
+Assert "dispver: added when missing"        ((Add-SoftIdentDisplayVersion -Value 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{G}' -Version '2.0') -match '\[DisplayVersion=2\.0\]$')
+Assert "dispver: no-op if already tagged"   ((Add-SoftIdentDisplayVersion -Value 'HKLM:\...\Uninstall\{G} [DisplayVersion=1.0]' -Version '2.0') -match '\[DisplayVersion=1\.0\]$')
+Assert "dispver: no-op for branding key"    ((Add-SoftIdentDisplayVersion -Value 'HKLM:\SOFTWARE\VWG\CM\V_A' -Version '2.0') -eq 'HKLM:\SOFTWARE\VWG\CM\V_A')
+Assert "dispver: version trimmed"           ((Add-SoftIdentDisplayVersion -Value 'HKLM:\...\Uninstall\{G}' -Version '2.0 ') -match '\[DisplayVersion=2\.0\]$')
+# Remove-SelfUninstallGuard: drop the predecessor's "##Uninstalling <X> if present" guard, keep surrounding real code.
+$sug = Remove-SelfUninstallGuard -Body ("Start-ADTProcess -FilePath `"pre.exe`"`r`n##Uninstalling `"Old`" if present`r`nStart-ADTMsiProcess -Action Uninstall -ProductCode `"{OLD}`"`r`nCopy-ADTFile -Path a -Destination b")
+Assert "self-guard: guard removed"          (($sug -notmatch 'Uninstalling "Old" if present') -and ($sug -notmatch '\{OLD\}'))
+Assert "self-guard: real code kept"         (($sug -match 'pre\.exe') -and ($sug -match 'Copy-ADTFile'))
+# Set-PredecessorProgressBar: uncomment the template placeholder when the predecessor had progress active in that section.
+$pbModel = @{ RawV4Content = "#*====MAIN-INSTALLATION BEGIN====`r`nShow-ADTInstallationProgress`r`n#*====MAIN-INSTALLATION END====" }
+$pbTpl   = "#*====MAIN-INSTALLATION BEGIN====`r`n   #Show-ADTInstallationProgress -WindowLocation 'BottomRight'`r`n#*====MAIN-INSTALLATION END===="
+$pbRes   = Set-PredecessorProgressBar -Text $pbTpl -Model $pbModel
+Assert "progressbar: uncommented to match predecessor" (($pbRes.Enabled -eq 1) -and ($pbRes.Text -match '(?im)^[ \t]*Show-ADTInstallationProgress'))
+Assert "progressbar: no-op when predecessor had none"  ((Set-PredecessorProgressBar -Text $pbTpl -Model @{ RawV4Content = "#*====MAIN-INSTALLATION BEGIN====`r`n#*====MAIN-INSTALLATION END====" }).Enabled -eq 0)
+# Engineer: strip a stray trailing space inside "[DisplayVersion = <ver> ]" (keeps the value + "= " spacing intact).
+$dvFmt = Format-OutputScript -Text "    SoftIdent = 'HKLM:\X\App [DisplayVersion = 1.0 ]'"
+Assert "dispver space: trailing space before ] stripped" (($dvFmt -match '\[DisplayVersion = 1\.0\]') -and ($dvFmt -notmatch '1\.0 \]'))
+# Engineer: MTB package name must contain only [A-Za-z0-9._-] (no spaces / specials) - mirror of the Parse-Current guard.
+Assert "pkgname: clean name has no bad chars"  ((@([regex]::Matches('Acme_App_x86_64_1.0-0001_en-US','[^A-Za-z0-9._-]')).Count) -eq 0)
+Assert "pkgname: space is a bad char"          ((@([regex]::Matches('Acme_App Name_x64_1.0-0001_MUL','[^A-Za-z0-9._-]')).Count) -gt 0)
+Assert "pkgname: special char is a bad char"   ((@([regex]::Matches('Acme_App!_x64_1.0-0001_MUL','[^A-Za-z0-9._-]')).Count) -gt 0)
 
 Write-Host ""
 if ($fail -eq 0) { Write-Host "ALL TESTS PASSED" -ForegroundColor Green; exit 0 }   # explicit: a native command's exit code (robocopy's benign 1 in the self-stage test) must not leak as OUR exit code
