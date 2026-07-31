@@ -80,6 +80,23 @@ param
     [System.Management.Automation.SwitchParameter]$DisableLogging = $false
 )
 
+##================================================
+## MARK: Device-based DeployMode override
+##================================================
+# Only auto-decide if the caller didn't explicitly pass -DeployMode
+if (-not $PSBoundParameters.ContainsKey('DeployMode'))
+{  $InteractiveInstall = $true
+    try
+    {
+        $RegValue = Get-ItemPropertyValue -Path 'HKLM:\SOFTWARE\VWG\ClientInformation' -Name 'InteractiveSWinstallation' -ErrorAction Stop
+        if ($RegValue -eq $false -or "$RegValue" -eq 'False') { $InteractiveInstall = $false }
+    }
+    catch { $InteractiveInstall = $true }
+ 
+    $DeployMode = if ($InteractiveInstall) { 'Auto' } else { 'Silent' }
+ 
+    $PSBoundParameters['DeployMode'] = $DeployMode
+}
 
 ##================================================
 ## MARK: Variables
@@ -215,6 +232,8 @@ try
             }
         }
     }
+    ## Adding a log after Open-ADTSession Initialization for Device-based DeployMode check
+    Write-ADTLogEntry -Message "For AUDIT trail Deployment mode selected based on registry logic is: $DeployMode" -Severity 1 -Source $deployAppScriptFriendlyName
 }
 catch
 {
@@ -271,7 +290,7 @@ function Install-ADTDeployment
 				Show-ADTInstallationWelcome -AllowDefer -DeferTimes 4
 			}
 			if ($VWG_ProcToClose) {
-				Show-ADTInstallationWelcome -CheckDiskSpace -RequiredDiskSpace "$VWG_FreeSpace" -CloseProcesses $VWG_ProcToClose -AllowDeferCloseProcesses -DeferTimes 4
+				Show-ADTInstallationWelcome -CheckDiskSpace -RequiredDiskSpace "$VWG_FreeSpace" -CloseProcesses $VWG_ProcToClose -AllowDeferCloseProcesses -DeferTimes 4 -NotTopMost -AllowMove
 			}
 			if ($VWG_ProcToCloseNonUI) {
 				Show-ADTInstallationWelcome -CheckDiskSpace -RequiredDiskSpace "$VWG_FreeSpace" -CloseProcesses $VWG_ProcToCloseNonUI -Silent
@@ -280,7 +299,7 @@ function Install-ADTDeployment
 				Show-ADTInstallationWelcome -CheckDiskSpace -RequiredDiskSpace "$VWG_FreeSpace"
 			}
 			if ($VWG_ProcToBlock) {
-				Show-ADTInstallationWelcome -CloseProcesses $VWG_ProcToBlock -AllowDeferCloseProcesses -DeferTimes 4 -BlockExecution
+				Show-ADTInstallationWelcome -CloseProcesses $VWG_ProcToBlock -AllowDeferCloseProcesses -DeferTimes 4 -BlockExecution -NotTopMost -AllowMove
 			}
 		}
     #*====================================PRE-INSTALLATION END==================================================================
@@ -350,7 +369,7 @@ function Uninstall-ADTDeployment
 				Show-ADTInstallationWelcome -AllowDefer -DeferTimes 4
 			}
 			if ($VWG_ProcToClose) {
-				Show-ADTInstallationWelcome -CheckDiskSpace -RequiredDiskSpace "$VWG_FreeSpaceUninst" -CloseProcesses $VWG_ProcToClose -AllowDeferCloseProcesses -DeferTimes 4
+				Show-ADTInstallationWelcome -CheckDiskSpace -RequiredDiskSpace "$VWG_FreeSpaceUninst" -CloseProcesses $VWG_ProcToClose -AllowDeferCloseProcesses -DeferTimes 4 -NotTopMost -AllowMove
 			}
 			if ($VWG_ProcToCloseNonUI) {
 				Show-ADTInstallationWelcome -CheckDiskSpace -RequiredDiskSpace "$VWG_FreeSpaceUninst" -CloseProcesses $VWG_ProcToCloseNonUI -Silent
@@ -359,7 +378,7 @@ function Uninstall-ADTDeployment
 				Show-ADTInstallationWelcome -CheckDiskSpace -RequiredDiskSpace "$VWG_FreeSpaceUninst"
 			}
 			if ($VWG_ProcToBlock) {
-				Show-ADTInstallationWelcome -CloseProcesses $VWG_ProcToBlock -AllowDeferCloseProcesses -DeferTimes 4 -BlockExecution
+				Show-ADTInstallationWelcome -CloseProcesses $VWG_ProcToBlock -AllowDeferCloseProcesses -DeferTimes 4 -BlockExecution -NotTopMost -AllowMove
 			}
 		}
     #*====================================PRE-UNINSTALLATION END==================================================================
@@ -427,7 +446,7 @@ function Repair-ADTDeployment
 				Show-ADTInstallationWelcome -AllowDefer -DeferTimes 4
 			}
 			if ($VWG_ProcToClose) {
-				Show-ADTInstallationWelcome -CheckDiskSpace -RequiredDiskSpace "$VWG_FreeSpace" -CloseProcesses $VWG_ProcToClose -AllowDeferCloseProcesses -DeferTimes 4
+				Show-ADTInstallationWelcome -CheckDiskSpace -RequiredDiskSpace "$VWG_FreeSpace" -CloseProcesses $VWG_ProcToClose -AllowDeferCloseProcesses -DeferTimes 4 -NotTopMost -AllowMove
 			}
 			if ($VWG_ProcToCloseNonUI) {
 				Show-ADTInstallationWelcome -CheckDiskSpace -RequiredDiskSpace "$VWG_FreeSpace" -CloseProcesses $VWG_ProcToCloseNonUI -Silent
@@ -436,7 +455,7 @@ function Repair-ADTDeployment
 				Show-ADTInstallationWelcome -CheckDiskSpace -RequiredDiskSpace "$VWG_FreeSpace"
 			}
 			if ($VWG_ProcToBlock) {
-				Show-ADTInstallationWelcome -CloseProcesses $VWG_ProcToBlock -AllowDeferCloseProcesses -DeferTimes 4 -BlockExecution
+				Show-ADTInstallationWelcome -CloseProcesses $VWG_ProcToBlock -AllowDeferCloseProcesses -DeferTimes 4 -BlockExecution -NotTopMost -AllowMove
 			}
 		}
     #*====================================PRE-REPAIR END==================================================================
@@ -479,25 +498,97 @@ function Repair-ADTDeployment
 ##================================================
 ## MARK: Invocation
 ##================================================
+$script:DeploymentExitCode = 0
+$script:BalloonDeployType  = $adtSession.DeploymentType
+$script:BalloonAppName     = $adtSession.AppName
+$script:AppTitle           = $adtSession.InstallTitle
+$script:DeployTypeName     = $adtSession.DeploymentType.ToString()
+$script:StringTable        = Get-ADTStringTable
 
-# Commence the actual deployment operation.
 try
 {
-    # Invoke the deployment and close out the session.
+ 
+    $balloonText = $script:StringTable.BalloonTip.Start.$script:DeployTypeName
+    Invoke-BalloonTip -Icon Info -Text $balloonText -Title $script:AppTitle -NoWait
     & "$($adtSession.DeploymentType)-ADTDeployment"
-    Close-ADTSession
+        try
+        {
+            $sessionExitCode = (Get-ADTSession -ErrorAction Stop).ExitCode
+ 
+            if ($null -ne $sessionExitCode)
+            {
+                $script:DeploymentExitCode = $sessionExitCode
+            }
+        }
+        catch
+        {
+            Write-ADTLogEntry -Message "Unable to retrieve session exit code." -Severity 2
+        }
 }
 catch
 {
-    # An unhandled error has been caught.
     $mainErrorMessage = "An unhandled error within [$($MyInvocation.MyCommand.Name)] has occurred.`n$(Resolve-ADTErrorRecord -ErrorRecord $_)"
     Write-ADTLogEntry -Message $mainErrorMessage -Severity 3
+    try
+    {
+        $capturedCode              = (Get-ADTSession -ErrorAction Stop).ExitCode
+        $script:DeploymentExitCode = if ($capturedCode -and $capturedCode -ne 0) { $capturedCode } else { 60001 }
+    }
+    catch
+    {
+        $script:DeploymentExitCode = 60001
+    }
+}
+finally
+{
+    $status = $adtSession.GetDeploymentStatus()
+    $isDeferred = ($status -eq [PSADT.Module.DeploymentStatus]::FastRetry) -or
+                  ($script:DeploymentExitCode -eq 1602) -or
+                  ($adtSession.IsUserCanceled)
+    $resolvedStatus =
+        if ($isDeferred)
+        {
+            [PSADT.Module.DeploymentStatus]::FastRetry
+        }
+        elseif ($status -eq [PSADT.Module.DeploymentStatus]::RestartRequired -or $script:DeploymentExitCode -eq 3010)
+        {
+            [PSADT.Module.DeploymentStatus]::RestartRequired
+        }
+        elseif ($status -eq [PSADT.Module.DeploymentStatus]::Error)
+        {
+            [PSADT.Module.DeploymentStatus]::Error
+        }
+        elseif ($script:DeploymentExitCode -ne 0)
+        {
+            [PSADT.Module.DeploymentStatus]::Error
+        }
+         else
+        {
+            $status
+        }
+    $balloonKeyMap = @{
+        ([PSADT.Module.DeploymentStatus]::Complete)        = 'Complete'
+        ([PSADT.Module.DeploymentStatus]::RestartRequired) = 'RestartRequired'
+        ([PSADT.Module.DeploymentStatus]::FastRetry)       = 'FastRetry'
+        ([PSADT.Module.DeploymentStatus]::Error)           = 'Error'
+    }
+    $balloonKey  = $balloonKeyMap[$resolvedStatus]
+    $balloonText = if ($isDeferred)
+    {
+        "$($script:DeployTypeName) deferred by user."
+    }
+    else
+    {
+        $script:StringTable.BalloonTip.$balloonKey.$script:DeployTypeName
+    }
+    $icon = switch ($resolvedStatus)
+    {
+        ([PSADT.Module.DeploymentStatus]::FastRetry) { 'Warning' }
+        ([PSADT.Module.DeploymentStatus]::Error)     { 'Error'   }
+        default                                       { 'Info'    }
+    }
 
-    ## Error details hidden from the user by default. Show a simple dialog with full stack trace:
-    # Show-ADTDialogBox -Text $mainErrorMessage -Icon Stop -NoWait
+    Invoke-BalloonTip -Icon $icon -Text $balloonText -Title $script:AppTitle
 
-    ## Or, a themed dialog with basic error message:
-    # Show-ADTInstallationPrompt -Message "$($adtSession.DeploymentType) failed at line $($_.InvocationInfo.ScriptLineNumber), char $($_.InvocationInfo.OffsetInLine):`n$($_.InvocationInfo.Line.Trim())`n`nMessage:`n$($_.Exception.Message)" -MessageAlignment Left -ButtonRightText OK -Icon Error -NoWait
-
-    Close-ADTSession -ExitCode 60001
+    try { Close-ADTSession -ExitCode $script:DeploymentExitCode } catch {}
 }

@@ -103,7 +103,7 @@
 
         # Specify the Accent Color in hex (with the first two characters for transparency, 00 = 0%, FF = 100%), e.g. 0xFF0078D7.
         # The value specified here should be literally typed (i.e. `FluentAccentColor = 0xFF0078D7`) and not wrapped in quotes.
-        FluentAccentColor = $null
+        FluentAccentColor = 0xFF001E50
 
         # Exit code used when a UI prompt times out.
         DefaultExitCode = 1618

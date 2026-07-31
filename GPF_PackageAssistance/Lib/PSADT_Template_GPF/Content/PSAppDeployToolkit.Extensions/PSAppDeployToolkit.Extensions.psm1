@@ -4718,6 +4718,28 @@ Function Create-Service {
      }       
      #endregion
 
+#region Invoke-BalloonTip
+function Invoke-BalloonTip
+{
+    param(
+        [ValidateSet('Info','Warning','Error')]
+        [string]$Icon = 'Info',
+        [Parameter(Mandatory)]
+        [string]$Text,
+        [string]$Title,
+        [switch]$NoWait
+    )
+    $tipParams = @{
+        BalloonTipIcon  = $Icon
+        BalloonTipText  = $Text
+        BalloonTipTime  = 2000
+    }
+    if ($Title)  { $tipParams['BalloonTipTitle'] = $Title }
+    if ($NoWait) { $tipParams['NoWait']          = $true  }
+    Show-ADTBalloonTip @tipParams
+}
+#endregion
+
 ##*===============================================
 ##* MARK: SCRIPT BODY
 ##*===============================================
