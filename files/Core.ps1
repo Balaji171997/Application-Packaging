@@ -4,7 +4,7 @@
 # utilities that implement Plan section 1 (one-dot-prefix swap).
 ##############################################################
 
-$script:BuildStamp = '2026-07-30.r219'  # shown in the WINDOW TITLE so you always know which build/pak you run
+$script:BuildStamp = '2026-07-30.r220'  # shown in the WINDOW TITLE so you always know which build/pak you run
 
 # SNIPPET OWNERS - only these Windows usernames see the Add / Edit / Delete snippet buttons (everyone else just USES the
 # shared library). Baked into the ENCRYPTED pak (users get exe+pak only, so they can't read/change this - unlike

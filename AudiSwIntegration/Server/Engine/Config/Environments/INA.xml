@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  INA - production environment.
+  Values taken from EQS-PoshGUI-Tool-1.0.3\INA\*.xml and from the site block in
+  EQS-PoshGUI-Tool-1.0.3.ps1.
+-->
+<Environment code="INA" description="Production" schemaVersion="1.0" verified="true">
+
+  <Domain logonPrefix="deaudi00\">
+    <Name>audi.vwg</Name>
+  </Domain>
+
+  <Site code="INA" server="AUDIINSC0002.audi.vwg"/>
+
+  <Service address="AUDIINSC0002.audi.vwg"
+           configurationName="AudiSwIntegration"
+           account="deaudi00\svc-swintegration"
+           allowedGroup="deaudi00\G-Audi-SwIntegration-Operators"/>
+
+  <Content share="\\audiinsv0259.in.audi.vwg\sccm-store\pkg\prod"
+           distributionPointGroup="INA-DP-Group all"/>
+
+  <ApplicationFolder>INA-Applications</ApplicationFolder>
+
+  <Collections>
+    <Collection prefix="GY1-" limitingCollectionId="INA010CA"
+                folder="GY1-Site\GY1-Software Management"  deploymentAction="Available"/>
+    <Collection prefix="IN1-" limitingCollectionId="INA000D7"
+                folder="IN1-Site\IN1-Software Management"  deploymentAction="Available"/>
+    <Collection prefix="IN9-" limitingCollectionId="INA00904"
+                folder="IN9-Site\IN9-Software Management"  deploymentAction="Available"/>
+    <Collection prefix="NE1-" limitingCollectionId="INA00A6E"
+                folder="NE1-Site\NE1-Software Management"  deploymentAction="Available"/>
+    <Collection prefix="NE9-" limitingCollectionId="INA00A8A"
+                folder="NE9-Site\NE9-Software Management"  deploymentAction="Available"/>
+    <Collection prefix="SJ1-" limitingCollectionId="INA014E7"
+                folder="SJ1-Site\SJ1-Software Management"  deploymentAction="Available"/>
+    <Collection prefix="SM1-" suffix="_InstallComputer" limitingCollectionId="SMS00001"
+                folder="SCCM-Manager\Single-Distributions" deploymentAction="Available"/>
+    <Collection prefix="SM1-" suffix="_Query"           limitingCollectionId="SMS00001"
+                folder="SCCM-Manager\Global-Deployments"   deploymentAction="Available"/>
+    <Collection prefix="SM1-" suffix="_RemoveComputer"  limitingCollectionId="SMS00001"
+                folder="SCCM-Manager\Single-Removals"      deploymentAction="Uninstall"/>
+  </Collections>
+
+  <SecurityScopes>
+    <Scope>INA00003</Scope>
+  </SecurityScopes>
+
+  <ActiveDirectory arsProviderUrl="http://audiinsa4438.in.audi.vwg/ARServerSPML/SPMLProvider.asmx?WDSL"
+                   groupOu="OU=Development_in_Progress,OU=Software-Groups,OU=Administration,OU=AUDI AG,DC=audi,DC=vwg"/>
+
+</Environment>

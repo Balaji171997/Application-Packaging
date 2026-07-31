@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ICZ - test environment.
+  Values taken from EQS-PoshGUI-Tool-1.0.3\ICZ\*.xml and from the site block in
+  EQS-PoshGUI-Tool-1.0.3.ps1.
+
+  Service/@account and Service/@allowedGroup are placeholders until Audi's AD
+  team creates them; they are recorded here so the tool can name them in an
+  error message rather than failing silently.
+-->
+<Environment code="ICZ" description="Test" schemaVersion="1.0" verified="true">
+
+  <Domain logonPrefix="deaudi005t\">
+    <Name>audi.vwg5t</Name>
+  </Domain>
+
+  <Site code="ICZ" server="AUDIINSA1298.audi.vwg5t"/>
+
+  <Service address="AUDIINSA1298.audi.vwg5t"
+           configurationName="AudiSwIntegration"
+           account="deaudi005t\svc-swintegration"
+           allowedGroup="deaudi005t\G-Audi-SwIntegration-Operators"/>
+
+  <Content share="\\audiinsv1059.in.audi.vwg5t\sccm-store\pkg\prod"
+           distributionPointGroup="Test"/>
+
+  <ApplicationFolder>ICZ-Applications</ApplicationFolder>
+
+  <Collections>
+    <Collection prefix="II1-" limitingCollectionId="II10000C"
+                folder="II1-Site\II1-Software Management"        deploymentAction="Available"/>
+    <Collection prefix="SM1-" suffix="_InstallComputer" limitingCollectionId="SMS00001"
+                folder="SCCM-Manager\Single-Distributions"       deploymentAction="Available"/>
+    <Collection prefix="SM1-" suffix="_Query"           limitingCollectionId="SMS00001"
+                folder="SCCM-Manager\Global-Deployments"         deploymentAction="Available"/>
+    <Collection prefix="SM1-" suffix="_RemoveComputer"  limitingCollectionId="SMS00001"
+                folder="SCCM-Manager\Single-Removals"            deploymentAction="Uninstall"/>
+  </Collections>
+
+  <SecurityScopes>
+    <Scope>ICZ00001</Scope>
+    <Scope>ICZ00002</Scope>
+    <Scope>ICZ00005</Scope>
+    <Scope>ICZ00006</Scope>
+  </SecurityScopes>
+
+  <ActiveDirectory arsProviderUrl="http://audiinsa4030.audi.vwg5t/ARServerSPML/SPMLProvider.asmx?WDSL"
+                   groupOu="OU=Development_in_Progress,OU=Software-Groups,OU=Administration,OU=AUDI AG,DC=audi,DC=vwg5t"/>
+
+</Environment>

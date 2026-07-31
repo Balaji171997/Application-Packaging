@@ -1,0 +1,295 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Schema for the Audi SCCM Integration Tool configuration.
+
+  Two root elements:
+    <Environment>  one file per SCCM environment (ICZ.xml, INA.xml, PCZ.xml)
+    <Defaults>     one file for everything that is identical in every environment,
+                   including the rules for parsing a package name and for reading
+                   details out of a package folder.
+
+  Nothing environment-specific and no parsing rule lives in code. Adding an
+  environment is one new <Environment> file; changing how a package is read is
+  an edit to <Defaults>. Neither needs a rebuild.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified">
+
+  <xs:simpleType name="NonEmptyString">
+    <xs:restriction base="xs:string"><xs:minLength value="1"/></xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="SiteCode">
+    <xs:restriction base="xs:string"><xs:pattern value="[A-Z0-9]{3}"/></xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="DeploymentAction">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="Available"/>
+      <xs:enumeration value="Required"/>
+      <xs:enumeration value="Uninstall"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- ========================================================== Environment -->
+  <xs:element name="Environment">
+    <xs:complexType>
+      <xs:sequence>
+
+        <!-- The Windows domain this environment lives in. A workstation in this
+             domain resolves to this environment. PCZ has two possible names. -->
+        <xs:element name="Domain">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Name" type="NonEmptyString" maxOccurs="unbounded"/>
+            </xs:sequence>
+            <xs:attribute name="logonPrefix" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Site">
+          <xs:complexType>
+            <xs:attribute name="code" type="SiteCode" use="required"/>
+            <xs:attribute name="server" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Where the job is sent and which account carries it out.
+             'account' and 'allowedGroup' are recorded for documentation and for
+             clear error messages. The tool never reads or stores a password. -->
+        <xs:element name="Service">
+          <xs:complexType>
+            <xs:attribute name="address" type="NonEmptyString" use="required"/>
+            <xs:attribute name="configurationName" type="NonEmptyString" use="required"/>
+            <xs:attribute name="account" type="NonEmptyString" use="required"/>
+            <xs:attribute name="allowedGroup" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Content">
+          <xs:complexType>
+            <xs:attribute name="share" type="NonEmptyString" use="required"/>
+            <xs:attribute name="distributionPointGroup" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="ApplicationFolder" type="NonEmptyString"/>
+
+        <!-- Collection name = prefix + package name + suffix.
+             The deployment for each collection is declared here too, so a
+             deployment can never be mismatched to the wrong collection. -->
+        <xs:element name="Collections">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Collection" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="prefix" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="suffix" type="xs:string" use="optional" default=""/>
+                  <xs:attribute name="limitingCollectionId" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="folder" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="deploymentAction" type="DeploymentAction" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="SecurityScopes">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Scope" type="NonEmptyString" maxOccurs="unbounded"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="ActiveDirectory">
+          <xs:complexType>
+            <xs:attribute name="arsProviderUrl" type="NonEmptyString" use="required"/>
+            <xs:attribute name="groupOu" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+      </xs:sequence>
+      <xs:attribute name="code" type="SiteCode" use="required"/>
+      <xs:attribute name="description" type="NonEmptyString" use="required"/>
+      <xs:attribute name="schemaVersion" type="NonEmptyString" use="required"/>
+      <!-- false = the values were inherited from another environment and still
+           need confirming by Audi. The tool warns before using such a file. -->
+      <xs:attribute name="verified" type="xs:boolean" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================= Defaults -->
+  <xs:element name="Defaults">
+    <xs:complexType>
+      <xs:sequence>
+
+        <xs:element name="Commands">
+          <xs:complexType>
+            <xs:attribute name="install" type="NonEmptyString" use="required"/>
+            <xs:attribute name="uninstall" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Naming">
+          <xs:complexType>
+            <xs:attribute name="brandingRegistryRoot" type="NonEmptyString" use="required"/>
+            <xs:attribute name="deploymentTypeSuffix" type="NonEmptyString" use="required"/>
+            <xs:attribute name="arsGroupPrefix" type="NonEmptyString" use="required"/>
+            <xs:attribute name="arsDescriptionPrefix" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Application">
+          <xs:complexType>
+            <xs:attribute name="category" type="NonEmptyString" use="required"/>
+            <xs:attribute name="maxRuntimeMinutes" type="xs:positiveInteger" use="required"/>
+            <xs:attribute name="estimatedInstallMinutes" type="xs:positiveInteger" use="required"/>
+            <xs:attribute name="defaultLanguage" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Detection">
+          <xs:complexType>
+            <xs:attribute name="valueName" type="NonEmptyString" use="required"/>
+            <xs:attribute name="dataType" type="NonEmptyString" use="required"/>
+            <xs:attribute name="is64Bit" type="xs:boolean" use="required"/>
+            <xs:attribute name="method" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="DeploymentType">
+          <xs:complexType>
+            <xs:attribute name="distributionPointSetting" type="NonEmptyString" use="required"/>
+            <xs:attribute name="programVisibility" type="NonEmptyString" use="required"/>
+            <xs:attribute name="installationBehaviorType" type="NonEmptyString" use="required"/>
+            <xs:attribute name="logonRequirementType" type="NonEmptyString" use="required"/>
+            <xs:attribute name="allowClientToShareContent" type="xs:boolean" use="required"/>
+            <xs:attribute name="allowClientToUseFallback" type="xs:boolean" use="required"/>
+            <xs:attribute name="persistContentInClientCache" type="xs:boolean" use="required"/>
+            <xs:attribute name="run32BitOn64Bit" type="xs:boolean" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="OperatingSystems">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="OperatingSystem" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="key" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="label" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="value" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="selectedByDefault" type="xs:boolean" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Placeholders {package} {jobId} {requester} {rfc} are filled at run time. -->
+        <xs:element name="Comments">
+          <xs:complexType>
+            <xs:attribute name="collection" type="NonEmptyString" use="required"/>
+            <xs:attribute name="application" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- How a package name is composed. Parts are located either from the
+             start (index) or from the end (indexFromEnd), so a product name that
+             itself contains the separator still parses correctly. -->
+        <xs:element name="PackageName">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Part" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="name" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="index" type="xs:nonNegativeInteger" use="optional"/>
+                  <xs:attribute name="indexFromEnd" type="xs:positiveInteger" use="optional"/>
+                  <!-- true = this part absorbs everything left over in the middle -->
+                  <xs:attribute name="remainder" type="xs:boolean" use="optional" default="false"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="separator" type="NonEmptyString" use="required"/>
+            <xs:attribute name="minimumParts" type="xs:positiveInteger" use="required"/>
+            <!-- Template built from the part names above, e.g.
+                 {Publisher}_{Product}_{Architecture}_{Version}-{Revision}_{Language} -->
+            <xs:attribute name="brandingKeyFormat" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Where the packager window gets its values from, so the operator does
+             not retype what already exists in the package. Every pattern is a
+             .NET regex with one capture group. Missing matches are simply left
+             blank for the operator to fill in. -->
+        <xs:element name="PackageSource">
+          <xs:complexType>
+            <xs:sequence>
+              <!-- Candidate deployment scripts, tried in order. -->
+              <xs:element name="Script" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Field" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:attribute name="name" type="NonEmptyString" use="required"/>
+                        <xs:attribute name="pattern" type="NonEmptyString" use="required"/>
+                        <!-- last match wins, for scripts that redefine a variable -->
+                        <xs:attribute name="lastMatchWins" type="xs:boolean" use="optional" default="true"/>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                  <xs:attribute name="generation" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="fileName" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+
+              <!-- The install instruction document shipped with the request. -->
+              <xs:element name="Document" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Field" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:attribute name="name" type="NonEmptyString" use="required"/>
+                        <xs:attribute name="pattern" type="NonEmptyString" use="required"/>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                  <!-- file name pattern to look for, e.g. *.docx -->
+                  <xs:attribute name="filter" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="searchDepth" type="xs:positiveInteger" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Operational behaviour: how hard to try, how long to wait, where the
+             audit trail is written. Tunable without a rebuild. -->
+        <xs:element name="Runtime">
+          <xs:complexType>
+            <xs:sequence>
+              <!-- Failures matching these are retried; anything else fails at
+                   once, so a genuine error is not hidden behind retries. -->
+              <xs:element name="TransientErrors">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Pattern" type="NonEmptyString" maxOccurs="unbounded"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="retryCount" type="xs:nonNegativeInteger" use="required"/>
+            <xs:attribute name="retryDelaySeconds" type="xs:positiveInteger" use="required"/>
+            <xs:attribute name="distributionTimeoutMinutes" type="xs:positiveInteger" use="required"/>
+            <xs:attribute name="distributionPollSeconds" type="xs:positiveInteger" use="required"/>
+            <xs:attribute name="logRoot" type="NonEmptyString" use="required"/>
+            <xs:attribute name="logRetentionDays" type="xs:positiveInteger" use="required"/>
+            <xs:attribute name="lockTimeoutMinutes" type="xs:positiveInteger" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+      </xs:sequence>
+      <xs:attribute name="schemaVersion" type="NonEmptyString" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

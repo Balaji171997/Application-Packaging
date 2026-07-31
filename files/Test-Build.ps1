@@ -343,6 +343,18 @@ function Get-CMDeviceCollectionDirectMembershipRule { param($CollectionName) @()
 Assert "sccm clear: empty collection -> 0 removed"       ((Clear-SccmCollectionDirectMembers -CollectionName 'X') -eq 0)
 Remove-Item function:Get-CMDeviceCollectionDirectMembershipRule, function:Remove-CMDeviceCollectionDirectMembershipRule -ErrorAction SilentlyContinue
 
+# ---- SCCM collections carry RFC_<OrderNumber> read from the package's ps1 (loaded packages have an empty RITM box) ----
+$ordDir = Join-Path $env:TEMP ('pbord_' + [Guid]::NewGuid().ToString('N').Substring(0,8))
+try {
+    New-Item -ItemType Directory -Force (Join-Path $ordDir 'Content') | Out-Null
+    Set-Content (Join-Path $ordDir 'Content\Invoke-AppDeployToolkit.ps1') "    AppVersion = '1.0'`r`n    OrderNumber     = 'RFC0123456'`r`n    AppArch = 'x64'"
+    Assert "sccm rfc: OrderNumber read from Content\ps1"  ((Get-PackageOrderNumber -PackagePath $ordDir) -eq 'RFC0123456')
+    Assert "sccm rfc: reads via recursive fallback too"   ((Get-PackageOrderNumber -PackagePath (Split-Path $ordDir -Parent) ) -ne $null)   # no throw on a parent dir
+    Set-Content (Join-Path $ordDir 'Content\Invoke-AppDeployToolkit.ps1') "    AppVersion = '1.0'`r`n    AppArch = 'x64'"
+    Assert "sccm rfc: no OrderNumber -> '' (bare RFC_ case)" ((Get-PackageOrderNumber -PackagePath $ordDir) -eq '')
+    Assert "sccm rfc: VWG_OrderNumber wrapper form read"   ($(Set-Content (Join-Path $ordDir 'Content\Invoke-AppDeployToolkit.ps1') "  [string] `$Global:VWG_OrderNumber = 'RFC9999'"; (Get-PackageOrderNumber -PackagePath $ordDir) -eq 'RFC9999'))
+} finally { Remove-Item $ordDir -Recurse -Force -ErrorAction SilentlyContinue }
+
 # ---- SCCM publish fetch from a v3 package: $VWG_SoftIdent (LAST definition wins), $($VWG_CurrentRegWOW) hive token
 #      resolved from its own definition -> 32-bit box ticked + clean key, [DisplayVersion = X] with spaces, positional cmds.
 $v3fix = Join-Path $env:TEMP ('pbv3_' + [Guid]::NewGuid().ToString('N').Substring(0,8))

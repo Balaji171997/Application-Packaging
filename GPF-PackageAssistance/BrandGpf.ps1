@@ -122,9 +122,50 @@ function Get-GpfPredecessorContainer {
     return ''
 }
 
+# FUZZY name matching for predecessor detection. The GPF request's Predecessor\ folder is CURATED by the team, but the
+# predecessor's Vendor_AppName often differs slightly from the NEW package's (spelling, spacing, casing, a trailing token,
+# a renamed vendor) - an EXACT compare then wrongly rejects a valid, hand-placed predecessor and the user sees "no
+# predecessor". Normalise to lowercase alphanumerics and accept an exact key, a substring either way, or a high
+# Levenshtein similarity (default 0.82).
+function Get-GpfNameKey {
+    param([string]$Vendor, [string]$AppName)
+    return (("$Vendor" + "$AppName") -replace '[^A-Za-z0-9]', '').ToLower()
+}
+function Get-GpfLevenshtein {
+    param([string]$A, [string]$B)
+    $n = "$A".Length; $m = "$B".Length
+    if ($n -eq 0) { return $m }
+    if ($m -eq 0) { return $n }
+    $prev = New-Object 'int[]' ($m + 1)
+    $cur  = New-Object 'int[]' ($m + 1)
+    for ($j = 0; $j -le $m; $j++) { $prev[$j] = $j }
+    for ($i = 1; $i -le $n; $i++) {
+        $cur[0] = $i
+        for ($j = 1; $j -le $m; $j++) {
+            $cost = if ($A[$i - 1] -eq $B[$j - 1]) { 0 } else { 1 }
+            $cur[$j] = [Math]::Min([Math]::Min($cur[$j - 1] + 1, $prev[$j] + 1), $prev[$j - 1] + $cost)
+        }
+        $tmp = $prev; $prev = $cur; $cur = $tmp
+    }
+    return $prev[$m]
+}
+function Test-GpfNameFuzzyMatch {
+    param([string]$NewVendor, [string]$NewApp, [string]$PredVendor, [string]$PredApp, [double]$Threshold = 0.82)
+    $a = Get-GpfNameKey -Vendor $NewVendor -AppName $NewApp
+    $b = Get-GpfNameKey -Vendor $PredVendor -AppName $PredApp
+    if (-not $a -or -not $b) { return $false }
+    if ($a -eq $b) { return $true }
+    if ($a.Contains($b) -or $b.Contains($a)) { return $true }        # one name is a prefix/substring of the other
+    $max = [Math]::Max($a.Length, $b.Length)
+    if ($max -le 0) { return $false }
+    $sim = 1.0 - ([double](Get-GpfLevenshtein -A $a -B $b) / $max)
+    return ($sim -ge $Threshold)
+}
+
 # Predecessor candidates for a GPF build - same object shape as Get-PredecessorCandidates, but:
 #  1. the request's OWN Predecessor\ folder comes FIRST (authoritative - the team has NO live share access);
-#  2. the Outgoing scan tolerates the brand prefix + mangled revision in folder names.
+#  2. the Outgoing scan tolerates the brand prefix + mangled revision in folder names;
+#  3. Vendor_AppName is matched FUZZILY (curated folder + slight naming differences must still match).
 # Name = the NORMALISED (parseable) identity; FullName = the real path (Read-PredecessorModel gets both).
 function Get-GpfPredecessorCandidates {
     param($Parsed, $Request)
@@ -139,7 +180,9 @@ function Get-GpfPredecessorCandidates {
         if ($seen.ContainsKey($norm.ToLower())) { return }
         $p = Parse-PackageName $norm
         if (-not $p.IsValid) { return }
-        if ("$($p.Vendor)_$($p.AppName)" -ine "$($Parsed.Vendor)_$($Parsed.AppName)") { return }
+        # FUZZY Vendor_AppName match (was an exact -ine compare that rejected hand-placed predecessors on any tiny naming
+        # difference). The Predecessor\ folder is curated, so a close match is what the team intends to reuse.
+        if (-not (Test-GpfNameFuzzyMatch -NewVendor $Parsed.Vendor -NewApp $Parsed.AppName -PredVendor $p.Vendor -PredApp $p.AppName)) { return }
         $seen[$norm.ToLower()] = $true
         try { $v = [version]($p.Version -replace '[^0-9.]','') } catch { $v = $null }
         [void]$Target.Add([pscustomobject]@{

@@ -1,0 +1,55 @@
+# ==============================================================================
+#  Role capability - the ONLY things a connected packager can run.
+# ==============================================================================
+#  Anything not listed here does not exist for them. No shell, no file browsing,
+#  no starting programs, no arbitrary PowerShell. If a command is missing from
+#  this list it cannot be called, whatever rights the service account has.
+#
+#  Generated once with:  New-PSRoleCapabilityFile -Path .\AudiSwIntegration.psrc
+# ==============================================================================
+@{
+    GUID              = 'a1f3c6d2-5b47-4e19-9c0a-7d2e8b4f6a31'
+    Author            = 'Digital Workplace and Cross Functional Services (I-DI-D)'
+    CompanyName       = 'Volkswagen Group'
+    Description       = 'Audi SCCM software integration - packager role'
+
+    # The engine module. Only its exported task commands become available.
+    ModulesToImport   = @(
+        @{ ModuleName = 'AudiSwIntegration'; ModuleVersion = '1.0.0' }
+    )
+
+    # Exactly the commands the tool needs, and nothing else.
+    VisibleCmdlets    = @(
+        @{ Name = 'Get-AudiEnvironmentCode' },
+        @{ Name = 'Get-AudiEnvironment'; Parameters = @( @{ Name = 'Code' } ) },
+        @{ Name = 'Get-AudiDefaults' },
+        @{ Name = 'Split-AudiPackageName';  Parameters = @( @{ Name = 'PackageName' } ) },
+        @{ Name = 'Get-AudiBrandingKey';    Parameters = @( @{ Name = 'PackageName' } ) },
+        @{ Name = 'Read-AudiPackageDetail'; Parameters = @( @{ Name = 'PackagePath' } ) },
+
+        # Building a plan is read-only and contacts nothing.
+        @{ Name = 'Get-AudiIntegrationPlan'; Parameters = @(
+            @{ Name = 'PackageName' }, @{ Name = 'EnvironmentCode' }, @{ Name = 'Rfc' },
+            @{ Name = 'LocalizedName' }, @{ Name = 'LocalizedDescription' }
+        )},
+
+        # Preflight is read-only too - it only looks.
+        @{ Name = 'Test-AudiSwPrerequisite'; Parameters = @( @{ Name = 'Plan' } ) },
+
+        # The two commands that change anything. Note the packager cannot pass
+        # -Provider or -Requester: the requester is taken from the connection,
+        # and the provider is always the live one.
+        @{ Name = 'Invoke-AudiSwIntegration'; Parameters = @(
+            @{ Name = 'Plan' }, @{ Name = 'DryRun' }, @{ Name = 'NoRollback' },
+            @{ Name = 'AllowUnverifiedEnvironment' }
+        )},
+        @{ Name = 'Invoke-AudiSwRemoval'; Parameters = @(
+            @{ Name = 'Plan' }, @{ Name = 'DryRun' }, @{ Name = 'AllowUnverifiedEnvironment' }
+        )}
+    )
+
+    # Nothing else is exposed.
+    VisibleFunctions  = @()
+    VisibleExternalCommands = @()
+    VisibleAliases    = @()
+}

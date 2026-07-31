@@ -470,6 +470,32 @@ function Update-SccmDetection {
     finally { Pop-Location }
 }
 
+# Read the RFC / order number from a BUILT package's PSADT script ($adtSession.OrderNumber = 'RFC1234'). SCCM collection
+# comments must carry "RFC_<OrderNumber>", but for a LOADED package the RITM textbox is empty - so the package script is the
+# source of truth. Finds Content\Invoke-AppDeployToolkit.ps1 (or a recursive fallback, skipping the Frontend copy) and
+# reads the OrderNumber / VWG_OrderNumber value. Returns '' when nothing usable is found.
+function Get-PackageOrderNumber {
+    param([string]$PackagePath)
+    if (-not $PackagePath) { return '' }
+    $ps1 = $null
+    foreach ($c in @((Join-Path $PackagePath 'Content\Invoke-AppDeployToolkit.ps1'),
+                     (Join-Path $PackagePath 'Invoke-AppDeployToolkit.ps1'),
+                     (Join-Path $PackagePath 'Content\Deploy-Application.ps1'),
+                     (Join-Path $PackagePath 'Deploy-Application.ps1'))) {
+        if (Test-Path -LiteralPath $c) { $ps1 = $c; break }
+    }
+    if (-not $ps1) {
+        $ps1 = Get-ChildItem -LiteralPath $PackagePath -Recurse -Include 'Invoke-AppDeployToolkit.ps1','Deploy-Application.ps1' -ErrorAction SilentlyContinue |
+               Where-Object { $_.FullName -notmatch '\\Frontend\\' } | Select-Object -First 1 | ForEach-Object { $_.FullName }
+    }
+    if (-not $ps1 -or -not (Test-Path -LiteralPath $ps1)) { return '' }
+    $txt = Get-Content -LiteralPath $ps1 -Raw -ErrorAction SilentlyContinue
+    if (-not $txt) { return '' }
+    $m = [regex]::Match($txt, "(?im)^[ \t]*(?:\[[^\]]+\][ \t]*)?\`$?(?:Global:)?(?:VWG_)?OrderNumber[ \t]*=[ \t]*['`"]([^'`"\r\n]+)['`"]")
+    if ($m.Success) { return $m.Groups[1].Value.Trim() }
+    return ''
+}
+
 # --- The create flow. Returns @{ Ok; Message }. -------------------------------------------
 function New-SccmApplication {
     param(
@@ -484,6 +510,14 @@ function New-SccmApplication {
     )
     $cfg = Get-SccmConfig
     $name = $Fields.FullName
+    # RFC/order number for the collection comments: prefer whatever was passed (the RITM the user typed), but for a LOADED
+    # package that textbox is empty - fall back to the OrderNumber baked into the package's own PSADT script, so the
+    # collections are always tagged "RFC_<OrderNumber>" instead of a bare "RFC_".
+    if (-not "$RfcComment".Trim() -and $LocalPackagePath) {
+        $fromPs1 = Get-PackageOrderNumber -PackagePath $LocalPackagePath
+        if ($fromPs1) { $RfcComment = $fromPs1; Write-Log "SCCM: RFC/order number '$RfcComment' read from the package script (RITM box was empty)." }
+        else { Write-Log "SCCM: no OrderNumber in the package script and no RITM entered - collections will be tagged 'RFC_' only." Warning }
+    }
     try {
         # 0. Connect + "already exists" check FIRST - before the (possibly multi-GB) prelive copy,
         #    so a duplicate name fails in seconds instead of after minutes of copying.

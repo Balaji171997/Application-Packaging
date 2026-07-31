@@ -1237,6 +1237,14 @@ try {
     $c4 = Get-GpfPredecessorContainer -RequestPath $s4
     $cand4 = @(Get-GpfPredecessorCandidates -Parsed $pzParsed -Request @{ PredecessorRoot=$c4; PredecessorPath='' })
     Assert "pred-src S4: ZIPPED folder + ZIPPED pkg offered"     ((@($cand4 | Where-Object { $_.Version -eq '6.2.3' })).Count -eq 1)
+    # FUZZY match: a curated predecessor whose Vendor spelling differs slightly ("PaloAltoNetworks" vs new "PaloAltoNetwork")
+    # must STILL be offered (was rejected by the old exact compare); an UNRELATED app in the same folder must NOT be offered.
+    $sf = Join-Path $pzRoot 'fuzzy\Predecessor'; New-Item -ItemType Directory -Force $sf | Out-Null
+    New-FixturePkg $sf 'PaloAltoNetworks_GlobalProtect_x64_6.2.7-0001_MUL' | Out-Null   # vendor: extra 's'
+    New-FixturePkg $sf 'Adobe_AcrobatReader_x64_23.0-0001_MUL' | Out-Null                # unrelated
+    $candF = @(Get-GpfPredecessorCandidates -Parsed $pzParsed -Request @{ PredecessorRoot=$sf; PredecessorPath='' })
+    Assert "pred-fuzzy: near-name vendor variant IS offered"     ((@($candF | Where-Object { $_.Version -eq '6.2.7' })).Count -eq 1)
+    Assert "pred-fuzzy: unrelated app NOT offered"               ((@($candF | Where-Object { $_.Name -match 'Acrobat' })).Count -eq 0)
 } finally { Remove-Item $pzRoot -Recurse -Force -ErrorAction SilentlyContinue }
 
 # ---- Intune detection rules: "None (branding only)" = ONE rule, which MUST serialize as a JSON ARRAY not an object.

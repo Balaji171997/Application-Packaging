@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Values that are identical in ICZ, INA and PCZ.
+
+  In the tool being replaced these values were repeated in all 36 environment
+  files and in the script itself. Three copies of the same value drift apart,
+  which is how PCZ ended up holding INA's security scope, application folder and
+  content path. They are held once here instead.
+
+  Regex patterns below use \x22 for a double quote so the XML stays readable.
+-->
+<Defaults schemaVersion="1.0">
+
+  <Commands install="Invoke-AppDeployToolkit.exe Install"
+            uninstall="Invoke-AppDeployToolkit.exe Uninstall"/>
+
+  <Naming brandingRegistryRoot="Software\VWG\CM\"
+          deploymentTypeSuffix="_INSTALLCOMPUTER"
+          arsGroupPrefix="G-AUDI-AG-SW-"
+          arsDescriptionPrefix="Software-Filtergroups - "/>
+
+  <Application category="Development"
+               maxRuntimeMinutes="120"
+               estimatedInstallMinutes="5"
+               defaultLanguage="en-us"/>
+
+  <Detection valueName="Revision" dataType="String" is64Bit="true" method="Value"/>
+
+  <DeploymentType distributionPointSetting="AutoDownload"
+                  programVisibility="Hidden"
+                  installationBehaviorType="InstallForSystem"
+                  logonRequirementType="WhetherOrNotUserLoggedOn"
+                  allowClientToShareContent="false"
+                  allowClientToUseFallback="true"
+                  persistContentInClientCache="false"
+                  run32BitOn64Bit="false"/>
+
+  <OperatingSystems>
+    <OperatingSystem key="Win7x86"  label="Windows 7 x86 (out of support)"
+                     value="Windows/All_x86_Windows_7_Client"              selectedByDefault="false"/>
+    <OperatingSystem key="Win7x64"  label="Windows 7 x64 (out of support)"
+                     value="Windows/All_x64_Windows_7_Client"              selectedByDefault="false"/>
+    <OperatingSystem key="Win10x64" label="Windows 10 x64"
+                     value="Windows/All_x64_Windows_10_and_higher_Clients" selectedByDefault="true"/>
+    <OperatingSystem key="Win11x64" label="Windows 11 x64"
+                     value="Windows/All_x64_Windows_11_and_higher_Clients" selectedByDefault="false"/>
+  </OperatingSystems>
+
+  <!-- The old tool stamped every object with "created by manual MCB script".
+       These carry the audit trail instead: who asked, and which job it was. -->
+  <Comments collection="Created by the SCCM Integration Tool | job {jobId} | requested by {requester} | RFC {rfc}"
+            application="Created by the SCCM Integration Tool | job {jobId} | requested by {requester} | RFC {rfc}"/>
+
+  <!-- Package name layout, e.g. INA_AUDI_DummyTest_x86_1.0_0001_MUL
+       Site and Publisher are counted from the front; architecture, version,
+       revision and language from the back. Product takes whatever is left in
+       the middle, so a product name containing the separator still parses. -->
+  <PackageName separator="_" minimumParts="7"
+               brandingKeyFormat="{Publisher}_{Product}_{Architecture}_{Version}-{Revision}_{Language}">
+    <Part name="Site"         index="0"/>
+    <Part name="Publisher"    index="1"/>
+    <Part name="Product"      remainder="true"/>
+    <Part name="Architecture" indexFromEnd="4"/>
+    <Part name="Version"      indexFromEnd="3"/>
+    <Part name="Revision"     indexFromEnd="2"/>
+    <Part name="Language"     indexFromEnd="1"/>
+  </PackageName>
+
+  <!-- Where the packager window fills itself from, so nothing already recorded
+       in the package has to be retyped. Anything that does not match is simply
+       left blank and the packager completes it by hand. -->
+  <PackageSource searchDepth="3">
+
+    <!-- PSADT v4: values live in the $adtSession hashtable. -->
+    <Script generation="v4" fileName="Invoke-AppDeployToolkit.ps1">
+      <Field name="Publisher"    pattern="AppVendor\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Product"      pattern="AppName\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Version"      pattern="AppVersion\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Architecture" pattern="AppArch\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Language"     pattern="AppLang\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Revision"     pattern="AppRevision\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="ScriptAuthor" pattern="AppScriptAuthor\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+    </Script>
+
+    <!-- PSADT v3: values are plain variables at the top of the script. -->
+    <Script generation="v3" fileName="Deploy-Application.ps1">
+      <Field name="Publisher"    pattern="\$appVendor\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Product"      pattern="\$appName\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Version"      pattern="\$appVersion\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Architecture" pattern="\$appArch\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Language"     pattern="\$appLang\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Revision"     pattern="\$appRevision\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="ScriptAuthor" pattern="\$appScriptAuthor\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+    </Script>
+
+    <!-- The install instruction document that ships with the request.
+
+         STARTER PATTERNS ONLY - not yet calibrated. Audi uses the same install
+         instruction format as the GPF packages, so these are to be tuned
+         against a real GPF install instruction document. Until that is done the
+         fields stay blank and the packager types them, exactly as they do
+         today. Tuning them is an edit here, not a code change. -->
+    <Document filter="*.docx">
+      <Field name="ApplicationNameEN"        pattern="(?im)^\s*(?:Application name|Software name)\s*[:\-]\s*(.+?)\s*$"/>
+      <Field name="ApplicationNameDE"        pattern="(?im)^\s*(?:Anwendungsname|Softwarename)\s*[:\-]\s*(.+?)\s*$"/>
+      <Field name="ApplicationDescriptionEN" pattern="(?im)^\s*(?:Description|Purpose)\s*[:\-]\s*(.+?)\s*$"/>
+      <Field name="ApplicationDescriptionDE" pattern="(?im)^\s*(?:Beschreibung|Zweck)\s*[:\-]\s*(.+?)\s*$"/>
+      <Field name="OrderNumber"              pattern="(?im)^\s*(?:Auftragsnummer|Order number)\s*[:\-]\s*(\d+)\s*$"/>
+    </Document>
+
+  </PackageSource>
+
+  <!-- Operational behaviour.
+
+       The tool being replaced waited a flat 30 seconds after each deployment and
+       never retried anything. Here the waiting is a real check with a timeout,
+       and only failures matching TransientErrors are retried - anything else
+       fails immediately, so a genuine error is not buried under retries.
+
+       logRoot is per job: <logRoot>\<environment>\<package>\<jobId>. -->
+  <Runtime retryCount="3"
+           retryDelaySeconds="5"
+           distributionTimeoutMinutes="30"
+           distributionPollSeconds="20"
+           logRoot="%ProgramData%\Audi\SwIntegration\Logs"
+           logRetentionDays="180"
+           lockTimeoutMinutes="60">
+    <TransientErrors>
+      <Pattern>RPC server is unavailable</Pattern>
+      <Pattern>The operation timed out</Pattern>
+      <Pattern>is busy|being used by another</Pattern>
+      <Pattern>Generic failure</Pattern>
+      <Pattern>transport connection|connection was closed</Pattern>
+      <Pattern>SMS Provider|provider is not available</Pattern>
+      <Pattern>deadlock|timeout expired</Pattern>
+    </TransientErrors>
+  </Runtime>
+
+</Defaults>

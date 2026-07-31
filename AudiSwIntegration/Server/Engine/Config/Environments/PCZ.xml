@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  PCZ - production environment.
+
+  verified="false" ON PURPOSE.
+
+  In the tool being replaced, four PCZ values are copies of INA's rather than
+  PCZ's own, and a fifth was never set at all:
+
+    SecurityScopes      PCZ\VWG-SCCM-AddSecurityScopeToObject...xml holds INA00003
+    ApplicationFolder   PCZ\VWG-SCCM-MoveItem...xml holds INA-Applications
+    Content/@share      the PCZ branch of the old script has no share of its own
+    ActiveDirectory     PCZ\Audi-ARSSPML-CreateGroup...xml holds DC=audi,DC=vwg
+    arsProviderUrl      never assigned in the old script, so both AD steps stalled
+
+  The values below are carried over unchanged so nothing is invented. They are
+  marked unverified so the tool warns before acting on them, and they are on the
+  confirmation list for Audi. Set verified="true" once each has been checked.
+-->
+<Environment code="PCZ" description="Production (values pending confirmation)"
+             schemaVersion="1.0" verified="false">
+
+  <Domain logonPrefix="audiprod\">
+    <Name>in.audi.prod.vwg</Name>
+    <Name>audi.prod.vwg</Name>
+  </Domain>
+
+  <Site code="PCZ" server="AUDIINSC0027.audi.prod.vwg"/>
+
+  <Service address="AUDIINSC0027.audi.prod.vwg"
+           configurationName="AudiSwIntegration"
+           account="audiprod\svc-swintegration"
+           allowedGroup="audiprod\G-Audi-SwIntegration-Operators"/>
+
+  <!-- CONFIRM: the old script used INA's share here. -->
+  <Content share="\\audiinsc0027.audi.prod.vwg\SCCM-STORE\PKG\PROD"
+           distributionPointGroup="INA-DP-Group all"/>
+
+  <!-- CONFIRM: reads INA-Applications in the old configuration. -->
+  <ApplicationFolder>INA-Applications</ApplicationFolder>
+
+  <Collections>
+    <Collection prefix="BX1-" limitingCollectionId="INA010C0"
+                folder="BX1-Site\BX1-Software Management"  deploymentAction="Available"/>
+    <Collection prefix="GY1-" limitingCollectionId="INA010CA"
+                folder="GY1-Site\GY1-Software Management"  deploymentAction="Available"/>
+    <Collection prefix="IN1-" limitingCollectionId="INA000D7"
+                folder="IN1-Site\IN1-Software Management"  deploymentAction="Available"/>
+    <Collection prefix="IN9-" limitingCollectionId="INA00904"
+                folder="IN9-Site\IN9-Software Management"  deploymentAction="Available"/>
+    <Collection prefix="NE1-" limitingCollectionId="INA00A6E"
+                folder="NE1-Site\NE1-Software Management"  deploymentAction="Available"/>
+    <Collection prefix="NE9-" limitingCollectionId="INA00A8A"
+                folder="NE9-Site\NE9-Software Management"  deploymentAction="Available"/>
+    <Collection prefix="SJ1-" limitingCollectionId="INA014E7"
+                folder="SJ1-Site\SJ1-Software Management"  deploymentAction="Available"/>
+    <Collection prefix="SM1-" suffix="_InstallComputer" limitingCollectionId="SMS00001"
+                folder="SCCM-Manager\Single-Distributions" deploymentAction="Available"/>
+    <Collection prefix="SM1-" suffix="_Query"           limitingCollectionId="SMS00001"
+                folder="SCCM-Manager\Global-Deployments"   deploymentAction="Available"/>
+    <Collection prefix="SM1-" suffix="_RemoveComputer"  limitingCollectionId="SMS00001"
+                folder="SCCM-Manager\Single-Removals"      deploymentAction="Uninstall"/>
+  </Collections>
+
+  <!-- CONFIRM: INA's scope. PCZ almost certainly has its own. -->
+  <SecurityScopes>
+    <Scope>INA00003</Scope>
+  </SecurityScopes>
+
+  <!-- CONFIRM: the URL below is the one the old script assigned to two unused
+       variables, so it was never actually used. The OU is INA's. -->
+  <ActiveDirectory arsProviderUrl="http://audiinsa3971.in.audi.prod.vwg/ARServerSPML/SPMLProvider.asmx?WDSL"
+                   groupOu="OU=Development_in_Progress,OU=Software-Groups,OU=Administration,OU=AUDI AG,DC=audi,DC=vwg"/>
+
+</Environment>
