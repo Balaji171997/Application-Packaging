@@ -546,7 +546,7 @@ function Invoke-AudiSwIntegration {
         Exit-AudiPackageLock -Lock $lock
         $result = [pscustomobject]@{
             Ok = $ok; JobId = $Plan.JobId; Environment = $Plan.Environment; Package = $Plan.PackageName
-            Requester = $Plan.Requester; Executor = $Plan.Executor; DryRun = [bool]$DryRun
+            Executor = $Plan.Executor; DryRun = [bool]$DryRun
             Message = $message; Steps = $results.ToArray(); RolledBack = $rollback
             Preflight = $preflight; LogPath = $log.LogPath; Provider = $Provider
         }
@@ -555,8 +555,10 @@ function Invoke-AudiSwIntegration {
         return $result
     }
 
-    Write-AudiLog -Context $log -Message ("Job {0} | package {1} | environment {2} | requested by {3} | executed as {4}{5}" -f `
-        $Plan.JobId, $Plan.PackageName, $Plan.Environment, $Plan.Requester, $Plan.Executor, $(if ($DryRun) { ' | DRY RUN' } else { '' }))
+    # RFC, not a person: no real name is written on the SCCM side
+    Write-AudiLog -Context $log -Message ("Job {0} | package {1} | environment {2} | RFC {3} | executed as {4}{5}" -f `
+        $Plan.JobId, $Plan.PackageName, $Plan.Environment, $(if ($Plan.Rfc) { $Plan.Rfc } else { 'none' }),
+        $Plan.Executor, $(if ($DryRun) { ' | DRY RUN' } else { '' }))
 
     # An environment whose values were inherited from another one must not be
     # used by accident. This is what stops PCZ running on INA's settings.
@@ -696,7 +698,7 @@ function Invoke-AudiSwRemoval {
     $okCount = @($results | Where-Object { $_.Ok }).Count
     return [pscustomobject]@{
         Ok = (-not $failed); JobId = $Plan.JobId; Environment = $Plan.Environment; Package = $Plan.PackageName
-        Requester = $Plan.Requester; Executor = $Plan.Executor; DryRun = [bool]$DryRun
+        Executor = $Plan.Executor; DryRun = [bool]$DryRun
         Message = $(if ($failed) { "Removal finished with failures - $okCount of $(@(Get-AudiRemovalStep).Count) steps succeeded." } else { "Removal completed - $okCount steps." })
         Steps = $results.ToArray(); Provider = $Provider
     }

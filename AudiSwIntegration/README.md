@@ -4,8 +4,8 @@ Replacement for Audi's **EQS SW Integration Tool 1.0.3**, built so that all SCCM
 and Active Directory work is carried out by a **shared service account** instead
 of each packager's personal administrator account.
 
-For the full deployment detail — firewall, registration, permissions and the
-security review answers — see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+For the full deployment detail — accounts, permissions, the drop folder, the
+privacy rule and the security review answers — see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
 
 ---
 
@@ -19,26 +19,25 @@ AudiSwIntegration\
 ├── Server\          →  goes ON the SCCM server, in the secure zone
 │   ├── Engine\                     the tool itself
 │   │   ├── AudiSwIntegration.ps1     entry point
-│   │   ├── Src\                      Config.ps1  Runtime.ps1  Sccm.ps1
+│   │   ├── Src\                      Config.ps1  Runtime.ps1  Transport.ps1  Sccm.ps1
 │   │   └── Config\                   the ONLY files an admin edits
 │   │       ├── Environment.xsd         schema everything is checked against
 │   │       ├── Defaults.xml            what is identical in all environments
 │   │       └── Environments\           ICZ.xml  INA.xml  PCZ.xml
 │   │
-│   ├── Endpoint\                   definition of the "counter"   (option A)
-│   │   ├── AudiSwIntegration.pssc    who may connect, who does the work
-│   │   └── AudiSwIntegration.psrc    the only commands that exist
+│   ├── Install-AudiSwDropWatcher.ps1  creates the scheduled task, once
+│   ├── Watch-AudiSwDropFolder.ps1     collects jobs from the drop folder
 │   │
-│   ├── Install-AudiSwEndpoint.ps1     registers the counter      (option A)
-│   ├── Install-AudiSwDropWatcher.ps1  creates the scheduled task (option B)
-│   └── Watch-AudiSwDropFolder.ps1     collects jobs from the folder (option B)
+│   └── _NotUsed-LiveConnection\    the live-connection option we are NOT building
+│       ├── Install-AudiSwEndpoint.ps1
+│       └── Endpoint\                 .pssc / .psrc
 │
 ├── Client\          →  goes on a SHARE, packagers get a shortcut
 │   ├── Start-AudiSwClient.ps1        the packager window
 │   └── MainWindow.xaml               its layout
 │
 └── Tests\           →  stays with US. Never deployed anywhere.
-    ├── Test-Config.ps1   Test-Sccm.ps1   Invoke-AllTests.ps1
+    ├── Test-Config.ps1   Test-Sccm.ps1   Test-Transport.ps1   Invoke-AllTests.ps1
 ```
 
 ### Server or client — the short version
@@ -56,9 +55,37 @@ AudiSwIntegration\
 paths, scope IDs and collection IDs all live in `Server\Engine\Config`, in the
 secure zone. A config change therefore never means redistributing the client.
 
-> **While testing:** the window currently loads the engine directly so it can run
-> against the dry-run provider with no server at all. Once the endpoint exists it
-> calls the server instead — the window itself does not change.
+### How the window reaches the server — the drop folder, and nothing else
+
+Audi is going with the **drop folder**. The window never connects to the SCCM
+server, and the server never accepts a connection.
+
+```
+packager's PC                    a plain file share                the SCCM server
+┌───────────────────┐            ┌────────────────────┐           ┌──────────────────┐
+│ packager window   │  writes a  │  \New              │  reads    │ scheduled task   │
+│ no SCCM rights    │ ─ file ──▶ │  \Working          │ ◀──────── │ runs as the      │
+│ no SCCM console   │            │  \Done  \Failed    │ ─ writes  │ service account  │
+│ waits for a file  │ ◀───────── │  <job>.result.xml  │  result ▶ │ does all the work│
+└───────────────────┘            └────────────────────┘           └──────────────────┘
+```
+
+Two consequences worth stating plainly:
+
+- **No firewall rule and no inbound port.** Traffic goes to a file share both
+  sides already reach. Nothing is opened into the secure zone.
+- **No person reaches the server at all.** The job file carries no user name,
+  and the server does not work one out either — it does not read the file's
+  owner. Every record on the SCCM side is keyed by **job ID and RFC number**.
+  The link from RFC to person lives in Audi's change system, where it belongs.
+
+The live-connection option (a WinRM/JEA endpoint on the site server) was
+designed and costed but is **not** being built. Its scripts are parked under
+`Server\_NotUsed-LiveConnection\` so nobody installs them by mistake.
+
+> **Testing without any of this:** the window's **Preview on this PC** button
+> runs the whole plan locally through the dry-run provider. No server, no share,
+> no rights. **Integrate** and **Remove** are the ones that use the drop folder.
 
 ---
 
@@ -71,7 +98,7 @@ secure zone. A config change therefore never means redistributing the client.
 # if launching from a plain console, WPF needs -STA
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Client\Start-AudiSwClient.ps1
 
-# all 132 tests - no SCCM, no network, no rights needed
+# all 185 tests - no SCCM, no network, no rights needed
 .\Tests\Invoke-AllTests.ps1
 
 # check the window's wiring without opening it
@@ -95,8 +122,13 @@ Test-AudiSwPrerequisite  -Plan $plan -Provider (New-AudiSccmProvider)
 On the server, once (see DEPLOYMENT.md for the parameters):
 
 ```powershell
-.\Server\Install-AudiSwEndpoint.ps1    -Gmsa '...' -OperatorGroup '...' -WhatIf   # option A
-.\Server\Install-AudiSwDropWatcher.ps1 -Gmsa '...' -DropFolder '...'    -WhatIf   # option B
+.\Server\Install-AudiSwDropWatcher.ps1 -Gmsa '...' -DropFolder '\\server\SwIntegration-Inbox$' -WhatIf
+```
+
+To see what the collector would do — no scheduled task, no SCCM, nothing changed:
+
+```powershell
+.\Server\Watch-AudiSwDropFolder.ps1 -DropFolder '\\server\SwIntegration-Inbox$' -DryRun -Verbose
 ```
 
 ---
@@ -123,12 +155,16 @@ content distribution — all declared in `Defaults.xml`.
 | Failure | the real error is reported; a failed run rolls back what it created, newest first |
 | Retry | only faults matching `TransientErrors` are retried, so a real error is not buried |
 | Distribution | polls until content actually reaches the distribution points, with a timeout |
-| Audit | per-job folder with a log and `job.json` naming **requester** and **executor** |
+| Audit | per-job folder on the server with a log and `job.json`, keyed by **job ID** and **RFC**, naming only the service account |
+| Privacy | **no real person's name reaches the SCCM side** — not an SCCM object, not the log, not the job record, not the result file |
+| RFC | required by default, because with no name kept it is the only route back to the requester |
 | Concurrency | a package lock stops two operators integrating the same package at once |
+| Transport | job and result files, XSD-validated both ways; a half-written file can never be collected |
+| Identity | one identity only: the shared service account. The plan has no requester field for anything to log |
 
 ## Tests
 
-`.\Tests\Invoke-AllTests.ps1` — 132 checks, none needing SCCM. Several guard
+`.\Tests\Invoke-AllTests.ps1` — 185 checks, none needing SCCM. Several guard
 against defects in the tool being replaced:
 
 - `ADO_ADOBE_Reader_x64_...` must survive intact — the old text replacement turned
@@ -139,6 +175,10 @@ against defects in the tool being replaced:
 - no two environments may share a content share or a security scope
 - a deliberately broken config file must be **rejected**
 - a failed run must report failure — the old tool always showed `"Done."`
+- **nothing the server writes may name a person** — checked on the real log,
+  `job.json` and result file, not just on the code that writes them
+- a config file that tries to reintroduce `{requester}` must be rejected
+- a job with no RFC must be refused, since the RFC is the only audit link left
 
 ## Open items
 

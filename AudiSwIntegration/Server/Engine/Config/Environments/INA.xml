@@ -17,6 +17,10 @@
            account="deaudi00\svc-swintegration"
            allowedGroup="deaudi00\G-Audi-SwIntegration-Operators"/>
 
+  <Transport mode="DropFolder"
+             dropFolder="\\audiinsv0259.in.audi.vwg\SwIntegration-Inbox$"
+             resultTimeoutMinutes="30"/>
+
   <Content share="\\audiinsv0259.in.audi.vwg\sccm-store\pkg\prod"
            distributionPointGroup="INA-DP-Group all"/>
 

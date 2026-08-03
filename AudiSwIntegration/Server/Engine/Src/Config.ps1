@@ -138,6 +138,18 @@ function Get-AudiDefaults {
         }
     }
 
+    # No personal name may reach an SCCM object - checked here, at load, so a
+    # later edit on the server cannot reintroduce one silently.
+    # @() around the call: an empty array returned from a function is unrolled to
+    # $null, and $null.Count throws under StrictMode
+    $offending = @(Test-AudiSccmCommentTemplate -Template $d.Comments.collection)
+    if ($offending.Count -gt 0) {
+        throw ("Defaults.xml is not acceptable: the collection comment contains " +
+               (($offending | ForEach-Object { "{$_}" }) -join ', ') +
+               ". No personal name may be written to an SCCM object. Use {jobId} instead - " +
+               "the tool's log on the server maps a job ID back to the person who asked.")
+    }
+
     $script:AudiDefaultsCache = [pscustomobject]@{
         SchemaVersion    = $d.schemaVersion
         Commands         = $d.Commands
@@ -146,6 +158,7 @@ function Get-AudiDefaults {
         Detection        = $d.Detection
         DeploymentType   = $d.DeploymentType
         Comments         = $d.Comments
+        Audit            = [pscustomobject]@{ RequireRfc = [bool]::Parse($d.Audit.requireRfc) }
         OperatingSystems = $osList
         PackageName      = [pscustomobject]@{
             Separator         = $d.PackageName.separator
@@ -222,6 +235,13 @@ function Get-AudiEnvironment {
         SiteCode          = $e.Site.code
         SiteServer        = $e.Site.server
         Service           = $e.Service
+        # How the window reaches this environment. Flow 2 = DropFolder: the
+        # window never connects to the server, it leaves a file in a share.
+        Transport         = [pscustomobject]@{
+            Mode                 = $e.Transport.mode
+            DropFolder           = $(if ($e.Transport.HasAttribute('dropFolder'))           { $e.Transport.dropFolder }                 else { '' })
+            ResultTimeoutMinutes = $(if ($e.Transport.HasAttribute('resultTimeoutMinutes')) { [int]$e.Transport.resultTimeoutMinutes } else { 30 })
+        }
         ContentShare      = $e.Content.share
         DistributionPointGroup = $e.Content.distributionPointGroup
         ApplicationFolder = $e.ApplicationFolder
@@ -299,6 +319,22 @@ function Split-AudiPackageName {
 
     $result['PackageName'] = $PackageName
     return [pscustomobject]$result
+}
+
+function Test-AudiSccmCommentTemplate {
+    <#  Enforces Audi's privacy requirement: no personal name may be written to
+        an SCCM object.
+
+        The comment templates live in Defaults.xml, which is the right place for
+        them - but that also means someone could edit {requester} back in on the
+        server, long after we have gone. This is checked every time the config
+        loads, so that edit fails loudly instead of quietly stamping names onto
+        collections. Returns the offending placeholders, empty if clean.  #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Template)
+
+    $banned = @('requester', 'user', 'userName', 'operator')
+    return @($banned | Where-Object { $Template -match ('\{' + [regex]::Escape($_) + '\}') })
 }
 
 function Expand-AudiTemplate {
@@ -440,7 +476,6 @@ function Get-AudiIntegrationPlan {
     param(
         [Parameter(Mandatory = $true)][string]$PackageName,
         [Parameter(Mandatory = $true)][string]$EnvironmentCode,
-        [string]$Requester = "$env:USERDOMAIN\$env:USERNAME",
         [string]$Rfc = '',
         [string]$JobId,
         [string]$Root,
@@ -456,13 +491,24 @@ function Get-AudiIntegrationPlan {
     $parts    = Split-AudiPackageName -PackageName $PackageName -Root $Root
     $branding = Get-AudiBrandingKey -PackageName $PackageName -Root $Root
 
-    $tokens = @{
-        package   = $PackageName
-        jobId     = $JobId
-        requester = $Requester
-        rfc       = $(if ($Rfc) { $Rfc } else { 'none' })
+    # Tokens available to text the tool writes.
+    #
+    # THERE IS NO REQUESTER ANYWHERE IN THIS TOOL, BY REQUIREMENT.
+    # Audi does not want a real person's name to reach the SCCM side at all -
+    # not on an SCCM object, and not in the tool's own log on the server. The
+    # plan therefore has no Requester field for anything to read, and the name
+    # is not offered as a placeholder. The RFC number is the audit link: it is
+    # written to every object, and Audi's change system already knows which
+    # person that RFC belongs to.
+    #
+    # Test-AudiSccmCommentTemplate rejects a config file that tries to put
+    # {requester} back, so this cannot be undone by an edit on the server.
+    $sccmTokens = @{
+        package = $PackageName
+        jobId   = $JobId
+        rfc     = $(if ($Rfc) { $Rfc } else { 'none' })
     }
-    $collectionComment = Expand-AudiTemplate -Template $defaults.Comments.collection -Values $tokens
+    $collectionComment = Expand-AudiTemplate -Template $defaults.Comments.collection -Values $sccmTokens
 
     $collections = @($env.Collections | ForEach-Object {
         [pscustomobject]@{
@@ -479,7 +525,6 @@ function Get-AudiIntegrationPlan {
 
     return [pscustomobject]@{
         JobId           = $JobId
-        Requester       = $Requester
         Executor        = $env.Service.account
         Rfc             = $Rfc
         Environment     = $env.Code

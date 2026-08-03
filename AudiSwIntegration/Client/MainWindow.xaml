@@ -160,10 +160,10 @@
         <ColumnDefinition Width="*"/>
         <ColumnDefinition Width="Auto"/>
       </Grid.ColumnDefinitions>
-      <Button   Grid.Column="0" x:Name="btnPreview"  Content="Preview (no changes)"  MinWidth="170"/>
-      <Button   Grid.Column="1" x:Name="btnIntegrate" Content="Integrate"/>
-      <Button   Grid.Column="2" x:Name="btnRemove"    Content="Remove"/>
-      <CheckBox Grid.Column="4" x:Name="chkDryRun" Content="Dry run - make no changes" IsChecked="True" FontWeight="Bold"/>
+      <Button   Grid.Column="0" x:Name="btnPreview"  Content="Preview on this PC"  MinWidth="170" ToolTip="Rehearses the whole job locally. Nothing is sent to the server."/>
+      <Button   Grid.Column="1" x:Name="btnIntegrate" Content="Integrate" ToolTip="Puts the job in the drop folder. The server picks it up and does the work."/>
+      <Button   Grid.Column="2" x:Name="btnRemove"    Content="Remove" ToolTip="Puts a removal job in the drop folder."/>
+      <CheckBox Grid.Column="4" x:Name="chkDryRun" Content="Dry run - let the server rehearse only" IsChecked="True" FontWeight="Bold"/>
     </Grid>
 
     <!-- ================================================== progress -->

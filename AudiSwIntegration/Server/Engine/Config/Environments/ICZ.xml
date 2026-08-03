@@ -21,6 +21,11 @@
            account="deaudi005t\svc-swintegration"
            allowedGroup="deaudi005t\G-Audi-SwIntegration-Operators"/>
 
+  <!-- Direct today. Switch mode to DropFolder and fill in dropFolder to use flow 2. -->
+  <Transport mode="DropFolder"
+             dropFolder="\\audiinsv1059.in.audi.vwg5t\SwIntegration-Inbox$"
+             resultTimeoutMinutes="30"/>
+
   <Content share="\\audiinsv1059.in.audi.vwg5t\sccm-store\pkg\prod"
            distributionPointGroup="Test"/>
 

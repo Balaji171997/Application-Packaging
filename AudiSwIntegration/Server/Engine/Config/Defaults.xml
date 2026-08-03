@@ -46,10 +46,29 @@
                      value="Windows/All_x64_Windows_11_and_higher_Clients" selectedByDefault="false"/>
   </OperatingSystems>
 
-  <!-- The old tool stamped every object with "created by manual MCB script".
-       These carry the audit trail instead: who asked, and which job it was. -->
-  <Comments collection="Created by the SCCM Integration Tool | job {jobId} | requested by {requester} | RFC {rfc}"
-            application="Created by the SCCM Integration Tool | job {jobId} | requested by {requester} | RFC {rfc}"/>
+  <!-- Stamped onto every collection the tool creates. The old tool wrote
+       "created by manual MCB script", which said nothing useful.
+
+       NO PERSONAL NAME APPEARS HERE, BY REQUIREMENT.
+       Audi does not want the requester's name written to any SCCM object. The
+       job ID is the link instead: it is recorded here, and the tool's own log
+       on the server maps that job ID back to the person who asked. Anyone
+       auditing an object in the console looks up the job ID.
+
+       {requester} is deliberately NOT available as a placeholder. Putting it
+       back into this template does not work - the tool rejects the config file
+       at load with an explanation, so the rule cannot be undone by an edit on
+       the server. Available placeholders: {package} {jobId} {rfc} -->
+  <Comments collection="Created by the SCCM Integration Tool | job {jobId} | RFC {rfc}"/>
+
+  <!-- No personal name is kept anywhere on the SCCM side, so the RFC number is
+       the ONLY route from an object in the console back to the person who asked
+       for it - through Audi's change system, which is where that link belongs.
+
+       That makes an empty RFC an audit gap rather than a cosmetic omission, so
+       jobs without one are refused. Set requireRfc="false" only if Audi accepts
+       changes that can never be traced to a requester. -->
+  <Audit requireRfc="true"/>
 
   <!-- Package name layout, e.g. INA_AUDI_DummyTest_x86_1.0_0001_MUL
        Site and Publisher are counted from the front; architecture, version,

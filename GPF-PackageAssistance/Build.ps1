@@ -843,6 +843,93 @@ $script:PBFormatterSettings = @{
         PSUseConsistentWhitespace  = @{ Enable = $true; CheckInnerBrace = $true; CheckOpenBrace = $false; CheckOpenParen = $true; CheckOperator = $true; CheckPipe = $true; CheckSeparator = $true }
     }
 }
+# HEADS-UP notices: the FEW important things the packager must SEE after a build (the GUI shows them in a popup), kept
+# SEPARATE from the long "review" list nobody reads. Reset per build (by the GUI), appended by the engine, read + shown.
+$script:GpfNotices = New-Object System.Collections.Generic.List[string]
+function Reset-GpfNotices { $script:GpfNotices = New-Object System.Collections.Generic.List[string] }
+function Add-GpfNotice   { param([string]$Text) if (-not $script:GpfNotices) { Reset-GpfNotices }; if ("$Text".Trim()) { [void]$script:GpfNotices.Add("$Text") } }
+function Get-GpfNotices  { if ($script:GpfNotices) { return @($script:GpfNotices) } return @() }
+
+# Classify a review line as MUST-SEE (heads-up popup) vs nice-to-know (stays in the review list only). CRITICAL = the
+# package could be BROKEN or a rule needs a human decision: a "## REVIEW:" fill-in, a missing install/uninstall command,
+# name-based predecessor detection that may not match the installed app, an architecture mismatch, or a source
+# type/structure mismatch. Everything else (snapshot-added cleanups, MST notes, style hints) is NOT promoted.
+function Test-GpfCriticalReview {
+    param([string]$Item)
+    if (-not $Item) { return $false }
+    return ($Item -match '(?i)(##\s*REVIEW:|\bREVIEW:|no\s+(un)?install(ation)?\s+command|cannot\s+(un)?install|detection\s+is\s+by\s+NAME|does\s+NOT\s+match\s+the\s+installed|real\s+ARP\s+DisplayName|architecture|Source\s+(TYPE|STRUCTURE)|MULTI-COMPONENT|CORRUPT)')
+}
+# Scan the just-built script + its findings and push the CRITICAL ones into the heads-up notices channel (the review list
+# still shows everything - this only PROMOTES the few must-see items to the popup). Deduped.
+function Add-CriticalNoticesFromScript {
+    param([string]$ScriptText, [bool]$IsPredecessor, [string]$NewProductCode)
+    if (-not $ScriptText) { return }
+    $found = New-Object System.Collections.Generic.List[string]
+    if (Get-Command Get-ReviewItems -EA SilentlyContinue)          { foreach ($r in @(Get-ReviewItems -ScriptText $ScriptText)) { [void]$found.Add("$r") } }
+    if (Get-Command Get-ScriptReviewFindings -EA SilentlyContinue) { foreach ($r in @(Get-ScriptReviewFindings -ScriptText $ScriptText -IsPredecessor $IsPredecessor -NewProductCode $NewProductCode)) { [void]$found.Add("$r") } }
+    $seen = @{}
+    foreach ($r in $found) {
+        $t = "$r".Trim(); if (-not $t) { continue }
+        if ((Test-GpfCriticalReview -Item $t) -and -not $seen.ContainsKey($t)) { $seen[$t] = $true; Add-GpfNotice $t }
+    }
+}
+
+# Convert LEADING tabs to spaces (4 each) on every line. PSScriptAnalyzer (Invoke-Formatter) is NOT shipped in the packed
+# tool, so on a packager's machine the formatter is skipped and a stray TAB from the template/predecessor renders further
+# right than the surrounding space-indented lines (finding: the "...is successful." log sat further right than the install
+# command - the command was 7 spaces, the log a TAB+3, and a TAB renders as 8 in ISE). Tab -> 4 spaces aligns them (TAB+3
+# -> 7 spaces = the command's indent). SAFE: only the LEADING whitespace run is touched, and here-string interiors
+# (@"..."@ / @'...'@) are left byte-for-byte intact (their whitespace is part of the string). No-op when Invoke-Formatter
+# already ran (it emits spaces) or when there are no tabs.
+function Convert-LeadingTabsToSpaces {
+    param([string]$Text)
+    if (-not $Text -or ($Text.IndexOf("`t") -lt 0)) { return $Text }
+    $lines = $Text -split "`r?`n", -1
+    $inHere = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $ln = $lines[$i]
+        if ($inHere) {
+            # a here-string terminator ("@ or '@) must sit at the START of the line (PowerShell rule)
+            if ($ln -match '^[ \t]*("@|''@)') { $inHere = $false }
+            continue                                   # never touch here-string interior / terminator line
+        }
+        if ($ln -match '@("|'')\s*$') { $inHere = $true; continue }   # a here-string opens at end of this line
+        $m = [regex]::Match($ln, '^[ \t]+')
+        if ($m.Success -and ($m.Value.IndexOf("`t") -ge 0)) {
+            $lines[$i] = ($m.Value -replace "`t", '    ') + $ln.Substring($m.Length)
+        }
+    }
+    return ($lines -join "`r`n")
+}
+# Align the TEMPLATE scaffold log lines ("Start <Action> ..." and "<Action> of ... [is successful]." with -Source
+# $adtSession.DeployAppScriptFriendlyName) to the indent of the install/uninstall/repair COMMAND next to them, so the
+# log pair and the command it wraps share ONE indent. Needed because a changed template can leave the "successful" log
+# further right than the command (finding: that line "went too much further"). SAFE: ONLY these recognisable template
+# scaffold log lines are re-indented - never the command, never predecessor/custom code, never here-string interiors.
+function Align-GpfScaffoldLogs {
+    param([string]$Text)
+    if (-not $Text) { return $Text }
+    $scaffRe = "(?i)^[ \t]*Write-ADTLogEntry\b.*-Message\s+['`"](?:Start\s+(?:Installation|Uninstallation|Repair)\b|(?:Installation|Uninstallation|Repair)\s+of\b).*-Source\s+\`$adtSession\.DeployAppScriptFriendlyName"
+    $cmdRe   = '(?i)^[ \t]*(?:\$\w+\s*=\s*)?(?:Start-ADTMsiProcess|Start-ADTProcess|Execute-MSI|Execute-Process|Start-ADTMspProcess)\b'
+    $lines = $Text -split "`r?`n", -1
+    $inHere = $false
+    $isCmd  = { param($l) $l -match $cmdRe }
+    $isCode = { param($l) $t = "$l".Trim(); $t -and ($t -notmatch '^#') -and ($t -notmatch '^[{}()]+$') -and ($l -notmatch $scaffRe) }
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($inHere) { if ($lines[$i] -match '^[ \t]*("@|''@)') { $inHere = $false }; continue }
+        if ($lines[$i] -match '@("|'')\s*$') { $inHere = $true; continue }
+        if ($lines[$i] -notmatch $scaffRe) { continue }
+        # prefer the nearest install COMMAND's indent (within 5 lines, down then up); else the nearest plain code line.
+        $target = $null
+        foreach ($pick in @($isCmd, $isCode)) {
+            for ($j = $i + 1; $j -lt [Math]::Min($lines.Count, $i + 6); $j++) { if (& $pick $lines[$j]) { $target = [regex]::Match($lines[$j], '^[ \t]*').Value; break } }
+            if ($null -eq $target) { for ($j = $i - 1; $j -ge [Math]::Max(0, $i - 6); $j--) { if (& $pick $lines[$j]) { $target = [regex]::Match($lines[$j], '^[ \t]*').Value; break } } }
+            if ($null -ne $target) { break }
+        }
+        if ($null -ne $target) { $lines[$i] = $target + $lines[$i].TrimStart() }
+    }
+    return ($lines -join "`r`n")
+}
 function Format-OutputScript {
     param([string]$Text)
     # Strip a stray leading BOM character (U+FEFF): Read-FileSmart decodes the BOM'd
@@ -861,6 +948,12 @@ function Format-OutputScript {
         try   { $Text = Invoke-Formatter -ScriptDefinition $Text -Settings $script:PBFormatterSettings }
         catch { Write-Log "Invoke-Formatter failed; using light cleanup. $($_.Exception.Message)" Warning }
     }
+    # Always normalise leading tabs -> spaces (packager machines have no PSScriptAnalyzer, so the formatter above is
+    # skipped there and a stray tab would render further right than the space-indented lines around it).
+    $Text = Convert-LeadingTabsToSpaces -Text $Text
+    # Align the template's "Start/…successful" scaffold log lines to the install command's indent (a changed template can
+    # leave the "successful" log further right than the command).
+    $Text = Align-GpfScaffoldLogs -Text $Text
     # GPF house style: the v4 "## MARK: <Phase>" fences are the ONLY section banners (matches their hand-authored
     # packages, e.g. Freia). The template also carries the older "#*====PHASE BEGIN/END====" markers, used purely as
     # injection anchors during the build; strip them from the FINAL output so the script isn't double-bannered
@@ -881,12 +974,20 @@ function Format-OutputScript {
         # Package-payload copies ($dirFiles/DirFiles/SupportFiles/ScriptDirectory) always exist and are left alone.
         # NB: no "$" line-end anchor - in multiline mode "$" sits before \n with the \r in between (CRLF), so it only
         # matched the final line. "[^\r\n]*" naturally stops at the line end and TrimEnd() drops trailing whitespace.
-        $Text = [regex]::Replace($Text, '(?im)^([ \t]*)(Copy-ADTFile[ \t]+-Path[ \t]+(?<src>"[^"\r\n]*"|''[^''\r\n]*'')[^\r\n]*)',
+        $Text = [regex]::Replace($Text, '(?im)^([ \t]*)(Copy-ADT(?:File|Folder)[ \t]+-Path[ \t]+(?<src>"[^"\r\n]*"|''[^''\r\n]*'')[^\r\n]*)',
             [System.Text.RegularExpressions.MatchEvaluator]{
                 param($m)
                 $src = $m.Groups['src'].Value
                 if ($src -notmatch '(?i)\$\(?\$?env\w+') { return $m.Value }                       # not an external $env source
                 if ($src -match '(?i)dirfiles|supportfiles|scriptdirectory') { return $m.Value }   # package payload - always present
+                # ALREADY GUARDED: a predecessor (v4.1.5+) may already wrap this copy in an OUTER "If (Test-Path -Path
+                # <same src>) { ... }", with the bare Copy on its own line inside. Adding a second Test-Path here would
+                # DOUBLE the guard (finding: "Test-Path added twice"). If the lines just above already Test-Path the SAME
+                # source, leave the copy bare.
+                $before = $Text.Substring(0, $m.Index)
+                $prev = (($before -split "\r?\n") | Select-Object -Last 3) -join "`n"
+                $srcInner = "$src".Trim('"', "'")
+                if (($prev -match '(?i)Test-Path') -and ($prev -match [regex]::Escape($srcInner))) { return $m.Value }
                 $m.Groups[1].Value + "if (Test-Path -Path $src) { " + $m.Groups[2].Value.TrimEnd() + ' }'
             })
     }
@@ -1764,10 +1865,10 @@ function Build-FreshScript {
     }
     $out = Set-SessionField $out 'AppScriptDate'   (Get-Date -Format 'yyyy-MM-dd')
     $out = Set-SessionField $out 'AppScriptAuthor' (Format-AuthorName "$($NewPkg.Author)")
-    # GPF: InstallTitle is filled explicitly as 'Vendor AppName Version' (their house style; MTB leaves the
-    # template default so PSADT composes it at runtime).
+    # GPF: InstallTitle is filled explicitly (their house style; MTB leaves the template default). #13: VW (G1V) shows
+    # vendor "Volkswagen" in the title only; and when Vendor==AppName the name is not repeated. Brand-aware helper.
     if ((Get-PBBrand -Path 'Name' -Default 'MTB') -eq 'GPF') {
-        $out = Set-SessionField $out 'InstallTitle' ("$($NewPkg.Vendor) $($NewPkg.AppName) $($NewPkg.Version)".Trim())
+        $out = Set-SessionField $out 'InstallTitle' (Get-GpfInstallTitle -NewPkg $NewPkg -Brand (Get-GpfTargetBrand -NewPkg $NewPkg))
     }
     # Auto-fill required disk space (MB) from the source payload size when provided.
     if ($NewPkg.FreeSpace) { $out = Set-SessionValue -Text $out -Field 'FreeSpace' -Value "'$($NewPkg.FreeSpace)'" }
@@ -1819,6 +1920,10 @@ function Build-FreshScript {
     $out = Set-GpfWrapperDefaults -Text $out -NewPkg $NewPkg -IsMsi ([bool]($NewPkg.ProductCode -or $NewPkg.MsiFileName))
     # Final enforcement of the GPF SoftIdent convention (wrapper PLAIN, x86-only tokened copy in CUSTOM VARIABLES).
     $out = Set-GpfSoftIdentTwoPlace -Text $out -Arch "$($NewPkg.Arch)" -Version "$($NewPkg.Version)"
+    # BRAND RULES: Audi (INA) closes processes silently (ProcToClose -> ProcToCloseNonUI); Group (VWG) 34-char name gate.
+    $gpfBrand = Get-GpfTargetBrand -NewPkg $NewPkg
+    $out = Set-GpfProcToCloseNonUI -Text $out -Brand $gpfBrand
+    if ($gpfBrand -eq 'VWG') { $vwgLen = Get-GpfVwgNameLength -NewPkg $NewPkg; if ($vwgLen -gt 34) { Write-Log "Group (VWG) name is $vwgLen chars - exceeds the 34-character limit (Manufacturer+Product+Version+Language). Shorten the name." Warning } }
     return (Format-OutputScript -Text $out)
 }
 
@@ -2059,9 +2164,20 @@ function Build-PredecessorScript {
     $out = Set-SessionField $out 'AppScriptDate'   (Get-Date -Format 'yyyy-MM-dd')
     $out = Set-SessionField $out 'AppScriptAuthor' (Format-AuthorName "$($NewPkg.Author)")
     $out = [regex]::Replace($out, "(?m)(AppVersion\s*=\s*')[^']*(')", "`${1}$newVer`${2}")
-    # GPF: InstallTitle = 'Vendor AppName Version' (their house style)
+    # GPF: InstallTitle = 'Vendor AppName Version' (their house style). On REUSE, carry the predecessor's InstallTitle
+    # STYLE - specifically a trailing architecture suffix like " (x86)" / " (x64)" (finding: "take InstallTitle style
+    # from predecessor package if available"). The NEW vendor/app/version are used; only the parenthetical suffix is kept.
     if ((Get-PBBrand -Path 'Name' -Default 'MTB') -eq 'GPF') {
-        $out = Set-SessionField $out 'InstallTitle' ("$($NewPkg.Vendor) $($NewPkg.AppName) $newVer".Trim())
+        $predTitle  = [regex]::Match("$($Model.RawV4Content)", "(?im)InstallTitle\s*=\s*'([^']*)'").Groups[1].Value
+        $titleSuffix = [regex]::Match($predTitle, '\s*(\([^)]*\))\s*$').Groups[1].Value
+        $newTitle   = "$($NewPkg.Vendor) $($NewPkg.AppName) $newVer".Trim()
+        if ($titleSuffix) { $newTitle = "$newTitle $titleSuffix" }
+        $out = Set-SessionField $out 'InstallTitle' $newTitle
+        # HEADS-UP (#13/Point2): if the packager selected VW but this is a REUSE, the VW "Volkswagen" title rule is NOT
+        # applied - we keep the predecessor's own install title. Surface this prominently so the packager knows WHY.
+        if ((Get-GpfTargetBrand -NewPkg $NewPkg) -eq 'G1V') {
+            Add-GpfNotice ("VW 'Volkswagen' install-title rule was NOT applied: this is a predecessor REUSE, so the predecessor's install title was kept ('$newTitle'). The Volkswagen rule only applies to FRESH packages. Edit the InstallTitle by hand if you need it changed.")
+        }
     }
     if ($NewPkg.SoftIdent) {
         $out = Set-SessionValue -Text $out -Field 'SoftIdent' -Value (Format-BrandSoftIdent -Value "$($NewPkg.SoftIdent)" -Arch "$($NewPkg.Arch)")
@@ -2215,7 +2331,7 @@ function Build-PredecessorScript {
         # Flag-logic branding removal (team finding + gold standard): when the Uninstall function conditionally
         # uninstalls the predecessor's own exe (sets $flag=$true), the Post-Uninstall branding removal must be
         # GUARDED by If($flag) - not run unconditionally, and not left as a dead empty If($flag){}.
-        $out = Set-GpfFlagGuardedBranding -Text $out
+        $out = Set-GpfFlagGuardedBranding -Text $out -Model $Model
         # Reboot handler LAST in every section: after branding is finalised, move any carried Set-Reboot / soft-reboot
         # block to trail "## Branding Install / Set-Branding" (team rule: Set-Reboot is always the last statement).
         $out = Move-GpfRebootLast -Text $out
@@ -2226,6 +2342,10 @@ function Build-PredecessorScript {
     # Same SoftIdent convention on the REUSE path: a predecessor that hardcoded WoW6432Node (or carried the token in
     # the wrapper) is normalised to wrapper-PLAIN + x86-only tokened copy in CUSTOM APPLICATION VARIABLES.
     $out = Set-GpfSoftIdentTwoPlace -Text $out -Arch "$($NewPkg.Arch)" -Version "$($NewPkg.Version)"
+    # BRAND RULES (reuse): Audi (INA) closes processes silently (ProcToClose -> ProcToCloseNonUI); Group (VWG) name gate.
+    $gpfBrand = Get-GpfTargetBrand -NewPkg $NewPkg
+    $out = Set-GpfProcToCloseNonUI -Text $out -Brand $gpfBrand
+    if ($gpfBrand -eq 'VWG') { $vwgLen = Get-GpfVwgNameLength -NewPkg $NewPkg; if ($vwgLen -gt 34) { Write-Log "Group (VWG) name is $vwgLen chars - exceeds the 34-character limit (Manufacturer+Product+Version+Language). Shorten the name." Warning } }
     $out = Format-OutputScript -Text $out
     Write-Log "Built predecessor script: v$predVer -> v$newVer, installerSwap=$doInstallerSwap, uninstallPrev=$AddUninstallPrevious" Success
     return $out
@@ -2238,7 +2358,7 @@ function Build-PredecessorScript {
 # drops the empty guard and wraps the template's branding removal in If($flag). Only fires when the Uninstall
 # function actually sets $flag (packages that always remove branding are left unconditional).
 function Set-GpfFlagGuardedBranding {
-    param([string]$Text)
+    param([string]$Text, [hashtable]$Model)
     if ($Text -notmatch '(?im)^[ \t]*\$flag\s*=\s*\$true') { return $Text }
     $mk = if (Get-Command Get-PBMarkerSet -ErrorAction SilentlyContinue) {
         Get-PBMarkerSet -Content $Text | Where-Object { $_.F -eq 'PostUninstallCode' } | Select-Object -First 1
@@ -2249,11 +2369,19 @@ function Set-GpfFlagGuardedBranding {
     $body = $m.Groups[2].Value
     if ($body -notmatch '(?im)^[ \t]*Remove-Branding\b') { return $Text }   # nothing to guard
     if ($body -match '(?is)If\s*\(\s*\$flag\s*\)\s*\{[^}]*Remove-Branding') { return $Text }   # already guarded
+    # MATCH THE PREDECESSOR (finding: don't add the If($flag) guard unnecessarily). Only WRAP the branding when the
+    # PREDECESSOR itself guarded its branding with If($flag); if the predecessor had branding BARE, leave it bare here.
+    # The branding/reboot ORDER is untouched (that is Move-GpfRebootLast's job) - we only decide whether to add the guard.
+    # Always drop a dead empty "If ($flag) { }" either way.
+    $predGuarded = $Model -and ("$($Model.RawV4Content)" -match '(?is)If\s*\(\s*\$flag\s*\)\s*\{[^}]*Remove-Branding')
     # 1. drop a dead empty "If ($flag) { }"
     $body = [regex]::Replace($body, '(?is)[ \t]*If\s*\(\s*\$flag\s*\)\s*\{\s*\}[ \t]*\r?\n?', '')
-    # 2. wrap the template's "## Branding Uninstall" + "Remove-Branding" pair in an If($flag) guard (Invoke-Formatter re-indents).
-    $body = [regex]::Replace($body, '(?im)^[ \t]*##[ \t]*Branding Uninstall[^\r\n]*\r?\n[ \t]*Remove-Branding\b[^\r\n]*',
-        [System.Text.RegularExpressions.MatchEvaluator]{ param($mm) "If (`$flag)`r`n{`r`n    ## Branding Uninstall`r`n    Remove-Branding`r`n}" })
+    # 2. wrap the template's "## Branding Uninstall" + "Remove-Branding" pair in an If($flag) guard ONLY when the
+    #    predecessor guarded it (Invoke-Formatter re-indents).
+    if ($predGuarded) {
+        $body = [regex]::Replace($body, '(?im)^[ \t]*##[ \t]*Branding Uninstall[^\r\n]*\r?\n[ \t]*Remove-Branding\b[^\r\n]*',
+            [System.Text.RegularExpressions.MatchEvaluator]{ param($mm) "If (`$flag)`r`n{`r`n    ## Branding Uninstall`r`n    Remove-Branding`r`n}" })
+    }
     return $Text.Remove($m.Index, $m.Length).Insert($m.Index, $m.Groups[1].Value + $body + $m.Groups[3].Value)
 }
 

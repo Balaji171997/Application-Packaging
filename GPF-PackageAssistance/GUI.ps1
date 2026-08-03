@@ -78,7 +78,7 @@ if (Test-Path $script:AvalonDll) {
 
 $script:State = @{
     # Step 1 (Info): identity + predecessor + source
-    PkgName=''; Parsed=$null; Ritm=''
+    PkgName=''; Parsed=$null; Ritm=''; TargetBrand='VWG'
     PredecessorPath=$null; PredecessorModel=$null; AddUninstallPrevious=$false; ReusePkg=$null
     SourceFolder=$null; Resolved=$null; ChosenInstallers=@(); LooseFiles=$false
     ZipPayload=$null; ZipInstallers=@()   # GPF: a Sources\Files\*.zip kept VERBATIM + the installer entries selected inside it
@@ -289,6 +289,12 @@ function Show-InstallerPicker {
           <TextBox x:Name="TxtPkg" Height="26" FontFamily="Consolas"/>
           <TextBlock x:Name="LblRitmCaption" Text="RITM ID" Foreground="#E7E9ED" Margin="0,8,0,4"/>
           <TextBox x:Name="TxtRitm" Height="26" Width="240" HorizontalAlignment="Left" FontFamily="Consolas"/>
+          <TextBlock Text="Target brand" Foreground="#E7E9ED" Margin="0,8,0,4"/>
+          <ComboBox x:Name="CmbBrand" Height="26" Width="240" HorizontalAlignment="Left" ToolTip="Which brand this package is for. Sets the outgoing prefix and the brand-specific rules (Audi: silent process close; VW: Volkswagen install title; Group: 34-character name check). Auto-set from the request; change it if needed.">
+            <ComboBoxItem Content="Audi (INA)" Tag="INA"/>
+            <ComboBoxItem Content="VW (G1V)" Tag="G1V"/>
+            <ComboBoxItem Content="Group (VWG)" Tag="VWG"/>
+          </ComboBox>
 
           <TextBlock x:Name="LblParsed" Foreground="#6A9955" TextWrapping="Wrap" Margin="0,8,0,8"/>
 
@@ -825,7 +831,7 @@ foreach ($n in 'N1','N2','N3','N4','P1','P2','P3','P4','TabsP4','TxtPkg','LblPar
                 'TxtTsMachine','TxtTsAppName','BtnLogDiscovery','BtnLogEnforce','BtnLogPackage','BtnTsShots','BtnRemoteShots',
                 'CmbTsColl','BtnTsShowMembers','BtnTsCheckState','BtnTsReboot','LstTsMembers',
                 'TxtMoveAppName','BtnMoveToTest','BtnMoveToDev',
-                'LblPred','LblSrc','LblInst','TxtType','TxtPC','ChkKeepShortcut','ChkKeepStartup','ChkKeepStray','ChkKeepRunKey','BtnMsiPropsView','BtnMatchPredMst','LblMatchMst','BtnBack','BtnNext','TxtRitm',
+                'LblPred','LblSrc','LblInst','TxtType','TxtPC','ChkKeepShortcut','ChkKeepStartup','ChkKeepStray','ChkKeepRunKey','BtnMsiPropsView','BtnMatchPredMst','LblMatchMst','BtnBack','BtnNext','TxtRitm','CmbBrand',
                 'LblRitmCaption','TabIntegration','TabTesting','TabDevTest','PnlOutPrefix','CmbOutPrefix',
                 'PnlMstFlags','PnlMsiProps','TxtMsiProps','ChkGenerateMst',
                 'LblExeParams','PnlExeParams','TxtInstArgs','TxtUninstArgs','PnlBundled','BtnBundledMsi','BtnCaptureMsi','LblBundled','PnlSnapshot','BtnSnapshot','LblSnapshot','PnlPerUser','CmbPerUser','LblPerUser','PnlKbHint','LblKbConf','LblKbArgs','LblKbNote','BtnProbeHelp','LblKbSrc','BtnKbUse','LblKbUninst','BtnKbUseUninst','PnlKbUninst','PnlLoose','ChkArp','ChkLooseShortcut','TxtLooseTargets',
@@ -848,14 +854,9 @@ try {
     if ($LblRitmCaption -and $onl -and $onl -ne 'RITM') { $LblRitmCaption.Text = "$onl number" }
     if (-not (Test-PBFeature 'Publish')) { foreach ($tb in @($TabIntegration, $TabDevTest)) { if ($tb) { $tb.Visibility = 'Collapsed' } } }
     if (-not (Test-PBFeature 'Sccm'))    { if ($TabTesting) { $TabTesting.Visibility = 'Collapsed' } }
-    if ($CmbOutPrefix -and (Get-Command Get-GpfPrefixChoices -EA SilentlyContinue)) {
-        $choices = @(Get-GpfPrefixChoices)
-        if ($choices.Count) {
-            foreach ($c in $choices) { [void]$CmbOutPrefix.Items.Add("$($c.Prefix) - $($c.Label)") }
-            $CmbOutPrefix.SelectedIndex = 0
-            if ($PnlOutPrefix) { $PnlOutPrefix.Visibility = 'Visible' }
-        }
-    }
+    # The separate "outgoing prefix" dropdown is SUPERSEDED by the Step-1 Target-brand dropdown - the outgoing folder
+    # prefix (INA_/VWG_/G1V_) now comes straight from that selection ($script:State.TargetBrand). Keep PnlOutPrefix hidden.
+    if ($PnlOutPrefix) { $PnlOutPrefix.Visibility = 'Collapsed' }
 } catch { Write-Log "Brand UI init: $($_.Exception.Message)" Warning }
 
 # Visual hierarchy: give each Step-4 tab ONE accented PRIMARY action so a junior sees the main button at a glance.
@@ -959,6 +960,7 @@ function Populate-Step1 {
     try {
         if ($TxtPkg.Text  -ne [string]$script:State.PkgName) { $TxtPkg.Text  = [string]$script:State.PkgName }
         if ($TxtRitm.Text -ne [string]$script:State.Ritm)    { $TxtRitm.Text = [string]$script:State.Ritm }
+        Sync-BrandCombo
         $p = $script:State.Parsed
         if ($p -and $p.IsValid) {
             $LblParsed.Text = "Vendor=$($p.Vendor)  App=$($p.AppName)  Arch=$($p.Arch)  Ver=$($p.Version)  Lang=$($p.Lang)"
@@ -1137,6 +1139,17 @@ function Populate-Step3 {
         if (-not $script:State.ScriptText) { $script:State.ScriptText = Build-Step3Script }
         if ($script:AeEditor.Text -ne [string]$script:State.ScriptText) { $script:AeEditor.Text = [string]$script:State.ScriptText }
         Update-Anchors
+        # HEADS-UP popup: show the few important build notices ONCE per distinct set (not on every rebuild). This is the
+        # prominent, must-see channel - separate from the long "review" list that gets ignored.
+        if (Get-Command Get-GpfNotices -EA SilentlyContinue) {
+            $notices = @(Get-GpfNotices)
+            $sig = ($notices -join "`n")
+            if ($notices.Count -and $sig -ne "$($script:LastNoticeSig)") {
+                $script:LastNoticeSig = $sig
+                $body = ($notices | ForEach-Object { "-  $_" }) -join "`r`n`r`n"
+                [Windows.MessageBox]::Show("$body", 'Heads-up - please read', 'OK', 'Information') | Out-Null
+            }
+        }
         # Structural (parse) problems outrank source warnings - they mean the script is BROKEN.
         $struct = Test-ScriptStructure -Text ([string]$script:State.ScriptText)
         $warn = if ($struct) { "CORRUPT SCRIPT: $struct" } else { Get-SourceWarning }
@@ -1350,6 +1363,21 @@ function Replace-InstallerInChain {
 function Parse-Current {
     $name = $TxtPkg.Text.Trim()
     $script:State.PkgName = $name
+    # GPF name rules (finding): SPECIAL characters are not allowed, but a SPACE is fine (GPF app names may contain spaces);
+    # a space must NOT sit directly before or after an underscore (the "_" are the field separators). Allowed = letters,
+    # numbers, dot, dash, underscore and space; block anything else, and reject " _" / "_ ".
+    $badChars = @([regex]::Matches($name, '[^A-Za-z0-9._\- ]'))
+    if ($name -and ($badChars.Count -or ($name -match '\s_' ) -or ($name -match '_\s'))) {
+        $script:State.Parsed = @{ IsValid = $false; FullName = $name }
+        if ($badChars.Count) {
+            $uniq = (@($badChars | ForEach-Object { "'$($_.Value)'" } | Select-Object -Unique) -join ', ')
+            $LblParsed.Text = "Special character(s) not allowed in the package name: $uniq. Letters, numbers, dot, dash, underscore and spaces are fine. Please change the name."
+        } else {
+            $LblParsed.Text = "A space must not sit directly before or after an underscore ('_'). Remove the space next to the '_'. Please change the name."
+        }
+        $LblParsed.Foreground = '#F48771'
+        return $false
+    }
     $p = Parse-PackageName $name
     $script:State.Parsed = $p
     if ($p.IsValid) {
@@ -1923,6 +1951,7 @@ function Get-SourceWarning {
 function Build-Step3Script {
     # Assemble the script from current inputs onto the real blank v4 template
     # (predecessor fills the session block + authored code; fresh-fill when no predecessor).
+    if (Get-Command Reset-GpfNotices -EA SilentlyContinue) { Reset-GpfNotices }   # fresh heads-up notices for this build
     $p = $script:State.Parsed
     if (-not $p -or -not $p.IsValid) { return "# Enter a valid package name in Step 1 first (Vendor_App_Arch_Version-Release_Lang)." }
     $author = Get-AuthorName
@@ -1930,6 +1959,7 @@ function Build-Step3Script {
         Vendor=$p.Vendor; AppName=$p.AppName; Arch=$p.Arch; Lang=$p.Lang
         Revision=$p.Release; Version=$p.Version; FullName=$p.FullName
         ProductCode=$script:State.ProductCode; Ritm=$script:State.Ritm; Author=$author
+        TargetBrand=$script:State.TargetBrand   # Step-1 brand dropdown (INA=Audi / VWG=Group / G1V=VW) - drives brand rules
     }
     $ins = @($script:State.ChosenInstallers)
     # FreeSpace = max(installer payload, measured installed footprint from the snapshot, 150 MB floor). The snapshot
@@ -2083,8 +2113,13 @@ function Build-Step3Script {
         else { return "# Blank template not found (PSADT_Template\ or PSADT_Template.zip) and no predecessor to fall back to." }
     }
     try {
-        if ($model) { $script:State.ReusePkg = $newPkg; return (Build-PredecessorScript -Model $model -NewPkg $newPkg -Template $tpl -AddUninstallPrevious ([bool]$script:State.AddUninstallPrevious)) }
-        else        { $script:State.ReusePkg = $null; return (Build-FreshScript -NewPkg $newPkg -Template $tpl) }
+        if ($model) { $script:State.ReusePkg = $newPkg; $built = (Build-PredecessorScript -Model $model -NewPkg $newPkg -Template $tpl -AddUninstallPrevious ([bool]$script:State.AddUninstallPrevious)) }
+        else        { $script:State.ReusePkg = $null; $built = (Build-FreshScript -NewPkg $newPkg -Template $tpl) }
+        # PROMOTE the few must-see review items into the heads-up popup channel (the review list still shows everything).
+        if (Get-Command Add-CriticalNoticesFromScript -EA SilentlyContinue) {
+            Add-CriticalNoticesFromScript -ScriptText $built -IsPredecessor ([bool]$model) -NewProductCode "$($newPkg.ProductCode)"
+        }
+        return $built
     } catch { Write-Log "Step 3 build failed: $($_.Exception.Message)" Error; return "# Build failed: $($_.Exception.Message)" }
 }
 
@@ -2601,6 +2636,21 @@ $TxtRitm.add_TextChanged({
     $script:State.Ritm = $TxtRitm.Text.Trim()
     Invalidate-From 3                     # RITM is written into the script/docs => rebuild Step 3
 })
+# Target-brand dropdown: reflect the current State on the control, and on change re-apply the brand rules by rebuilding.
+function Sync-BrandCombo {
+    if (-not $CmbBrand) { return }
+    $want = "$($script:State.TargetBrand)".ToUpper(); if ($want -notin 'INA','VWG','G1V') { $want = 'VWG' }
+    foreach ($it in $CmbBrand.Items) { if ("$($it.Tag)".ToUpper() -eq $want) { if ($CmbBrand.SelectedItem -ne $it) { $CmbBrand.SelectedItem = $it }; break } }
+}
+$CmbBrand.add_SelectionChanged({
+    if ($script:Rehydrating) { return }
+    $tag = "$($CmbBrand.SelectedItem.Tag)".ToUpper()
+    if ($tag -in 'INA','VWG','G1V' -and $tag -ne "$($script:State.TargetBrand)") {
+        $script:State.TargetBrand = $tag
+        Invalidate-From 3                 # brand drives InstallTitle / ProcToClose / name rules => rebuild Step 3
+    }
+})
+Sync-BrandCombo
 
 # Warn if the EXACT package name (same version + release) already exists in the live share. Returns $true if
 # the user chose to STOP. Asked once per distinct name (shared by Find-predecessor and Next so it never nags twice).
@@ -5204,7 +5254,8 @@ $BtnNext.add_Click({
             if ($script:State.PredecessorModel) { $newPkg.PerUserMode = 'None'; $newPkg.UserFiles = @() }   # predecessor reuse -> no per-user staging (use snippets)
             if ($ins.Count -eq 1 -and $ins[0].Extension.ToLower() -eq '.msi') { $newPkg.MsiFileName = $ins[0].Name }
             # Brand outgoing prefix (GPF: the OUTPUT FOLDER gets INA_/VWG_/G1V_; the in-script AppFullName stays bare).
-            if ($CmbOutPrefix -and $CmbOutPrefix.SelectedItem) { $newPkg.OutPrefix = ("$($CmbOutPrefix.SelectedItem)" -split '\s+-\s+')[0].Trim() }
+            # Comes straight from the Step-1 Target-brand selection now (the separate prefix dropdown is retired).
+            $newPkg.OutPrefix = "$($script:State.TargetBrand)".Trim().ToUpper()
             $targets = @()
             if ($script:State.LooseShortcut -and $script:State.LooseTargets) {
                 $targets = @(($script:State.LooseTargets -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })

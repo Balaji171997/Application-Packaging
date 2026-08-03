@@ -162,6 +162,55 @@ function Test-GpfNameFuzzyMatch {
     return ($sim -ge $Threshold)
 }
 
+# TARGET BRAND for a GPF build - one of 'INA' (Audi), 'VWG' (Group), 'G1V' (VW). The Step-1 dropdown stores the choice in
+# $NewPkg.TargetBrand; if absent we auto-detect from a leading "<PREFIX>_" on the package name, else default to 'VWG'.
+function Get-GpfTargetBrand {
+    param($NewPkg)
+    $b = "$($NewPkg.TargetBrand)".Trim().ToUpper()
+    if ($b -in 'INA','VWG','G1V') { return $b }
+    $nm = "$($NewPkg.FullName)"; if (-not $nm) { $nm = "$($NewPkg.AppName)" }
+    $mm = [regex]::Match("$nm", '^(INA|VWG|G1V)_')
+    if ($mm.Success) { return $mm.Groups[1].Value.ToUpper() }
+    return 'VWG'
+}
+
+# InstallTitle for a FRESH GPF package (finding #13). Rules:
+#  - VW (G1V) only: the vendor shown in the title is "Volkswagen", not the real manufacturer (title ONLY - every other
+#    field keeps the real vendor).
+#  - ALL brands: when the real Vendor and AppName are identical, don't repeat it - keep a single name token.
+# Predecessor reuse does NOT use this (it carries the predecessor's own title + arch-suffix style).
+function Get-GpfInstallTitle {
+    param($NewPkg, [string]$Brand)
+    $vendor = "$($NewPkg.Vendor)".Trim(); $app = "$($NewPkg.AppName)".Trim(); $ver = "$($NewPkg.Version)".Trim()
+    $titleVendor = if ($Brand -eq 'G1V') { 'Volkswagen' } else { $vendor }
+    if ($vendor -and ($vendor -ieq $app)) { return ("$titleVendor $ver").Trim() }   # don't repeat identical vendor/app
+    return ("$titleVendor $app $ver").Trim()
+}
+
+# Audi (INA) only (finding #16): the processes the packager would close interactively must instead be closed SILENTLY -
+# move the wrapper's VWG_ProcToClose value into VWG_ProcToCloseNonUI and blank VWG_ProcToClose. No-op for other brands or
+# when ProcToClose is already empty. Idempotent.
+function Set-GpfProcToCloseNonUI {
+    param([string]$Text, [string]$Brand)
+    if ($Brand -ne 'INA' -or -not $Text) { return $Text }
+    $mC = [regex]::Match($Text, '(?im)^([ \t]*\[string\[\]\][ \t]*\$Global:VWG_ProcToClose\b[ \t]*=[ \t]*)(@\([^\r\n]*\)|''[^''\r\n]*''|"[^"\r\n]*")')
+    if (-not $mC.Success) { return $Text }
+    $val = $mC.Groups[2].Value
+    if ($val -match '^\s*@\(\s*\)\s*$' -or $val -match "^\s*(''|`"`")\s*$") { return $Text }   # nothing to move
+    # put the value into ProcToCloseNonUI (only if that line is currently empty), then blank ProcToClose
+    $Text = [regex]::Replace($Text, '(?im)^([ \t]*\[string\[\]\][ \t]*\$Global:VWG_ProcToCloseNonUI\b[ \t]*=[ \t]*)(@\(\s*\)|''\s*''|"\s*")',
+        [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $m.Groups[1].Value + $val })
+    $Text = $Text.Remove($mC.Groups[2].Index, $mC.Groups[2].Length).Insert($mC.Groups[2].Index, '@()')
+    return $Text
+}
+
+# Group (VWG) only (finding #14): Manufacturer + Product + Version + Language code must not exceed 34 characters (MECM
+# name-length limit for the Group brand). Returns the total length; the caller warns when it exceeds 34.
+function Get-GpfVwgNameLength {
+    param($NewPkg)
+    return (("$($NewPkg.Vendor)" + "$($NewPkg.AppName)" + "$($NewPkg.Version)" + "$($NewPkg.Lang)").Length)
+}
+
 # Predecessor candidates for a GPF build - same object shape as Get-PredecessorCandidates, but:
 #  1. the request's OWN Predecessor\ folder comes FIRST (authoritative - the team has NO live share access);
 #  2. the Outgoing scan tolerates the brand prefix + mangled revision in folder names;

@@ -712,65 +712,10 @@ function Convert-V3ToV4Content {
     $result = [regex]::Replace($result, '(?i)\$\(\$adtSession\.ScriptDirectory\)\\SupportFiles\b', '$($adtSession.DirSupportFiles)')
     $result = [regex]::Replace($result, '(?i)\$\(\$adtSession\.ScriptDirectory\)\\Files\b',        '$($adtSession.DirFiles)')
 
-    # 4b. Add-UGPermission -path X -<PermissionSwitch>
-    # The team-internal v3 helper Add-UGPermission accepted ONE of five
-    # permission shortcut switches: -Modify, -FullControl, -ReadAndExecute,
-    # -Read, -Write.  Target user was always the Users group (SID
-    # *S-1-5-32-545) and inheritance was always
-    # ObjectInherit,ContainerInherit.  The v4 standard equivalent is
-    # Set-ADTItemPermission with explicit -User, -Permission, -Inheritance.
-    #
-    # Before (v3):
-    #     Add-UGPermission -path "$envProgramdata\GT-SUITE_working_data" -Modify
-    #
-    # After (v4):
-    #     Set-ADTItemPermission -LiteralPath "$envProgramdata\GT-SUITE_working_data" `
-    #         -User '*S-1-5-32-545' -Permission Modify -Inheritance ObjectInherit,ContainerInherit
-    #
-    # Notes:
-    #   - We accept -path (v3 default), -Path, and -LiteralPath as aliases.
-    #   - The switch can be anywhere on the line after -path X.
-    #   - We preserve the line's original indent.
-    #   - Output is a single line; if the v4 call exceeds a reasonable
-    #     length the user can manually wrap it later.
-    $permSwitches = 'Modify|FullControl|ReadAndExecute|Read|Write'
-    # A path can be a comma-separated LIST: Add-UGPermission -Path "a","b" -FullControl (corpus shape). We capture the
-    # whole list and emit ONE Set-ADTItemPermission per path. Helper builds the per-path v4 lines.
-    $pathItem = '(?:"[^"]+"|''[^'']+''|\$\S+)'
-    $pathList = "$pathItem(?:\s*,\s*$pathItem)*"
-    $emitPerms = {
-        param($indent, $list, $permission)
-        $paths = [regex]::Matches($list, '"[^"]+"|''[^'']+''|\$\S+') | ForEach-Object { $_.Value }
-        ($paths | ForEach-Object { "${indent}Set-ADTItemPermission -LiteralPath $_ -User '*S-1-5-32-545' -Permission $permission -Inheritance ObjectInherit,ContainerInherit" }) -join "`r`n"
-    }
-    $rxUGPerm = '(?im)^(\s*)Add-UGPermission\s+(?:-LiteralPath|-Path|-path)\s+(' + $pathList + ')\s+-(' + $permSwitches + ')(?!\w)'
-    $result = [regex]::Replace($result, $rxUGPerm, {
-        param($m)
-        if ($ReportOnly) { $changes.Add("Shape: Add-UGPermission -$($m.Groups[3].Value) -> Set-ADTItemPermission") }
-        return (& $emitPerms $m.Groups[1].Value $m.Groups[2].Value $m.Groups[3].Value)
-    })
-    # Reverse switch order: -<Permission> first, then -path (some v3 packages bound params either way).
-    # No trailing \b - a closing quote is not a word char, so \b after a quoted path would never match.
-    $rxUGPermRev = '(?im)^(\s*)Add-UGPermission\s+-(' + $permSwitches + ')(?!\w)\s+(?:-LiteralPath|-Path|-path)\s+(' + $pathList + ')'
-    $result = [regex]::Replace($result, $rxUGPermRev, {
-        param($m)
-        if ($ReportOnly) { $changes.Add("Shape: Add-UGPermission -$($m.Groups[2].Value) (reverse order) -> Set-ADTItemPermission") }
-        return (& $emitPerms $m.Groups[1].Value $m.Groups[3].Value $m.Groups[2].Value)
-    })
-    # Safety net: any Add-UGPermission shape the two rewrites still didn't catch (an unknown switch, a non-quoted/odd
-    # path) must NEVER be left as a silently-broken v3 call in v4 output - flag it for a quick manual convert.
-    if ($result -match '(?<![A-Za-z\-])Add-UGPermission(?![A-Za-z\-])') {
-        $lines = $result -split "`r?`n"
-        for ($i = $lines.Count - 1; $i -ge 0; $i--) {
-            if ($lines[$i] -match '(?<![A-Za-z\-])Add-UGPermission(?![A-Za-z\-])') {
-                $ind = if ($lines[$i] -match '^(\s*)') { $matches[1] } else { '' }
-                $warn = "${ind}# WARNING: v3 'Add-UGPermission' (unusual shape) - convert manually to Set-ADTItemPermission"
-                $pre = if ($i -gt 0) { @($lines[0..($i-1)]) } else { @() }
-                $lines = $pre + @($warn) + @($lines[$i..($lines.Count-1)])
-            }
-        }
-        $result = $lines -join "`r`n"
-    }
+    # 4b. Add-UGPermission (#10): PRESERVED. The GPF v4 Extensions module defines Add-UGPermission natively (verified in
+    #     PSAppDeployToolkit.Extensions.psm1), so a v3 Add-UGPermission call is ALREADY valid v4 - leave it exactly as-is.
+    #     (Was: rewritten to Set-ADTItemPermission, which emitted a broken "# WARNING: unusual shape" comment for any
+    #     call the rewrite could not parse. All other GPF custom functions already pass through unchanged.)
 
     if ($ReportOnly) {
         return @{

@@ -26,7 +26,7 @@ function Assert-Equal { param([string]$Name, $Expected, $Actual)
 
 $package = 'INA_AUDI_DummyTest_x86_1.0_0001_MUL'
 function New-TestPlan { param([string]$Code = 'INA')
-    Get-AudiIntegrationPlan -PackageName $package -EnvironmentCode $Code -Requester 'deaudi00\a.tester' -Rfc 'RFC0012345'
+    Get-AudiIntegrationPlan -PackageName $package -EnvironmentCode $Code -Rfc 'RFC0012345'
 }
 
 Write-Host ''
@@ -180,21 +180,28 @@ catch { $threw = $true }
 Assert-True  'a permanent fault throws' $threw
 Assert-Equal 'a permanent fault is not retried' 1 $script:tries
 
-# Every run leaves an audit record naming both identities.
+# Every run leaves an audit record - naming the service account and the RFC,
+# and NEVER a person. This is Audi's requirement, checked on the artefacts the
+# server actually writes rather than on the code that writes them.
 $run5 = Invoke-AudiSwIntegration -Plan (New-TestPlan) -Provider (New-AudiSccmDryRunProvider) -DryRun
 Assert-True 'the run reports where its log is' (-not [string]::IsNullOrWhiteSpace($run5.LogPath))
 if ($run5.LogPath -and (Test-Path -LiteralPath $run5.LogPath)) {
     $text = Get-Content -LiteralPath $run5.LogPath -Raw
-    Assert-True 'the log names the requester'   ($text -like '*a.tester*')
     Assert-True 'the log names the executor'    ($text -like '*svc-swintegration*')
+    Assert-True 'the log names the RFC'         ($text -like '*RFC0012345*')
     Assert-True 'the log marks it as a dry run' ($text -like '*DRY RUN*')
+    Assert-True 'the log names NO person'       (-not ($text -like "*$env:USERNAME*" -or $text -like '*tester*')) 'a user name reached the server log'
+
     $jobFile = Join-Path (Split-Path -Parent $run5.LogPath) 'job.json'
     Assert-True 'a job record is written' (Test-Path -LiteralPath $jobFile)
     if (Test-Path -LiteralPath $jobFile) {
-        $job = Get-Content -LiteralPath $jobFile -Raw | ConvertFrom-Json
-        Assert-Equal 'the job record keeps the requester' 'deaudi00\a.tester'          $job.Requester
+        $raw = Get-Content -LiteralPath $jobFile -Raw
+        $job = $raw | ConvertFrom-Json
         Assert-Equal 'the job record keeps the executor'  'deaudi00\svc-swintegration' $job.Executor
+        Assert-Equal 'the job record keeps the RFC'       'RFC0012345'                 $job.Rfc
         Assert-Equal 'the job record states the outcome'  'Succeeded'                  $job.Outcome
+        Assert-True  'the job record has no Requester field' (-not $job.PSObject.Properties['Requester'])
+        Assert-True  'the job record names NO person' (-not ($raw -like "*$env:USERNAME*" -or $raw -like '*tester*')) 'a user name reached job.json'
     }
 } else {
     Assert-True 'the log file was created' $false "log not found at $($run5.LogPath)"
@@ -216,8 +223,8 @@ $pczPreview = Invoke-AudiSwIntegration -Plan $pczPlan -Provider (New-AudiSccmDry
 Assert-True  'an unverified environment can still be previewed' $pczPreview.Ok
 Assert-Equal 'the PCZ preview covers ten collections' 10 (@($pczPreview.Provider.Log | Where-Object Operation -eq 'NewCollection').Count)
 
-# The identity split has to survive into the result, since it is the whole point.
-Assert-Equal 'the requester is carried through' 'deaudi00\a.tester' $run.Requester
+# One identity only: the shared account. A person must not survive into the result.
+Assert-True  'the result carries no requester' (-not $run.PSObject.Properties['Requester'])
 Assert-Equal 'the executor is the service account' 'deaudi00\svc-swintegration' $run.Executor
 Assert-True  'the job id is carried through' ($run.JobId -eq $plan.JobId)
 

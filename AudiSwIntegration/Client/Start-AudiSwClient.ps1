@@ -3,8 +3,18 @@
 # ==============================================================================
 #  Run:   .\Client\Start-AudiSwClient.ps1
 #
-#  Testable with no SCCM at all: "Dry run" is ticked by default, which walks the
-#  whole plan through the dry-run provider and shows exactly what would be done.
+#  Two buttons, deliberately different:
+#
+#    Preview on this PC   runs the whole plan locally through the dry-run
+#                         provider. Nothing leaves this machine. Needs no SCCM,
+#                         no server and no drop folder - use it to test.
+#
+#    Integrate / Remove   write a job FILE into the environment's drop folder
+#                         and then wait for the server's result file. The
+#                         window never connects to SCCM and holds no SCCM
+#                         rights. It also states no identity: the server takes
+#                         the requester from the job file's NTFS owner, which
+#                         the packager cannot forge.
 #
 #  The window never freezes. The old tool ran everything on the interface thread,
 #  including a thirty-second wait per deployment. Here the work runs in a
@@ -63,6 +73,9 @@ $state = [hashtable]::Synchronized(@{
     Result    = $null
     Error     = $null
     StepCount = 8
+    Waiting   = $false   # true while the job sits in the drop folder
+    Note      = ''
+    JobId     = ''
 })
 
 $defaults = Get-AudiDefaults
@@ -187,61 +200,72 @@ function New-PlanFromForm {
                                    -LocalizedDescription $ui.txtDescEN.Text.Trim()
 }
 
-# --------------------------------------------------------------- run in the bg
-function Start-Run { param([string]$Mode)   # Integrate | Remove
+# ------------------------------------------------------------- reading results
+# Wait-AudiSwJobResult hands back a hashtable and the engine hands back a
+# PSCustomObject. Under StrictMode a missing member throws, so ask first.
+function Test-HasValue { param($Object, [string]$Name)
+    if ($null -eq $Object) { return $false }
+    if ($Object -is [hashtable]) { return $Object.Contains($Name) }
+    return [bool]$Object.PSObject.Properties[$Name]
+}
 
-    try   { $plan = New-PlanFromForm }
-    catch { Set-Status $_.Exception.Message '#FFFFC107'; return }
-
-    $dryRun = [bool]$ui.chkDryRun.IsChecked
-    if (-not $dryRun) {
-        $verb = if ($Mode -eq 'Remove') { 'REMOVE' } else { 'INTEGRATE' }
-        $answer = [System.Windows.MessageBox]::Show(
-            "$verb '$($plan.PackageName)' in $($plan.Environment)?`r`n`r`nThis will make real changes.`r`nRequested by: $($plan.Requester)`r`nCarried out by: $($plan.Executor)",
-            'Confirm', 'YesNo', 'Warning')
-        if ($answer -ne 'Yes') { Set-Status 'Cancelled.'; return }
+function Show-RunOutcome { param($Result, [string]$Note = '')
+    $rows = @($Result.Steps | ForEach-Object {
+        [pscustomobject]@{ Step = $_.Step; Result = $(if ($_.Ok) { 'OK' } else { 'FAILED' }); Message = $_.Message }
+    })
+    if ((Test-HasValue $Result 'RolledBack') -and $Result.RolledBack.Count -gt 0) {
+        foreach ($undone in $Result.RolledBack) {
+            $rows += [pscustomobject]@{ Step = 'Rolled back'; Result = '--'; Message = $undone }
+        }
     }
+    $ui.lstResults.ItemsSource = $rows
+
+    $ui.prgRun.IsIndeterminate = $false
+    if ($rows.Count -gt 0) { $ui.prgRun.Maximum = $rows.Count }
+    $ui.prgRun.Value = @($Result.Steps | Where-Object { $_.Ok }).Count
+
+    if ((Test-HasValue $Result 'LogPath') -and $Result.LogPath) {
+        $ui['LogFolder'] = Split-Path -Parent $Result.LogPath
+        $ui.btnOpenLog.IsEnabled = $true
+    }
+
+    $prefix = if ((Test-HasValue $Result 'DryRun') -and $Result.DryRun) { '[Dry run] ' } else { '' }
+    Set-Status "$prefix$($Result.Message)$Note" $(if ($Result.Ok) { '#FF99D1CD' } else { '#FFFF6B6B' })
+}
+
+# --------------------------------------------------------------- run in the bg
+# One background worker for both buttons. The window only ever polls $state, so
+# it stays responsive however long the server takes.
+function Start-Worker { param([scriptblock]$Body, [hashtable]$Arguments, [int]$Steps)
 
     $ui.lstResults.ItemsSource = $null
     $ui.prgRun.Value = 0
-    $ui.prgRun.Maximum = if ($Mode -eq 'Remove') { 4 } else { 8 }
-    $state.StepCount = $ui.prgRun.Maximum
-    $state.Running = $true; $state.Done = $false; $state.Result = $null; $state.Error = $null; $state.Step = ''
+    $ui.prgRun.Maximum = $Steps
+    $ui.prgRun.IsIndeterminate = $false
+    $state.Running = $true; $state.Done = $false; $state.Result = $null; $state.Error = $null
+    $state.Step = ''; $state.Waiting = $false
     Set-Busy $true
-    Set-Status "$Mode started..."
 
     $runspace = [runspacefactory]::CreateRunspace()
     $runspace.ApartmentState = 'STA'
     $runspace.ThreadOptions  = 'ReuseThread'
     $runspace.Open()
     $runspace.SessionStateProxy.SetVariable('state', $state)
-    $runspace.SessionStateProxy.SetVariable('plan', $plan)
     $runspace.SessionStateProxy.SetVariable('toolRoot', $ToolRoot)
-    $runspace.SessionStateProxy.SetVariable('dryRun', $dryRun)
-    $runspace.SessionStateProxy.SetVariable('mode', $Mode)
+    # NOT called 'args': inside a script $args is the automatic argument list
+    $runspace.SessionStateProxy.SetVariable('jobArgs', $Arguments)
 
     $worker = [powershell]::Create()
     $worker.Runspace = $runspace
-    $null = $worker.AddScript({
-        try {
-            . (Join-Path $toolRoot 'AudiSwIntegration.ps1')
-            $onProgress = { param($stepName) $state.Step = $stepName }
-            $state.Result = if ($mode -eq 'Remove') {
-                Invoke-AudiSwRemoval     -Plan $plan -DryRun:$dryRun -OnProgress $onProgress
-            } else {
-                Invoke-AudiSwIntegration -Plan $plan -DryRun:$dryRun -OnProgress $onProgress
-            }
-        }
-        catch { $state.Error = $_.Exception.Message }
-        finally { $state.Done = $true; $state.Running = $false }
-    })
+    $null = $worker.AddScript($Body)
     $handle = $worker.BeginInvoke()
 
-    # the window polls the shared table; it is never blocked by the work
     $timer = New-Object System.Windows.Threading.DispatcherTimer
     $timer.Interval = [TimeSpan]::FromMilliseconds(250)
     $timer.Add_Tick({
         if ($state.Step) { $ui.txtStep.Text = $state.Step }
+        # nothing to count while the job sits in the folder - show movement only
+        if ($state.Waiting -and -not $ui.prgRun.IsIndeterminate) { $ui.prgRun.IsIndeterminate = $true }
         if (-not $state.Done) { return }
 
         $timer.Stop()
@@ -250,34 +274,124 @@ function Start-Run { param([string]$Mode)   # Integrate | Remove
 
         Set-Busy $false
         $ui.txtStep.Text = ''
+        $ui.prgRun.IsIndeterminate = $false
 
-        if ($state.Error) {
-            Set-Status "Failed: $($state.Error)" '#FFFF6B6B'
-            $ui.prgRun.Value = 0
-            return
-        }
-
-        $result = $state.Result
-        $rows = @($result.Steps | ForEach-Object {
-            [pscustomobject]@{ Step = $_.Step; Result = $(if ($_.Ok) { 'OK' } else { 'FAILED' }); Message = $_.Message }
-        })
-        if ($result.PSObject.Properties['RolledBack'] -and $result.RolledBack.Count -gt 0) {
-            foreach ($undone in $result.RolledBack) {
-                $rows += [pscustomobject]@{ Step = 'Rolled back'; Result = '--'; Message = $undone }
-            }
-        }
-        $ui.lstResults.ItemsSource = $rows
-        $ui.prgRun.Value = @($result.Steps | Where-Object { $_.Ok }).Count
-
-        if ($result.PSObject.Properties['LogPath'] -and $result.LogPath) {
-            $ui['LogFolder'] = Split-Path -Parent $result.LogPath
-            $ui.btnOpenLog.IsEnabled = $true
-        }
-
-        $prefix = if ($result.DryRun) { '[Dry run] ' } else { '' }
-        Set-Status "$prefix$($result.Message)  |  job $($result.JobId)" $(if ($result.Ok) { '#FF99D1CD' } else { '#FFFF6B6B' })
+        if ($state.Error) { Set-Status "Failed: $($state.Error)" '#FFFF6B6B'; $ui.prgRun.Value = 0; return }
+        Show-RunOutcome $state.Result $state.Note
     })
     $timer.Start()
+}
+
+# ------------------------------------------------------ preview: local, no server
+# Runs the plan through the dry-run provider on this machine. Nothing is written
+# to the drop folder and the server is never involved, so a packager can check a
+# package before queuing anything.
+function Start-Preview {
+    try   { $plan = New-PlanFromForm }
+    catch { Set-Status $_.Exception.Message '#FFFFC107'; return }
+
+    $state.Note = '  |  preview only - nothing was queued'
+    Set-Status 'Preview running on this machine...'
+    Start-Worker -Steps 8 -Arguments @{ Plan = $plan } -Body {
+        try {
+            . (Join-Path $toolRoot 'AudiSwIntegration.ps1')
+            $state.Result = Invoke-AudiSwIntegration -Plan $jobArgs.Plan -DryRun `
+                                -OnProgress { param($stepName) $state.Step = $stepName }
+        }
+        catch { $state.Error = $_.Exception.Message }
+        finally { $state.Done = $true; $state.Running = $false }
+    }
+}
+
+# ------------------------------------------------- integrate / remove: flow 2
+# The window writes a job file into the environment's drop folder and waits for
+# the result file. It never connects to the SCCM server, holds no SCCM rights
+# and states no identity: the server takes the requester from the file's owner.
+function Start-Run { param([string]$Mode)   # Integrate | Remove
+
+    try   { $plan = New-PlanFromForm }      # validates the form before queuing
+    catch { Set-Status $_.Exception.Message '#FFFFC107'; return }
+
+    $code = [string]$ui.cboEnvironment.SelectedItem
+    try   { $env = Get-AudiEnvironment -Code $code }
+    catch { Set-Status $_.Exception.Message '#FFFF6B6B'; return }
+
+    if ($env.Transport.Mode -ne 'DropFolder') {
+        Set-Status "Environment $code is set to transport '$($env.Transport.Mode)', which this window does not use." '#FFFF6B6B'
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($env.Transport.DropFolder)) {
+        Set-Status "Environment $code has no drop folder set. Fill in Transport/@dropFolder in $($env.Path)." '#FFFF6B6B'
+        return
+    }
+
+    # With no personal name kept on the server, the RFC is the only record of
+    # who asked - so stop here rather than queue an untraceable change.
+    $rfc = $ui.txtRfc.Text.Trim()
+    if ((Get-AudiDefaults).Audit.RequireRfc -and -not $rfc) {
+        Set-Status 'Enter the RFC number first. It is the only record of who requested this change, so the server refuses a job without one.' '#FFFFC107'
+        $ui.txtRfc.Focus() | Out-Null
+        return
+    }
+    $rfcShown = if ($rfc) { $rfc } else { 'not given' }
+
+    $dryRun = [bool]$ui.chkDryRun.IsChecked
+    $verb   = if ($Mode -eq 'Remove') { 'REMOVE' } else { 'INTEGRATE' }
+    $what   = if ($dryRun) { "The server will rehearse this and change nothing." }
+              else         { "The server will make real changes in $code." }
+    $answer = [System.Windows.MessageBox]::Show(
+        ("$verb '$($plan.PackageName)' in $code" + "?`r`n`r`n" + $what +
+         "`r`n`r`nThe job goes to:`r`n$($env.Transport.DropFolder)`r`n`r`n" +
+         "The work is carried out by the server's service account. Your name is`r`n" +
+         "not sent and is not recorded on the server - the RFC number ($rfcShown)`r`n" +
+         "is what ties this change back to you."),
+        'Confirm', 'YesNo', $(if ($dryRun) { 'Question' } else { 'Warning' }))
+    if ($answer -ne 'Yes') { Set-Status 'Cancelled.'; return }
+
+    $state.Note = ''
+    Set-Status "Submitting to $code ..."
+    Start-Worker -Steps $(if ($Mode -eq 'Remove') { 4 } else { 8 }) -Arguments @{
+        Action        = $Mode
+        DropFolder    = $env.Transport.DropFolder
+        Timeout       = $env.Transport.ResultTimeoutMinutes
+        PackageName   = $plan.PackageName
+        Environment   = $code
+        Rfc           = $ui.txtRfc.Text.Trim()
+        NameEn        = $ui.txtNameEN.Text.Trim()
+        NameDe        = $ui.txtNameDE.Text.Trim()
+        DescriptionEn = $ui.txtDescEN.Text.Trim()
+        DescriptionDe = $ui.txtDescDE.Text.Trim()
+        OperatingSystems = Get-SelectedOperatingSystem
+        DryRun        = $dryRun
+    } -Body {
+        try {
+            . (Join-Path $toolRoot 'AudiSwIntegration.ps1')
+
+            $wantsDryRun = [bool]$jobArgs.DryRun
+            $state.Step = 'Writing the job file...'
+            $doc = New-AudiSwJobFile -PackageName $jobArgs.PackageName -EnvironmentCode $jobArgs.Environment `
+                                     -Action $jobArgs.Action -Rfc $jobArgs.Rfc `
+                                     -NameEn $jobArgs.NameEn -NameDe $jobArgs.NameDe `
+                                     -DescriptionEn $jobArgs.DescriptionEn -DescriptionDe $jobArgs.DescriptionDe `
+                                     -OperatingSystems $jobArgs.OperatingSystems -DryRun:$wantsDryRun
+
+            $submission = Submit-AudiSwJob -DropFolder $jobArgs.DropFolder -Job $doc
+            $state.JobId = $submission.JobId
+
+            $state.Waiting = $true
+            $started = Get-Date
+            $state.Step = "Queued as job $($submission.JobId). Waiting for the server..."
+
+            $state.Result = Wait-AudiSwJobResult -Submission $submission `
+                                -TimeoutMinutes $jobArgs.Timeout -PollSeconds 5 -OnWait {
+                    $mins = [int]((Get-Date) - $started).TotalMinutes
+                    $state.Step = "Waiting for the server... ${mins} min of $($jobArgs.Timeout)"
+                }
+            $state.Note = "  |  job $($submission.JobId)"
+        }
+        catch { $state.Error = $_.Exception.Message }
+        finally { $state.Waiting = $false; $state.Done = $true; $state.Running = $false }
+    }
 }
 
 # --------------------------------------------------------------------- handlers
@@ -295,7 +409,7 @@ $ui.btnRead.Add_Click({
     else { Update-DerivedFields; Set-Status 'Names derived from the package name. Use Browse to also read the package contents.' }
 })
 
-$ui.btnPreview.Add_Click({ $ui.chkDryRun.IsChecked = $true; Start-Run -Mode 'Integrate' })
+$ui.btnPreview.Add_Click({ Start-Preview })
 $ui.btnIntegrate.Add_Click({ Start-Run -Mode 'Integrate' })
 $ui.btnRemove.Add_Click({ Start-Run -Mode 'Remove' })
 
@@ -305,7 +419,7 @@ $ui.btnOpenLog.Add_Click({
 
 # ------------------------------------------------------------------------ start
 Update-EnvironmentNotice
-Set-Status 'Ready. Dry run is on, so nothing will be changed until you turn it off.'
+Set-Status 'Ready. Preview runs here; Integrate and Remove hand the job to the server. Dry run is on, so nothing will be changed until you turn it off.'
 
 if ($SelfTest) {
     # Drives the same functions the buttons call, synchronously, so the window's
@@ -331,7 +445,9 @@ if ($SelfTest) {
     $plan = New-PlanFromForm
     Write-Output ''
     Write-Output ("  plan collections     : {0}" -f $plan.Collections.Count)
-    Write-Output ("  requester / executor : {0}  /  {1}" -f $plan.Requester, $plan.Executor)
+    Write-Output ("  executed as          : {0}" -f $plan.Executor)
+    Write-Output ("  audit link (RFC)     : {0}" -f $plan.Rfc)
+    Write-Output ("  carries a person?    : {0}" -f $(if ($plan.PSObject.Properties['Requester']) { 'YES - WRONG' } else { 'no' }))
 
     $run = Invoke-AudiSwIntegration -Plan $plan -DryRun
     Write-Output ''
@@ -339,6 +455,31 @@ if ($SelfTest) {
     foreach ($s in $run.Steps) { Write-Output ("    {0,-14} {1,-7} {2}" -f $s.Step, $(if ($s.Ok) { 'OK' } else { 'FAILED' }), $s.Message) }
     Write-Output ''
     Write-Output ("  log folder           : {0}" -f (Split-Path -Parent $run.LogPath))
+
+    # --- flow 2: the window submits a file, it does not connect anywhere
+    $envINA = Get-AudiEnvironment -Code 'INA'
+    Write-Output ''
+    Write-Output ("  transport            : {0}" -f $envINA.Transport.Mode)
+    Write-Output ("  drop folder          : {0}" -f $envINA.Transport.DropFolder)
+    Write-Output ("  result timeout       : {0} min" -f $envINA.Transport.ResultTimeoutMinutes)
+
+    # submitted into a temporary folder, so the self test needs no share
+    $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("AudiClientSelfTest_{0}" -f ([guid]::NewGuid().ToString('N')))
+    try {
+        $doc = New-AudiSwJobFile -PackageName $ui.txtPackage.Text.Trim() -EnvironmentCode 'INA' `
+                                 -Action 'Integrate' -Rfc $ui.txtRfc.Text.Trim() `
+                                 -NameEn $ui.txtNameEN.Text.Trim() -NameDe $ui.txtNameDE.Text.Trim() `
+                                 -DescriptionEn $ui.txtDescEN.Text.Trim() -DescriptionDe $ui.txtDescDE.Text.Trim() `
+                                 -OperatingSystems (Get-SelectedOperatingSystem) -DryRun
+        $sub   = Submit-AudiSwJob -DropFolder $sandbox -Job $doc
+        $check = Test-AudiConfigFile -Path $sub.Path -SchemaPath (Join-Path (Get-AudiConfigRoot) 'Environment.xsd')
+        Write-Output ''
+        Write-Output ("  job file written     : {0}" -f (Split-Path -Leaf $sub.Path))
+        Write-Output ("  valid against schema : {0}" -f $(if ($check.Ok) { 'yes' } else { 'NO - ' + ($check.Errors -join '; ') }))
+        Write-Output ("  requester in file    : {0}" -f $(if ($doc.Job.HasAttribute('requester')) { 'PRESENT - WRONG' } else { 'none - no person is sent to the server' }))
+        Write-Output ("  no result yet, says  : {0}" -f (Wait-AudiSwJobResult -Submission $sub -TimeoutMinutes 0 -PollSeconds 1).Message)
+    }
+    finally { if (Test-Path -LiteralPath $sandbox) { Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue } }
     Write-Output ''
     return
 }

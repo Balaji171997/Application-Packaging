@@ -116,7 +116,7 @@ Assert-Equal 'branding key' 'AUDI_DummyTest_x86_1.0-0001_MUL' (Get-AudiBrandingK
 # ---------------------------------------------------------------- the plan
 Write-Host ''
 Write-Host 'Integration plan' -ForegroundColor Cyan
-$plan = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'INA' -Requester 'deaudi00\a.tester' -Rfc 'RFC0012345'
+$plan = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'INA' -Rfc 'RFC0012345'
 
 Assert-Equal 'plan collection count' 9 $plan.Collections.Count
 Assert-Equal 'first collection name' 'GY1-INA_AUDI_DummyTest_x86_1.0_0001_MUL' $plan.Collections[0].Name
@@ -126,9 +126,43 @@ Assert-Equal 'detection key' 'Software\VWG\CM\AUDI_DummyTest_x86_1.0-0001_MUL' $
 Assert-Equal 'detection data is the revision' '0001' $plan.DetectionData
 Assert-Equal 'ars group name' 'G-AUDI-AG-SW-INA_AUDI_DummyTest_x86_1.0_0001_MUL' $plan.ArsGroupName
 Assert-True  'content path is under the environment share' ($plan.ContentPath -like '\\audiinsv0259*')
-Assert-True  'requester is recorded on every collection'   (@($plan.Collections | Where-Object { $_.Comment -like '*a.tester*' }).Count -eq 9)
 Assert-True  'rfc is recorded on every collection'         (@($plan.Collections | Where-Object { $_.Comment -like '*RFC0012345*' }).Count -eq 9)
-Assert-True  'executor is the service account, not the requester' ($plan.Executor -ne $plan.Requester)
+Assert-Equal 'executor is the service account' 'deaudi00\svc-swintegration' $plan.Executor
+
+# --------------------------------------------------- privacy: nothing personal
+# Audi's requirement: no real person's name may reach the SCCM side at all -
+# not an SCCM object, and not the tool's own log or job record on the server.
+# The RFC number is the audit link instead. These checks exist so the rule
+# cannot be lost in a later refactor without a test going red.
+Write-Host ''
+Write-Host 'Privacy - no person reaches the SCCM side' -ForegroundColor Cyan
+
+# The strongest guarantee is structural: if the plan holds no person, there is
+# nothing for any log line, comment or record to write.
+Assert-True 'the plan has no Requester field' (-not $plan.PSObject.Properties['Requester'])
+Assert-True 'Get-AudiIntegrationPlan takes no -Requester parameter' `
+    (-not (Get-Command Get-AudiIntegrationPlan).Parameters.ContainsKey('Requester'))
+
+Assert-Equal 'the RFC carries the audit trail instead' 'RFC0012345' $plan.Rfc
+Assert-True  'every collection comment carries the job id' `
+    (@($plan.Collections | Where-Object { $_.Comment -like "*$($plan.JobId)*" }).Count -eq 9)
+
+# every string the engine writes into SCCM or AD, checked in one place. The
+# signed-in account is the one name guaranteed to be available to leak.
+$sccmBound = @($plan.ApplicationName, $plan.LocalizedName, $plan.LocalizedDescription,
+               $plan.DeploymentType, $plan.DetectionKey, $plan.Category,
+               $plan.ArsGroupName, $plan.ArsDescription) +
+             @($plan.Collections | ForEach-Object { $_.Name; $_.Comment })
+$leaked = @($sccmBound | Where-Object { $_ -like "*$env:USERNAME*" -or $_ -like '*tester*' })
+Assert-True 'nothing bound for SCCM or AD names a person' ($leaked.Count -eq 0) ($leaked -join ' | ')
+
+Assert-True 'an RFC is required, so a change is never untraceable' (Get-AudiDefaults).Audit.RequireRfc
+
+# and a config edit must not be able to put it back
+Assert-Equal 'a template naming the requester is refused' 1 `
+    (@(Test-AudiSccmCommentTemplate -Template 'job {jobId} requested by {requester}').Count)
+Assert-Equal 'a clean template passes' 0 `
+    (@(Test-AudiSccmCommentTemplate -Template 'job {jobId} | RFC {rfc}').Count)
 
 # ---------------------------------------------------------------- summary
 Write-Host ''

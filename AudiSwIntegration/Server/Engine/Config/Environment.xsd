@@ -65,6 +65,26 @@
           </xs:complexType>
         </xs:element>
 
+        <!-- How a job reaches the server.
+               Direct      the window calls the endpoint and waits        (flow 1)
+               DropFolder  the window writes a job file and the server
+                           collects it a few minutes later               (flow 2)
+             dropFolder is required when mode is DropFolder. -->
+        <xs:element name="Transport">
+          <xs:complexType>
+            <xs:attribute name="mode" use="required">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Direct"/>
+                  <xs:enumeration value="DropFolder"/>
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="dropFolder" type="xs:string" use="optional" default=""/>
+            <xs:attribute name="resultTimeoutMinutes" type="xs:positiveInteger" use="optional" default="30"/>
+          </xs:complexType>
+        </xs:element>
+
         <xs:element name="Content">
           <xs:complexType>
             <xs:attribute name="share" type="NonEmptyString" use="required"/>
@@ -185,11 +205,23 @@
           </xs:complexType>
         </xs:element>
 
-        <!-- Placeholders {package} {jobId} {requester} {rfc} are filled at run time. -->
+        <!-- Written onto SCCM objects. Placeholders {package} {jobId} {rfc} are
+             filled at run time.
+
+             {requester} is NOT available: no personal name may be written to an
+             SCCM object. A template containing it is rejected at load - see
+             Test-AudiSccmCommentTemplate in Config.ps1. -->
         <xs:element name="Comments">
           <xs:complexType>
             <xs:attribute name="collection" type="NonEmptyString" use="required"/>
-            <xs:attribute name="application" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- With no personal name kept on the SCCM side, the RFC number is the
+             only route back to the person who asked. -->
+        <xs:element name="Audit">
+          <xs:complexType>
+            <xs:attribute name="requireRfc" type="xs:boolean" use="required"/>
           </xs:complexType>
         </xs:element>
 
@@ -289,6 +321,99 @@
 
       </xs:sequence>
       <xs:attribute name="schemaVersion" type="NonEmptyString" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ================================================================= Job -->
+  <!-- One request, written by the packager window into the drop folder.
+       There is deliberately NO requester attribute, and none is derived on the
+       server either: Audi's requirement is that no real person's name reaches
+       the SCCM side at all. A file naming a requester is rejected outright.
+       The RFC number carries the audit trail instead. -->
+  <xs:element name="Job">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Package">
+          <xs:complexType>
+            <xs:attribute name="name" type="NonEmptyString" use="required"/>
+            <xs:attribute name="rfc"  type="xs:string" use="optional" default=""/>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="Localised" minOccurs="0">
+          <xs:complexType>
+            <xs:attribute name="nameEn"        type="xs:string" use="optional" default=""/>
+            <xs:attribute name="nameDe"        type="xs:string" use="optional" default=""/>
+            <xs:attribute name="descriptionEn" type="xs:string" use="optional" default=""/>
+            <xs:attribute name="descriptionDe" type="xs:string" use="optional" default=""/>
+          </xs:complexType>
+        </xs:element>
+        <!-- An empty list is valid and means "use the defaults". -->
+        <xs:element name="OperatingSystems" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="OperatingSystem" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="key" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="schemaVersion" type="NonEmptyString" use="required"/>
+      <xs:attribute name="jobId"         type="NonEmptyString" use="required"/>
+      <xs:attribute name="environment"   type="SiteCode"       use="required"/>
+      <xs:attribute name="created"       type="NonEmptyString" use="required"/>
+      <xs:attribute name="dryRun"        type="xs:boolean"     use="required"/>
+      <xs:attribute name="action" use="required">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="Integrate"/>
+            <xs:enumeration value="Remove"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ========================================================== JobResult -->
+  <!-- Written by the server when the job has finished. It records the executor
+       (the shared service account) and the RFC. It does NOT record a person -
+       nothing on the SCCM side is allowed to. -->
+  <xs:element name="JobResult">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Message" type="xs:string"/>
+        <xs:element name="Steps">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Step" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="key"     type="NonEmptyString" use="required"/>
+                  <xs:attribute name="ok"      type="xs:boolean"     use="required"/>
+                  <xs:attribute name="message" type="xs:string"      use="optional" default=""/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="schemaVersion" type="NonEmptyString" use="required"/>
+      <xs:attribute name="jobId"         type="NonEmptyString" use="required"/>
+      <xs:attribute name="environment"   type="SiteCode"       use="required"/>
+      <xs:attribute name="package"       type="NonEmptyString" use="required"/>
+      <xs:attribute name="rfc"           type="xs:string"      use="optional" default=""/>
+      <xs:attribute name="executor"      type="NonEmptyString" use="required"/>
+      <xs:attribute name="completed"     type="NonEmptyString" use="required"/>
+      <xs:attribute name="dryRun"        type="xs:boolean"     use="required"/>
+      <xs:attribute name="outcome" use="required">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="Succeeded"/>
+            <xs:enumeration value="Failed"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
     </xs:complexType>
   </xs:element>
 

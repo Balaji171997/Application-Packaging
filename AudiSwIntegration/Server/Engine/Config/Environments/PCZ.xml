@@ -33,6 +33,10 @@
            allowedGroup="audiprod\G-Audi-SwIntegration-Operators"/>
 
   <!-- CONFIRM: the old script used INA's share here. -->
+  <Transport mode="DropFolder"
+             dropFolder="\\audiinsc0027.audi.prod.vwg\SwIntegration-Inbox$"
+             resultTimeoutMinutes="30"/>
+
   <Content share="\\audiinsc0027.audi.prod.vwg\SCCM-STORE\PKG\PROD"
            distributionPointGroup="INA-DP-Group all"/>
 

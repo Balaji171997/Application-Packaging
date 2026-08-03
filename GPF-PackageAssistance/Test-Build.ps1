@@ -2050,6 +2050,75 @@ try {
     Assert "NF env: MTB Set-EnvironmentVariable -> Set-ADTEnvironmentVariable" ((Convert-V3ToV4Content -Content 'Set-EnvironmentVariable -EnvironmentVariable "X" -EnvironmentValue "Y"') -match 'Set-ADTEnvironmentVariable')
 } finally { $script:Settings = $__savedMtb }
 
+# ---- 30th-July findings (GPF) --------------------------------------------------------------------------------------
+$__savedFj = $script:Settings; $script:Settings = @{ Brand = @{ Name = 'GPF'; Convert = @{ MtbMappings = $false } } }
+try {
+    # #4/#5: external Copy-ADTFile/Folder gets ONE Test-Path guard; a copy already inside an outer Test-Path for the same
+    # source is NOT double-guarded; package-payload copies stay bare.
+    $fjA = Format-OutputScript -Text '        Copy-ADTFile -Path "$envProgramFilesX86\Java\jre8\bin\java.exe" -Destination "d"'
+    Assert 'FJ#4: bare external file copy IS guarded'      ($fjA -match 'if \(Test-Path -Path "\$envProgramFilesX86\\Java\\jre8\\bin\\java\.exe"\) \{ Copy-ADTFile')
+    $fjB = Format-OutputScript -Text ("        If(Test-Path -Path `"`$envProgramFilesX86\Java\jre8\bin\java.exe`")`r`n        {`r`n            Copy-ADTFile -Path `"`$envProgramFilesX86\Java\jre8\bin\java.exe`" -Destination `"d`"`r`n        }")
+    Assert 'FJ#4: copy already inside outer Test-Path NOT re-wrapped' ((([regex]::Matches($fjB,'Test-Path')).Count) -eq 1)
+    $fjC = Format-OutputScript -Text '        Copy-ADTFolder -Path "$envAppData\Vendor\cfg" -Destination "d"'
+    Assert 'FJ#5: external Copy-ADTFolder IS guarded'      ($fjC -match 'if \(Test-Path -Path "\$envAppData\\Vendor\\cfg"\) \{ Copy-ADTFolder')
+    $fjD = Format-OutputScript -Text '        Copy-ADTFile -Path "$($adtSession.DirFiles)\app.exe" -Destination "d"'
+    Assert 'FJ#4: package-payload copy NOT guarded'        ($fjD -notmatch 'if \(Test-Path')
+    # brand resolver + brand-gated rules
+    Assert 'FJ brand: explicit TargetBrand wins'   ((Get-GpfTargetBrand -NewPkg @{TargetBrand='G1V'}) -eq 'G1V')
+    Assert 'FJ brand: INA_ prefix auto-detected'   ((Get-GpfTargetBrand -NewPkg @{FullName='INA_A_B_x64_1-0001_MUL'}) -eq 'INA')
+    Assert 'FJ brand: default VWG'                 ((Get-GpfTargetBrand -NewPkg @{FullName='A_B_x64_1-0001_MUL'}) -eq 'VWG')
+    # #13 InstallTitle
+    Assert 'FJ#13: VW vendor -> Volkswagen'        ((Get-GpfInstallTitle -NewPkg @{Vendor='Audi';AppName='MyApp';Version='1.0'} -Brand 'G1V') -eq 'Volkswagen MyApp 1.0')
+    Assert 'FJ#13: non-VW keeps vendor'            ((Get-GpfInstallTitle -NewPkg @{Vendor='Adobe';AppName='Reader';Version='23'} -Brand 'VWG') -eq 'Adobe Reader 23')
+    Assert 'FJ#13: Vendor==AppName not repeated'   ((Get-GpfInstallTitle -NewPkg @{Vendor='Freia';AppName='Freia';Version='9.1'} -Brand 'VWG') -eq 'Freia 9.1')
+    # #16 ProcToClose -> ProcToCloseNonUI (Audi only)
+    $fjWrap = "`t[string[]] `$Global:VWG_ProcToClose`t= @('app.exe')`r`n`t[string[]] `$Global:VWG_ProcToCloseNonUI`t= @()"
+    $fjIna = Set-GpfProcToCloseNonUI -Text $fjWrap -Brand 'INA'
+    Assert 'FJ#16: INA ProcToClose -> NonUI'       (($fjIna -match "VWG_ProcToCloseNonUI\s*=\s*@\('app\.exe'\)") -and ($fjIna -match "VWG_ProcToClose\s*=\s*@\(\)"))
+    Assert 'FJ#16: non-Audi unchanged'             ((Set-GpfProcToCloseNonUI -Text $fjWrap -Brand 'VWG') -eq $fjWrap)
+    # #14 34-char length
+    Assert 'FJ#14: name length sum'                ((Get-GpfVwgNameLength -NewPkg @{Vendor='AB';AppName='CD';Version='1';Lang='MUL'}) -eq 8)
+    # #8 branding guard matches predecessor
+    $fjTpl = "#*====================================POST-UNINSTALLATION BEGIN====`r`n    `$flag = `$true`r`n    ## Branding Uninstall`r`n    Remove-Branding`r`n#*====================================POST-UNINSTALLATION END===="
+    Assert 'FJ#8: predecessor bare -> NOT wrapped'  ((Set-GpfFlagGuardedBranding -Text $fjTpl -Model @{ RawV4Content = "## Branding Uninstall`r`nRemove-Branding" }) -notmatch '(?is)If\s*\(\s*\$flag\s*\)\s*\{[^}]*Remove-Branding')
+    Assert 'FJ#8: predecessor guarded -> wrapped'   ((Set-GpfFlagGuardedBranding -Text $fjTpl -Model @{ RawV4Content = "If (`$flag) { Remove-Branding }" }) -match '(?is)If\s*\(\s*\$flag\s*\)\s*\{[^}]*Remove-Branding')
+    # #10: GPF custom functions from the v4 Extensions module PASS THROUGH the converter unchanged (Add-UGPermission is
+    # defined in v4 so it is preserved, not rewritten to Set-ADTItemPermission); the one intended rename still happens.
+    Assert 'FJ#10: Add-UGPermission preserved (v4 native)'  ((Convert-V3ToV4Content -Content "Add-UGPermission -Path `"`$envProgramData\App`" -Modify") -match '(?im)^\s*Add-UGPermission\b' -and (Convert-V3ToV4Content -Content "Add-UGPermission -Path `"x`" -Modify") -notmatch 'Set-ADTItemPermission')
+    Assert 'FJ#10: no "unusual shape" warning emitted'      ((Convert-V3ToV4Content -Content "Add-UGPermission -weird") -notmatch 'unusual shape')
+    $fjSb = "$(Convert-V3ToV4Content -Content 'Set-Branding -Name X')".Trim()
+    $fjIc = "$(Convert-V3ToV4Content -Content 'Import-Certificates -Path X')".Trim()
+    Assert 'FJ#10: Set-Branding passes through'      ($fjSb -eq 'Set-Branding -Name X')
+    Assert 'FJ#10: Import-Certificates passes through' ($fjIc -eq 'Import-Certificates -Path X')
+    $fjRb = "$(Convert-V3ToV4Content -Content 'Remove-BrandingREG -Name X')".Trim()
+    Assert 'FJ#10: Remove-BrandingREG -> Remove-Branding' ($fjRb -eq 'Remove-Branding -Name X')
+    # Point1: leading tabs -> spaces (packager machines have no Invoke-Formatter); here-string interiors untouched.
+    Assert 'FJ-indent: leading TAB+3sp -> 7 spaces'  ((Convert-LeadingTabsToSpaces -Text "`t   Start-ADTProcess") -eq ('       ' + 'Start-ADTProcess'))
+    Assert 'FJ-indent: command + tab-log align'      ($(($z = Convert-LeadingTabsToSpaces -Text ("       cmd`r`n`t   log") -split "`r?`n"); ([regex]::Match($z[0],'^ *').Length) -eq ([regex]::Match($z[1],'^ *').Length)))
+    Assert 'FJ-indent: here-string interior tab kept' ((Convert-LeadingTabsToSpaces -Text "`$x = @`"`r`n`tinner`r`n`"@") -match "(?m)^\tinner\r?$")
+    # Point1b: the "…is successful." scaffold log aligns to the install command's indent (a changed template pushed it right).
+    $fjAlign = Align-GpfScaffoldLogs -Text ("Write-ADTLogEntry -Message 'Start Installation A B 1.0' -Severity 2 -Source `$adtSession.DeployAppScriptFriendlyName`r`n`r`nStart-ADTMsiProcess -Action 'Install' -FilePath 'x.msi'`r`n`r`n    Write-ADTLogEntry -Message 'Installation of A B 1.0 is successful.' -Severity 2 -Source `$adtSession.DeployAppScriptFriendlyName")
+    $fjAl = $fjAlign -split "`r?`n"
+    Assert 'FJ-align: successful-log matches command indent' (([regex]::Match(($fjAl | Where-Object { $_ -match 'is successful' })[0],'^ *').Length) -eq ([regex]::Match(($fjAl | Where-Object { $_ -match 'Start-ADTMsiProcess' })[0],'^ *').Length))
+    Assert 'FJ-align: non-template log NOT touched' ((Align-GpfScaffoldLogs -Text "        Write-ADTLogEntry -Message 'Installation finished with' -Source 'INSTALLATION'") -eq "        Write-ADTLogEntry -Message 'Installation finished with' -Source 'INSTALLATION'")
+    # Point2: heads-up notices channel works (reset/add/get).
+    Reset-GpfNotices; Add-GpfNotice 'test notice'
+    Assert 'FJ-notice: add + get'                     ((@(Get-GpfNotices)).Count -eq 1 -and (@(Get-GpfNotices))[0] -eq 'test notice')
+    Reset-GpfNotices
+    Assert 'FJ-notice: reset clears'                  ((@(Get-GpfNotices)).Count -eq 0)
+    # Point2b: only MUST-SEE review items are promoted to the heads-up popup; nice-to-know ones are not.
+    Assert 'FJ-crit: "## REVIEW:" IS critical'        (Test-GpfCriticalReview -Item '## REVIEW: no UNINSTALL command for X. Add the uninstaller path.')
+    Assert 'FJ-crit: name-detection IS critical'      (Test-GpfCriticalReview -Item "detection is by NAME - confirm it matches the installed app's real ARP DisplayName")
+    Assert 'FJ-crit: source-type IS critical'         (Test-GpfCriticalReview -Item 'Source TYPE changed - predecessor was an MSI, your source is a zip.')
+    Assert 'FJ-crit: snapshot-added NOT critical'     (-not (Test-GpfCriticalReview -Item "Review the 3 '# [snapshot-added]' cleanup lines - confirm each removal is wanted."))
+    Assert 'FJ-crit: MST note NOT critical'           (-not (Test-GpfCriticalReview -Item 'Predecessor MST also modified -> Component table (not auto-applied)'))
+    # Add-CriticalNoticesFromScript promotes a "## REVIEW:" line from the built script into the notices channel.
+    Reset-GpfNotices
+    Add-CriticalNoticesFromScript -ScriptText "Start-ADTProcess -FilePath x`r`n## REVIEW: no UNINSTALL command for 'App'. Add the uninstaller path + silent switches." -IsPredecessor $false -NewProductCode ''
+    Assert 'FJ-crit: REVIEW line promoted to notices'  ((@(Get-GpfNotices) | Where-Object { $_ -match 'no UNINSTALL command' }).Count -ge 1)
+    Reset-GpfNotices
+} finally { $script:Settings = $__savedFj }
+
 Write-Host ""
 if ($fail -eq 0) { Write-Host "ALL TESTS PASSED" -ForegroundColor Green; exit 0 }   # explicit: a native command's exit code (robocopy's benign 1 in the self-stage test) must not leak as OUR exit code
 else { Write-Host "$fail TEST(S) FAILED" -ForegroundColor Red; exit 1 }

@@ -77,9 +77,14 @@ function Write-AudiLog {
 }
 
 function Save-AudiJobRecord {
-    <#  The durable record of one job: who asked, who executed, what was planned
-        and what actually happened. This is what an auditor reads, and what a
-        support call is reconstructed from.  #>
+    <#  The durable record of one job: what was planned, who executed it and what
+        actually happened. This is what an auditor reads, and what a support call
+        is reconstructed from.
+
+        It names the SERVICE ACCOUNT, never a person. Audi's requirement is that
+        no real person's name appears anywhere on the SCCM side, including in
+        this file. The RFC number is the link to the requester, held in Audi's
+        change system rather than here.  #>
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)]$Plan, $Result)
 
@@ -90,8 +95,7 @@ function Save-AudiJobRecord {
         Written     = (Get-Date).ToString('o')
         Environment = $Plan.Environment
         Package     = $Plan.PackageName
-        Requester   = $Plan.Requester      # the real person
-        Executor    = $Plan.Executor       # the shared service account
+        Executor    = $Plan.Executor       # the shared service account, never a person
         Rfc         = $Plan.Rfc
         DryRun      = $Context.DryRun
         Outcome     = $(if ($Result) { $(if ($Result.Ok) { 'Succeeded' } else { 'Failed' }) } else { 'Incomplete' })
@@ -200,12 +204,13 @@ function Enter-AudiPackageLock {
         try { $existing = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json } catch { }
         $age = if ($existing -and $existing.Started) { (New-TimeSpan -Start ([datetime]$existing.Started) -End (Get-Date)).TotalMinutes } else { [double]::MaxValue }
         if ($age -lt $runtime.LockTimeoutMinutes) {
+            # names the job, not a person - see Save-AudiJobRecord
             return @{ Ok = $false; Path = $path
-                Message = "'$($Plan.PackageName)' is already being integrated into $($Plan.Environment) by $($existing.Requester) (job $($existing.JobId), started $($existing.Started))." }
+                Message = "'$($Plan.PackageName)' is already being integrated into $($Plan.Environment) under job $($existing.JobId), started $($existing.Started)." }
         }
     }
 
-    $content = [pscustomobject]@{ JobId = $Plan.JobId; Requester = $Plan.Requester; Environment = $Plan.Environment
+    $content = [pscustomobject]@{ JobId = $Plan.JobId; Environment = $Plan.Environment
                                   Package = $Plan.PackageName; Started = (Get-Date).ToString('o') }
     try { $content | ConvertTo-Json | Set-Content -LiteralPath $path -Encoding UTF8 -ErrorAction Stop }
     catch { return @{ Ok = $true; Path = $null; Message = 'Lock could not be written; continuing without a lock.' } }

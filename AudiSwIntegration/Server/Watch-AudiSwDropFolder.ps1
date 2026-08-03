@@ -1,20 +1,29 @@
 # ==============================================================================
-#  Collects jobs from the drop folder and runs them.               SCENARIO B
+#  Collects jobs from the drop folder and runs them.               FLOW 2
 # ==============================================================================
-#  Runs ON the server, as the service account, started by a scheduled task every
-#  few minutes. Nothing connects in from outside.
+#  Runs ON the server, as the shared account, started by a scheduled task every
+#  few minutes. Nothing connects inward.
 #
 #    .\Watch-AudiSwDropFolder.ps1 -DropFolder '\\server\SwIntegration-Inbox$'
+#    .\Watch-AudiSwDropFolder.ps1 -DropFolder '...' -DryRun -Verbose
 #
-#  THE IMPORTANT SECURITY POINT
-#  ----------------------------
-#  A job file is just a file. Anyone who can write to the folder could put any
-#  name inside it, so the requester name written in the file is NOT trusted.
-#  The requester is taken from the NTFS OWNER of the file, which Windows stamps
-#  when the file is created and which the writer cannot forge.
+#  THE IDENTITY RULE - NO PERSON REACHES THIS SERVER
+#  -------------------------------------------------
+#  Audi's requirement: no real person's name may appear on the SCCM side. This
+#  script therefore never establishes who asked. It does not read the job
+#  file's NTFS owner, and it writes no personal name to the log, the job record
+#  or the result. Everything is keyed by JOB ID and RFC NUMBER, and Audi's
+#  change system holds the link from RFC to person.
 #
-#  In the live-connection scenario Windows states the caller directly. Here the
-#  file owner is the equivalent, and it is what keeps the audit trail honest.
+#  The packager still owns the file they wrote into \New, because Windows
+#  stamps that at creation. So the archive copy is RE-WRITTEN by this script,
+#  running as the service account, and the original is deleted - leaving no
+#  person-owned file behind in the secure zone.
+#
+#  Claiming: a job is MOVED to \Working before it runs, so two overlapping runs
+#  of the task can never process the same job twice.
+#
+#  ASCII only.
 # ==============================================================================
 
 [CmdletBinding()]
@@ -30,82 +39,76 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $EngineRoot 'AudiSwIntegration.ps1')
 
-foreach ($sub in 'New', 'Working', 'Done', 'Failed') {
-    $path = Join-Path $DropFolder $sub
-    if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType Directory -Path $path -Force | Out-Null }
-}
+$paths    = Initialize-AudiDropFolder -DropFolder $DropFolder
+$executor = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
-$newFolder = Join-Path $DropFolder 'New'
-$jobs = @(Get-ChildItem -LiteralPath $newFolder -Filter '*.json' -File -ErrorAction SilentlyContinue |
+$jobs = @(Get-ChildItem -LiteralPath $paths.New -Filter '*.xml' -File -ErrorAction SilentlyContinue |
           Sort-Object CreationTimeUtc | Select-Object -First $MaxJobsPerRun)
 
 if ($jobs.Count -eq 0) { Write-Verbose 'Nothing to collect.'; return }
+Write-Verbose "Collecting $($jobs.Count) job(s) as $executor."
 
 foreach ($file in $jobs) {
 
-    # --- who really asked: the file owner, not anything inside the file
-    $requester = $null
-    try { $requester = (Get-Acl -LiteralPath $file.FullName).Owner } catch { }
-    if (-not $requester) {
-        Move-Item -LiteralPath $file.FullName -Destination (Join-Path $DropFolder 'Failed') -Force
-        Write-Warning "Could not establish the owner of $($file.Name) - refused."
-        continue
-    }
-
-    # --- claim it, so a second run of the task cannot pick up the same job
-    $working = Join-Path (Join-Path $DropFolder 'Working') $file.Name
+    # --- claim it first, so a second run cannot take the same job
+    $working = Join-Path $paths.Working $file.Name
     try { Move-Item -LiteralPath $file.FullName -Destination $working -Force }
-    catch { Write-Verbose "$($file.Name) was already claimed."; continue }
+    catch { Write-Verbose "$($file.Name) was already claimed by another run."; continue }
 
-    $outcome = 'Failed'
-    $result  = $null
+    $outcome    = 'Failed'
+    $result     = $null
+    $job        = $null
+
     try {
-        $request = Get-Content -LiteralPath $working -Raw | ConvertFrom-Json
+        # --- read and validate. Nothing here asks who wrote the file.
+        $read = Read-AudiSwJobFile -Path $working
+        if (-not $read.Ok) { throw ("The job file was rejected: " + ($read.Errors -join '; ')) }
 
-        foreach ($required in 'PackageName', 'EnvironmentCode', 'Action') {
-            if (-not $request.PSObject.Properties[$required] -or -not $request.$required) {
-                throw "The job file is missing '$required'."
-            }
-        }
+        $job = $read.Job
 
         $plan = Get-AudiIntegrationPlan `
-                    -PackageName     $request.PackageName `
-                    -EnvironmentCode $request.EnvironmentCode `
-                    -Requester       $requester `
-                    -Rfc             $(if ($request.PSObject.Properties['Rfc']) { $request.Rfc } else { '' }) `
-                    -LocalizedName        $(if ($request.PSObject.Properties['LocalizedName'])        { $request.LocalizedName }        else { '' }) `
-                    -LocalizedDescription $(if ($request.PSObject.Properties['LocalizedDescription']) { $request.LocalizedDescription } else { '' })
+                    -PackageName          $job.PackageName `
+                    -EnvironmentCode      $job.Environment `
+                    -Rfc                  $job.Rfc `
+                    -LocalizedName        $job.NameEn `
+                    -LocalizedDescription $job.DescriptionEn `
+                    -JobId                $job.JobId
 
-        $wantsDryRun = $DryRun -or ($request.PSObject.Properties['DryRun'] -and $request.DryRun)
+        $wantsDryRun = ($DryRun -or $job.DryRun)
 
-        $result = if ($request.Action -eq 'Remove') {
+        $result = if ($job.Action -eq 'Remove') {
             Invoke-AudiSwRemoval     -Plan $plan -DryRun:$wantsDryRun
         } else {
             Invoke-AudiSwIntegration -Plan $plan -DryRun:$wantsDryRun
         }
-        $outcome = if ($result.Ok) { 'Done' } else { 'Failed' }
+        $outcome = if ($result.Ok) { 'Succeeded' } else { 'Failed' }
     }
     catch {
-        $result = [pscustomobject]@{ Ok = $false; Message = $_.Exception.Message; Steps = @()
-                                     JobId = ''; Requester = $requester }
+        $result = [pscustomobject]@{ Ok = $false; DryRun = [bool]$DryRun
+                                     Message = $_.Exception.Message; Steps = @() }
     }
 
-    # --- write the answer back next to the job, then file it
-    $answer = [pscustomobject]@{
-        Completed = (Get-Date).ToString('o')
-        Requester = $requester
-        Outcome   = $outcome
-        Ok        = $result.Ok
-        Message   = $result.Message
-        JobId     = $result.JobId
-        Steps     = $result.Steps
+    # --- file the job and write the result beside it
+    $targetFolder = if ($outcome -eq 'Succeeded') { $paths.Done } else { $paths.Failed }
+    $resultPath   = Join-Path $targetFolder ($file.Name -replace '\.xml$', '.result.xml')
+
+    if (-not $job) {
+        # unreadable file: still record why, so the packager is not left guessing
+        $job = [pscustomobject]@{ JobId = 'unknown'; Environment = 'ICZ'; PackageName = $file.BaseName; Rfc = '' }
     }
-    $target = Join-Path (Join-Path $DropFolder $outcome) $file.Name
+
     try {
-        $answer | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath ($target -replace '\.json$', '.result.json') -Encoding UTF8
-        Move-Item -LiteralPath $working -Destination $target -Force
+        $null = Write-AudiSwJobResult -Path $resultPath -Job $job -Executor $executor -Result $result
+
+        # Archive by RE-WRITING the file as this account and deleting the
+        # packager's original, rather than Move-Item. A move keeps the NTFS
+        # owner, which would leave the packager's name stamped on a file in the
+        # secure zone - the one thing Audi asked us not to do.
+        $archive = Join-Path $targetFolder $file.Name
+        [System.IO.File]::WriteAllBytes($archive, [System.IO.File]::ReadAllBytes($working))
+        Remove-Item -LiteralPath $working -Force
     }
     catch { Write-Warning "Could not file the finished job $($file.Name): $($_.Exception.Message)" }
 
-    Write-Verbose "$($file.Name): $outcome - $($result.Message)"
+    Write-Verbose "$($file.Name): $outcome - $($result.Message)  [job $($job.JobId), RFC $(if ($job.Rfc) { $job.Rfc } else { 'none' })]"
 }
