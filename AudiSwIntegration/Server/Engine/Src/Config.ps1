@@ -353,6 +353,37 @@ function Get-AudiBrandingKey {
     return (Expand-AudiTemplate -Template $defaults.PackageName.BrandingKeyFormat -Values $parts)
 }
 
+function Resolve-AudiSoftIdent {
+    <#  Turns the SoftIdent as written in the script into the path it actually
+        means on a client.
+
+        The deployment script writes it with a placeholder:
+
+            HKLM:\SOFTWARE\$($VWG_CurrentRegWOW)Microsoft\Windows\...
+
+        VWG_CurrentRegWOW is filled in by the PSADT extensions at run time. It
+        is 'Wow6432Node\' for a 32-bit application on 64-bit Windows and empty
+        otherwise, so the architecture decides it. Resolving it here means the
+        window shows the key that will really be looked at, rather than a
+        placeholder nobody can check.
+
+        Returns the resolved path; the raw form stays available to the caller. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$SoftIdent,
+        [string]$Architecture
+    )
+
+    if ([string]::IsNullOrWhiteSpace($SoftIdent)) { return '' }
+
+    $wow = if ($Architecture -match '^(x86|32|Win32)$') { 'Wow6432Node\' } else { '' }
+
+    # both the $(...) and the bare $Var forms, whichever the script used
+    $out = $SoftIdent -replace '\$\(\s*\$?VWG_CurrentRegWOW\s*\)', $wow
+    $out = $out -replace '\$VWG_CurrentRegWOW', $wow
+    return $out
+}
+
 function Get-AudiDocumentText {
     <#  Plain text out of a .docx, without needing Word installed.  #>
     [CmdletBinding()]
@@ -462,6 +493,34 @@ function Read-AudiPackageDetail {
                 }
             } else { $notes.Add("Instruction document found but no text could be read: $($doc.Name)") }
         } else { $notes.Add('No install instruction document found in the package.') }
+    }
+
+    # ---- description: short, else detailed, else leave it to the caller -------
+    # Audi's rule. The short description is what belongs in Software Center; the
+    # detailed one is a reasonable second best; if neither is filled in, nothing
+    # is invented here and the window falls back to "Publisher - Product -
+    # Version" the way it always has.
+    foreach ($lang in 'EN', 'DE') {
+        $short = "ApplicationDescription$lang"
+        $long  = "ApplicationDescription${lang}Long"
+        if (-not $fields.Contains($short) -and $fields.Contains($long)) {
+            $fields[$short] = $fields[$long]
+            $origin[$short] = 'document (detailed)'
+        }
+        if ($fields.Contains($long)) { $fields.Remove($long); $origin.Remove($long) }
+    }
+
+    # ---- SoftIdent: resolve the Wow6432Node placeholder ----------------------
+    # The raw value is kept as well, so the packager can still see what the
+    # script actually says.
+    if ($fields.Contains('SoftIdent')) {
+        $resolved = Resolve-AudiSoftIdent -SoftIdent $fields['SoftIdent'] -Architecture $fields['Architecture']
+        if ($resolved -ne $fields['SoftIdent']) {
+            $fields['SoftIdentRaw'] = $fields['SoftIdent']
+            $origin['SoftIdentRaw'] = $origin['SoftIdent']
+            $fields['SoftIdent']    = $resolved
+            $origin['SoftIdent']    = "$($origin['SoftIdent']) (Wow6432Node resolved for $($fields['Architecture']))"
+        }
     }
 
     return [pscustomobject]@{

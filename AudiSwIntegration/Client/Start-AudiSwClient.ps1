@@ -189,27 +189,18 @@ function Read-PackageFolder { param([string]$Path)
         if (-not $ui.txtPackage.Text.Trim()) { $ui.txtPackage.Text = Split-Path -Leaf $Path }
         Update-DerivedFields
 
-        $map = @{ ApplicationNameEN = 'txtNameEN'; ApplicationNameDE = 'txtNameDE'
-                  ApplicationDescriptionEN = 'txtDescEN'; ApplicationDescriptionDE = 'txtDescDE'
-                  OrderNumber = 'txtRfc' }
+        # The deployment script is the authority for everything except the
+        # description, which comes from the request document. Read-AudiPackageDetail
+        # has already applied the short-then-detailed preference.
+        $map = @{ ApplicationDescriptionEN = 'txtDescEN'
+                  ApplicationDescriptionDE = 'txtDescDE'
+                  OrderNumber              = 'txtRfc'
+                  SoftIdent                = 'txtSoftIdent' }
         foreach ($key in $map.Keys) {
             if ($detail.Fields.Contains($key) -and -not $ui[$map[$key]].Text) { $ui[$map[$key]].Text = $detail.Fields[$key] }
         }
-
-        # The request form states which operating systems the software supports,
-        # as ticked boxes. A field named OperatingSystem:<key> means that box was
-        # ticked, so tick the matching one here rather than making the packager
-        # copy it across by eye.
-        $ticked = @($detail.Fields.Keys | Where-Object { $_ -like 'OperatingSystem:*' -and $detail.Fields[$_] })
-        if ($ticked.Count -gt 0) {
-            foreach ($child in $ui.pnlOperatingSystems.Children) { $child.IsChecked = $false }
-            foreach ($key in $ticked) {
-                $wanted = $key.Substring('OperatingSystem:'.Length)
-                foreach ($child in $ui.pnlOperatingSystems.Children) {
-                    if ([string]$child.Tag -eq $wanted) { $child.IsChecked = $true }
-                }
-            }
-        }
+        # SoftIdent is read-only, so refresh it even if a previous package left one
+        if ($detail.Fields.Contains('SoftIdent')) { $ui.txtSoftIdent.Text = $detail.Fields['SoftIdent'] }
 
         # a sensible starting point rather than a blank form
         if (-not $ui.txtNameEN.Text -and $ui.txtPublisher.Text) {
@@ -217,15 +208,14 @@ function Read-PackageFolder { param([string]$Path)
         }
         if (-not $ui.txtNameDE.Text) { $ui.txtNameDE.Text = $ui.txtNameEN.Text }
 
-        # One line, so the card stays compact. The full detail - including which
-        # field came from where - is on the tooltip.
+        # Where every value came from, on the status line and in full on its
+        # tooltip. The card itself stays uncluttered.
         $script   = if ($detail.ScriptPath)   { "$($detail.Generation) $(Split-Path -Leaf $detail.ScriptPath)" } else { 'no script found' }
         $document = if ($detail.DocumentPath) { Split-Path -Leaf $detail.DocumentPath } else { 'no document found' }
-        $ui.txtSourceNote.Text = "{0}  |  {1}  |  {2} field(s) read" -f $script, $document, $detail.Fields.Count
 
         $lines = New-Object System.Collections.Generic.List[string]
-        $lines.Add("Script:   $script")
-        $lines.Add("Document: $document")
+        $lines.Add("Script:   $script   <- everything except the description")
+        $lines.Add("Document: $document   <- the description only")
         $lines.Add('')
         if ($detail.Fields.Count -gt 0) {
             foreach ($key in $detail.Fields.Keys) {
@@ -233,9 +223,9 @@ function Read-PackageFolder { param([string]$Path)
             }
         } else { $lines.Add('Nothing could be read - fill the fields in by hand.') }
         foreach ($n in @($detail.Notes)) { $lines.Add(''); $lines.Add($n) }
-        $ui.txtSourceNote.ToolTip = ($lines -join "`r`n")
+        $ui.txtStatus.ToolTip = ($lines -join "`r`n")
 
-        Set-Status 'Package read. Hover the grey line for where each value came from. Anything not found is left for you to fill in.'
+        Set-Status ("Read {0} value(s) from {1} and the request document. Hover this line to see where each one came from." -f $detail.Fields.Count, $script)
     }
     catch { Set-Status "Could not read the package: $($_.Exception.Message)" '#FFFF6B6B' }
 }

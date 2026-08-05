@@ -110,6 +110,16 @@
       <Field name="Language"     pattern="AppLang\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
       <Field name="Revision"     pattern="AppRevision\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
       <Field name="ScriptAuthor" pattern="AppScriptAuthor\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+
+      <!-- lastMatchWins (the default) is what makes SoftIdent correct.
+           VWG_SoftIdent is declared twice: once in the standard block and again
+           in CUSTOM APPLICATION VARIABLES. Only the second carries
+           $(VWG_CurrentRegWOW) - Wow6432Node for a 32-bit application on 64-bit
+           Windows - so the last match must win.
+           The names are the same in v3 and v4, so one pattern serves both. -->
+      <Field name="SoftIdent"    pattern="VWG_SoftIdent\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="OrderNumber"  pattern="VWG_OrderNumber\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Portfolio"    pattern="VWG_Portfv\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
     </Script>
 
     <!-- PSADT v3: values are plain variables at the top of the script. -->
@@ -121,6 +131,16 @@
       <Field name="Language"     pattern="\$appLang\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
       <Field name="Revision"     pattern="\$appRevision\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
       <Field name="ScriptAuthor" pattern="\$appScriptAuthor\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+
+      <!-- lastMatchWins (the default) is what makes SoftIdent correct.
+           VWG_SoftIdent is declared twice: once in the standard block and again
+           in CUSTOM APPLICATION VARIABLES. Only the second carries
+           $(VWG_CurrentRegWOW) - Wow6432Node for a 32-bit application on 64-bit
+           Windows - so the last match must win.
+           The names are the same in v3 and v4, so one pattern serves both. -->
+      <Field name="SoftIdent"    pattern="VWG_SoftIdent\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="OrderNumber"  pattern="VWG_OrderNumber\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Portfolio"    pattern="VWG_Portfv\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
     </Script>
 
     <!-- The "Software Package Request" document that ships with the package.
@@ -136,25 +156,22 @@
          Anything that does not match is simply left blank for the packager to
          type. Adjusting a label is an edit here, not a code change. -->
     <Document filter="*.docx">
+      <!-- THE DESCRIPTION, AND NOTHING ELSE.
+           Everything else comes from the deployment script, which is the
+           reliable source. The document is only consulted for the wording a
+           user will read in Software Center.
 
-      <!-- Basic information block -->
-      <Field name="Manufacturer"             pattern="(?im)^[ \t]*Manufacturer[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
-      <Field name="ProductName"              pattern="(?im)^[ \t]*Product Name[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
-      <Field name="VersionBuild"             pattern="(?im)^[ \t]*Version */ *Build[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+           Order of preference, per language:
+             1. Short description of the product
+             2. Detailed description of the product   (used only if 1 is empty)
+             3. nothing here - the window falls back to "Publisher - Product -
+                Version", the way it has always been done
 
-      <!-- Descriptions: these are what SCCM shows the user -->
-      <Field name="ApplicationDescriptionEN" pattern="(?im)^[ \t]*Short description of the product in English[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
-      <Field name="ApplicationDescriptionDE" pattern="(?im)^[ \t]*Short description of the product in German[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
-
-      <!-- Ticked operating systems. A field named OperatingSystem:<key> ticks
-           the matching box in the window when it is found. -->
-      <Field name="OperatingSystem:Win10x64" pattern="(&#9746;)[ \t]*Windows 10"/>
-      <Field name="OperatingSystem:Win11x64" pattern="(&#9746;)[ \t]*Windows 11"/>
-
-      <!-- The order number is not on this form; it comes from the RFC the
-           packager is working to. Left here so it fills in if a form ever
-           does carry one. -->
-      <Field name="OrderNumber"              pattern="(?im)^[ \t]*(?:Auftragsnummer|Order number)[ \t]*(?::|-|\t)[ \t]*(\d+)[ \t]*$"/>
+           If Audi later wants more from this form, add fields here. -->
+      <Field name="ApplicationDescriptionEN"     pattern="(?im)^[ \t]*Short description of the product in English[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+      <Field name="ApplicationDescriptionDE"     pattern="(?im)^[ \t]*Short description of the product in German[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+      <Field name="ApplicationDescriptionENLong" pattern="(?im)^[ \t]*Detailed description of the product in English[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+      <Field name="ApplicationDescriptionDELong" pattern="(?im)^[ \t]*Detailed description of the product in German[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
     </Document>
 
   </PackageSource>

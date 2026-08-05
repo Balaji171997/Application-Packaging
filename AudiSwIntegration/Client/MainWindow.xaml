@@ -337,11 +337,10 @@
               <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource Label}" Text="Detection key"/>
               <TextBox   Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="4" x:Name="txtDetection" IsReadOnly="True" FontFamily="Consolas" FontSize="11" Padding="11,3,11,3" Margin="0"/>
 
-              <Border Grid.Row="7" Grid.ColumnSpan="5" CornerRadius="4" Background="#FF00232B" BorderBrush="{StaticResource FieldBorder}"
-                      BorderThickness="1" Padding="11,8,11,8" Margin="0,6,0,0">
-                <TextBlock x:Name="txtSourceNote" TextWrapping="Wrap" FontSize="10.5" LineHeight="15"
-                           Foreground="{StaticResource InkMuted}" Text="Nothing read yet."/>
-              </Border>
+              <TextBlock Grid.Row="7" Grid.Column="0" Style="{StaticResource Label}" Text="SoftIdent" Margin="0,6,12,0"/>
+              <TextBox   Grid.Row="7" Grid.Column="1" Grid.ColumnSpan="4" x:Name="txtSoftIdent" IsReadOnly="True"
+                         FontFamily="Consolas" FontSize="11" Padding="11,3,11,3" Margin="0,6,0,0"
+                         ToolTip="The uninstall key the package checks for. Read from VWG_SoftIdent in the deployment script - the one in the CUSTOM APPLICATION VARIABLES block - with Wow6432Node filled in for a 32-bit package."/>
             </Grid>
           </Border>
 

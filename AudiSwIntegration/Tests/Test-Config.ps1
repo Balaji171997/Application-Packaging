@@ -161,16 +161,45 @@ try {
         Assert-Equal "script gives $($pair[0])" $pair[1] $detail.Fields[$pair[0]]
     }
 
-    # from the document - this is the part that breaks silently when the .docx
-    # part name or the paragraph handling is wrong, so it is checked explicitly
-    Assert-Equal 'document gives the manufacturer' 'Adobe Systems Incorporated' $detail.Fields['Manufacturer']
-    Assert-Equal 'document gives the product name' 'Acrobat Reader' $detail.Fields['ProductName']
-    Assert-True  'document gives the ticked operating systems' ($detail.Fields['OperatingSystem:Win10x64'] -and $detail.Fields['OperatingSystem:Win11x64'])
-    Assert-True  'document gives a description'    ($detail.Fields['ApplicationDescriptionEN'] -like '*PDF*')
+    # ---- the script is the authority for everything except the description
+    Assert-Equal 'script gives the order number' 'AES-1-000123-A' $detail.Fields['OrderNumber']
+    Assert-Equal 'script gives the portfolio'    'Adobe'          $detail.Fields['Portfolio']
+
+    # SoftIdent is declared twice; the CUSTOM APPLICATION VARIABLES one wins,
+    # because only that one carries the Wow6432Node placeholder
+    Assert-True 'SoftIdent comes from the custom variables block' `
+        ($detail.Fields['SoftIdentRaw'] -like '*VWG_CurrentRegWOW*') $detail.Fields['SoftIdentRaw']
+    Assert-True 'and the placeholder is resolved away for x64' `
+        ($detail.Fields['SoftIdent'] -notlike '*VWG_CurrentRegWOW*' -and $detail.Fields['SoftIdent'] -notlike '*Wow6432Node*') $detail.Fields['SoftIdent']
+
+    # ---- the document is consulted for the description only
+    Assert-True  'document gives the English description' ($detail.Fields['ApplicationDescriptionEN'] -like '*PDF*')
+    Assert-True  'document gives the German description'  ($detail.Fields['ApplicationDescriptionDE'] -like '*PDF*')
+    Assert-True  'the SHORT description is preferred over the detailed one' `
+        ($detail.Fields['ApplicationDescriptionEN'] -notlike '*Detailed*') $detail.Fields['ApplicationDescriptionEN']
+    Assert-True  'nothing else is taken from the document' `
+        (-not ($detail.Origin.Keys | Where-Object { $detail.Origin[$_] -like 'document*' -and $_ -notlike 'ApplicationDescription*' }))
 
     Assert-Equal 'every field records where it came from' $detail.Fields.Count $detail.Origin.Count
     Assert-Equal 'script fields are attributed to the script' 'script:v4' $detail.Origin['Publisher']
     Assert-Equal 'document fields are attributed to the document' 'document' $detail.Origin['ApplicationDescriptionEN']
+
+    # ---- a 32-bit package: SoftIdent must gain Wow6432Node
+    $made86   = & $builder -Path $sampleRoot -PackageName 'ICZ_ADOBE_Acrobat_Reader_x86_2024.1-0003_MUL'
+    $detail86 = Read-AudiPackageDetail -PackagePath $made86.Path
+    Assert-Equal 'the 32-bit sample really is x86' 'x86' $detail86.Fields['Architecture']
+    Assert-True  'a 32-bit package resolves SoftIdent to Wow6432Node' `
+        ($detail86.Fields['SoftIdent'] -like '*\Wow6432Node\Microsoft\*') $detail86.Fields['SoftIdent']
+    Assert-True  'and the origin says so' ($detail86.Origin['SoftIdent'] -like '*x86*')
+
+    # the resolver on its own, both ways round
+    Assert-Equal 'resolver: x86 inserts the node' 'HKLM:\SOFTWARE\Wow6432Node\X' `
+        (Resolve-AudiSoftIdent -SoftIdent 'HKLM:\SOFTWARE\$($VWG_CurrentRegWOW)X' -Architecture 'x86')
+    Assert-Equal 'resolver: x64 removes it'       'HKLM:\SOFTWARE\X' `
+        (Resolve-AudiSoftIdent -SoftIdent 'HKLM:\SOFTWARE\$($VWG_CurrentRegWOW)X' -Architecture 'x64')
+    Assert-Equal 'resolver: the bare variable form too' 'HKLM:\SOFTWARE\Wow6432Node\X' `
+        (Resolve-AudiSoftIdent -SoftIdent 'HKLM:\SOFTWARE\$VWG_CurrentRegWOWX' -Architecture 'x86')
+    Assert-Equal 'resolver: an empty SoftIdent stays empty' '' (Resolve-AudiSoftIdent -SoftIdent '' -Architecture 'x86')
 
     # a folder with nothing in it must report that, not invent values
     $empty = Join-Path $sampleRoot 'EmptyPackage'

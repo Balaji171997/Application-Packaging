@@ -30,6 +30,11 @@ if ((Test-Path -LiteralPath $package) -and -not $Force) {
 
 New-Item -ItemType Directory -Path (Join-Path $package 'Files') -Force | Out-Null
 
+# The script must agree with the folder name, or the sample would contradict
+# itself - and the architecture is what decides whether SoftIdent picks up
+# Wow6432Node.
+$arch = if ($PackageName -match '_(x86|x64|ALL)_') { $Matches[1] } else { 'x64' }
+
 # ------------------------------------------------------------ PSADT v4 script
 $adt = @'
 <#
@@ -48,6 +53,22 @@ $adtSession = @{
     AppScriptAuthor = 'Packaging Team'
 }
 
+[string] $Global:VWG_SoftIdent   = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\AcroRead2024 [DisplayVersion=2024.1]'
+[string] $Global:VWG_Portfv      = 'Adobe'
+[string] $Global:VWG_OrderNumber = 'AES-1-000123-A'
+
+#region CUSTOM APPLICATION VARIABLES AND FUNCTIONS
+##================================================
+## CUSTOM APPLICATION VARIABLES BEGIN
+##================================================
+# Declared a second time on purpose, exactly as a real package does. Only this
+# one carries the Wow6432Node placeholder, so this is the one that must be read.
+[string]$Global:VWG_SoftIdent = "HKLM:\SOFTWARE\$($VWG_CurrentRegWOW)Microsoft\Windows\CurrentVersion\Uninstall\AcroRead2024 [DisplayVersion=2024.1]"
+##================================================
+## CUSTOM APPLICATION VARIABLES END
+##================================================
+#endregion
+
 function Install-ADTDeployment {
     Start-ADTMsiProcess -Action Install -FilePath 'AcroRead.msi'
 }
@@ -56,6 +77,7 @@ function Uninstall-ADTDeployment {
     Start-ADTMsiProcess -Action Uninstall -FilePath 'AcroRead.msi'
 }
 '@
+$adt = $adt -replace "AppArch         = 'x64'", "AppArch         = '$arch'"
 Set-Content -LiteralPath (Join-Path $package 'Invoke-AppDeployToolkit.ps1') -Value $adt -Encoding UTF8
 Set-Content -LiteralPath (Join-Path $package 'Files\AcroRead.msi') -Value 'placeholder installer' -Encoding ASCII
 
@@ -64,6 +86,8 @@ Set-Content -LiteralPath (Join-Path $package 'Files\AcroRead.msi') -Value 'place
 # The lines below are laid out the way the patterns in Defaults.xml expect.
 # Laid out like a real Audi "Software Package Request": a table, so each label
 # is on one line and its value on the next, indented by a tab.
+# The document is consulted for the description only. A detailed description is
+# included as well, so the short-then-detailed preference can be exercised.
 $lines = @(
     'Software Package Request'
     'Basic information'
@@ -71,15 +95,14 @@ $lines = @(
     "`tAdobe Systems Incorporated"
     'Product Name'
     "`tAcrobat Reader"
-    'Version / Build'
-    "`t2024.1"
-    'Which operating systems does the software support?'
-    "`t$([char]0x2612)Windows 10"
-    "$([char]0x2612)Windows 11"
     'Short description of the product in German'
     "`tLiest, druckt und kommentiert PDF-Dokumente."
     'Short description of the product in English'
     "`tReads, prints and annotates PDF documents."
+    'Detailed description of the product in German'
+    "`tAusfuehrliche Beschreibung, nur als Rueckfallebene."
+    'Detailed description of the product in English'
+    "`tDetailed description, used only when the short one is missing."
 )
 $paragraphs = ($lines | ForEach-Object {
     $safe = $_ -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;'
