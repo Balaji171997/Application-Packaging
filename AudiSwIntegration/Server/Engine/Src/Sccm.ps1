@@ -41,6 +41,7 @@ function New-AudiSccmProvider {
             New-CMApplication -Name $c.ApplicationName -Publisher $c.Publisher -SoftwareVersion $c.Version `
                               -LocalizedApplicationName $c.LocalizedName -LocalizedApplicationDescription $c.LocalizedDescription `
                               -AutoInstall $true -ErrorAction Stop | Out-Null
+            & $script:AudiSetGermanDisplay $c
         }
 
         AddDeploymentType = { param($c)
@@ -72,6 +73,41 @@ function New-AudiSccmProvider {
         AddSecurityScope = { param($c)
             $app = Get-CMApplication -Name $c.ApplicationName -Fast -ErrorAction Stop
             foreach ($scope in $c.SecurityScopes) { Add-CMObjectSecurityScope -InputObject $app -Id $scope -ErrorAction Stop | Out-Null }
+        }
+
+        # ---- used by Modify, to bring an existing application back into line
+        #
+        # Modify never creates a second application. It updates the one that is
+        # there, adds what is missing and removes what is no longer wanted.
+        SetApplication = { param($c)
+            Set-CMApplication -Name $c.ApplicationName `
+                              -Publisher $c.Publisher -SoftwareVersion $c.Version `
+                              -LocalizedApplicationName $c.LocalizedName `
+                              -LocalizedApplicationDescription $c.LocalizedDescription `
+                              -ErrorAction Stop | Out-Null
+            & $script:AudiSetGermanDisplay $c
+        }
+
+        SetDeploymentType = { param($c)
+            Set-CMScriptDeploymentType -ApplicationName $c.ApplicationName -DeploymentTypeName $c.DeploymentTypeName `
+                                       -ContentLocation $c.ContentPath -InstallCommand $c.InstallCommand `
+                                       -UninstallCommand $c.UninstallCommand `
+                                       -InstallationBehaviorType $c.InstallationBehaviorType `
+                                       -LogonRequirementType $c.LogonRequirementType `
+                                       -MaximumRuntimeMins $c.MaxRuntimeMinutes -EstimatedRuntimeMins $c.EstimatedInstallMinutes `
+                                       -ErrorAction Stop | Out-Null
+        }
+
+        TestDeployment = { param($c)
+            [bool](Get-CMApplicationDeployment -Name $c.ApplicationName -CollectionName $c.CollectionName -ErrorAction SilentlyContinue)
+        }
+
+        # Every collection this tool would ever have made for this package. Used
+        # to find ones the environment file no longer asks for. Deliberately
+        # narrow: it can only ever match names built from this package's own
+        # name, so a hand-made collection is never in scope for removal.
+        GetPackageCollections = { param($c)
+            @(Get-CMDeviceCollection -Name "*$($c.PackageName)*" -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
         }
 
         # ---- preflight probes: read-only, used before anything is created
@@ -159,6 +195,44 @@ function New-AudiSccmProvider {
     }
 }
 
+# ------------------------------------------------------- German display entry
+#
+# SCCM keeps one display name and description PER LANGUAGE, inside the
+# application's SDMPackageXML. The supported cmdlets only ever write the
+# console's own language, which is why New-CMApplication alone leaves the German
+# entry empty. The old Audi tool built that XML by hand and pushed it through
+# WMI; this does the same thing through the supported serializer.
+#
+# NOT YET EXERCISED AGAINST A LIVE SITE. It is written to fail soft: if the
+# German entry cannot be added the English one is already in place, so the
+# application is still correct, and the reason is surfaced as a warning rather
+# than failing the whole integration.
+$script:AudiSetGermanDisplay = {
+    param($c)
+
+    if ([string]::IsNullOrWhiteSpace($c.LocalizedNameDe)) { return }
+    try {
+        $app = Get-CMApplication -Name $c.ApplicationName -ErrorAction Stop
+        $xml = [Microsoft.ConfigurationManagement.ApplicationManagement.Serialization.SccmSerializer]::DeserializeFromString($app.SDMPackageXML, $true)
+
+        $german = $xml.DisplayInfo | Where-Object { $_.Language -eq 'de-DE' } | Select-Object -First 1
+        if (-not $german) {
+            $german = New-Object Microsoft.ConfigurationManagement.ApplicationManagement.AppDisplayInfo
+            $german.Language = 'de-DE'
+            $xml.DisplayInfo.Add($german) | Out-Null
+        }
+        $german.Title       = $c.LocalizedNameDe
+        $german.Description = $c.LocalizedDescriptionDe
+
+        $updated = [Microsoft.ConfigurationManagement.ApplicationManagement.Serialization.SccmSerializer]::Serialize($xml, $false)
+        $app.SDMPackageXML = $updated
+        $app.Put()
+    }
+    catch {
+        Write-Warning ("The German display name could not be written for '{0}': {1}. The English entry is in place." -f $c.ApplicationName, $_.Exception.Message)
+    }
+}
+
 function New-AudiSccmDryRunProvider {
     <#  Touches nothing. Records what would have happened, in order.
         Drives the packager's preview and the tests.
@@ -169,7 +243,9 @@ function New-AudiSccmDryRunProvider {
         [string[]]$ExistingApplications = @(),
         [string[]]$ExistingCollections  = @(),
         # e.g. 'ContentPath', 'Collection:INA010CA', 'DpGroup:INA-DP-Group all', 'Scope:INA00003'
-        [string[]]$Missing = @()
+        [string[]]$Missing = @(),
+        # deployments already on the site, as 'CollectionName'
+        [string[]]$ExistingDeployments  = @()
     )
 
     $log = New-Object System.Collections.Generic.List[object]
@@ -197,6 +273,12 @@ function New-AudiSccmDryRunProvider {
     $provider.RemoveApplication        = { param($c) & $record 'RemoveApplication'        $c.ApplicationName }.GetNewClosure()
     $provider.NewArsGroup              = { param($c) & $record 'NewArsGroup'              $c.GroupName }.GetNewClosure()
     $provider.RemoveArsGroup           = { param($c) & $record 'RemoveArsGroup'           $c.GroupName }.GetNewClosure()
+
+    # ---- Modify
+    $provider.SetApplication    = { param($c) & $record 'SetApplication'    $c.ApplicationName }.GetNewClosure()
+    $provider.SetDeploymentType = { param($c) & $record 'SetDeploymentType' $c.DeploymentTypeName }.GetNewClosure()
+    $provider.TestDeployment    = { param($c) $ExistingDeployments -contains $c.CollectionName }.GetNewClosure()
+    $provider.GetPackageCollections = { param($c) @($ExistingCollections) }.GetNewClosure()
 
     # preflight probes: everything present unless the caller says otherwise
     $provider.TestContentPath    = { param($c) -not ($Missing -contains 'ContentPath') }.GetNewClosure()
@@ -277,6 +359,125 @@ function Get-AudiRemovalStep {
         [pscustomobject]@{ Key = 'Application'; Name = 'Remove the application';     DependsOn = @('Deployments') }
         [pscustomobject]@{ Key = 'ArsGroup';    Name = 'Remove the AD access group'; DependsOn = @() }
     )
+}
+
+function Get-AudiModifyStep {
+    <#  Modify brings an application that already exists back into line with the
+        environment file and the package as it now is.
+
+        It is a RECONCILE, not a rebuild: the application object is never
+        replaced, so its deployments keep working and the machines already in
+        its collections are undisturbed. Anything missing is added, anything the
+        environment file no longer asks for is removed, and what has changed -
+        a new revision, a new content path, a new description - is updated.  #>
+    return @(
+        [pscustomobject]@{ Key = 'Application';   Name = 'Update the application';         DependsOn = @() }
+        [pscustomobject]@{ Key = 'DeploymentType';Name = 'Update the deployment type';     DependsOn = @('Application') }
+        [pscustomobject]@{ Key = 'Category';      Name = 'Set the application category';   DependsOn = @('Application') }
+        [pscustomobject]@{ Key = 'Content';       Name = 'Re-distribute the content';      DependsOn = @('DeploymentType') }
+        [pscustomobject]@{ Key = 'Collections';   Name = 'Add missing collections';        DependsOn = @() }
+        [pscustomobject]@{ Key = 'Deployments';   Name = 'Add missing deployments';        DependsOn = @('Application', 'Collections') }
+        [pscustomobject]@{ Key = 'Retire';        Name = 'Remove what is no longer wanted';DependsOn = @('Collections') }
+        [pscustomobject]@{ Key = 'SecurityScope'; Name = 'Add the security scope';         DependsOn = @('Application') }
+        [pscustomobject]@{ Key = 'MoveObjects';   Name = 'File objects into folders';      DependsOn = @('Application', 'Collections') }
+    )
+}
+
+function Invoke-AudiModifyStepBody {
+    [CmdletBinding()]
+    param($Key, $Plan, $Provider, $Changed)
+
+    switch ($Key) {
+        'Application' {
+            if (-not (& $Provider.TestApplication @{ ApplicationName = $Plan.ApplicationName })) {
+                throw "No application named '$($Plan.ApplicationName)' exists in $($Plan.Environment). Use Integrate to create it."
+            }
+            & $Provider.SetApplication @{
+                ApplicationName = $Plan.ApplicationName; Publisher = $Plan.Parts.Publisher; Version = $Plan.Parts.Version
+                LocalizedName = $Plan.LocalizedName; LocalizedDescription = $Plan.LocalizedDescription
+                LocalizedNameDe = $Plan.LocalizedNameDe; LocalizedDescriptionDe = $Plan.LocalizedDescriptionDe }
+            $Changed.Add('application details updated') | Out-Null
+            return "Application '$($Plan.ApplicationName)' updated."
+        }
+
+        'DeploymentType' {
+            & $Provider.SetDeploymentType @{
+                ApplicationName = $Plan.ApplicationName; DeploymentTypeName = $Plan.DeploymentType
+                ContentPath = $Plan.ContentPath; InstallCommand = $Plan.InstallCommand; UninstallCommand = $Plan.UninstallCommand
+                DetectionClause = $Plan.DetectionKey; InstallationBehaviorType = $Plan.InstallationBehaviorType
+                LogonRequirementType = $Plan.LogonRequirementType; MaxRuntimeMinutes = $Plan.MaxRuntimeMinutes
+                EstimatedInstallMinutes = $Plan.EstimatedInstallMinutes }
+            $Changed.Add('deployment type updated') | Out-Null
+            return "Deployment type '$($Plan.DeploymentType)' updated - content path and detection rule refreshed."
+        }
+
+        'Category' {
+            & $Provider.SetCategory @{ ApplicationName = $Plan.ApplicationName; Category = $Plan.Category }
+            return "Category '$($Plan.Category)' set."
+        }
+
+        'Content' {
+            & $Provider.StartContentDistribution @{ ApplicationName = $Plan.ApplicationName; DistributionPointGroup = $Plan.DistributionPointGroup }
+            $Changed.Add('content re-distributed') | Out-Null
+            return "Content re-distribution started to '$($Plan.DistributionPointGroup)'."
+        }
+
+        'Collections' {
+            $added = 0
+            foreach ($collection in $Plan.Collections) {
+                if (& $Provider.TestCollectionName @{ Name = $collection.Name }) { continue }
+                & $Provider.NewCollection @{ Name = $collection.Name; LimitingCollectionId = $collection.LimitingCollectionId; Comment = $collection.Comment }
+                $Changed.Add("collection added: $($collection.Name)") | Out-Null
+                $added++
+            }
+            return $(if ($added -gt 0) { "$added collection(s) added." } else { 'All collections already present.' })
+        }
+
+        'Deployments' {
+            $added = 0
+            foreach ($collection in $Plan.Collections) {
+                if (& $Provider.TestDeployment @{ ApplicationName = $Plan.ApplicationName; CollectionName = $collection.Name }) { continue }
+                & $Provider.NewDeployment @{ ApplicationName = $Plan.ApplicationName; CollectionName = $collection.Name; DeploymentAction = $collection.DeploymentAction }
+                $Changed.Add("deployment added: $($collection.Name)") | Out-Null
+                $added++
+            }
+            return $(if ($added -gt 0) { "$added deployment(s) added." } else { 'All deployments already present.' })
+        }
+
+        'Retire' {
+            # Only collections this tool would itself have created for THIS
+            # package are ever in scope, and only those the environment file no
+            # longer asks for. A collection made by hand is never touched.
+            $wanted = @($Plan.Collections | ForEach-Object { $_.Name })
+            $live   = @(& $Provider.GetPackageCollections @{ PackageName = $Plan.PackageName })
+            $stale  = @($live | Where-Object { $_ -and ($wanted -notcontains $_) })
+
+            if ($stale.Count -eq 0) { return 'Nothing to retire.' }
+            foreach ($name in $stale) {
+                & $Provider.RemoveDeployment @{ ApplicationName = $Plan.ApplicationName; CollectionName = $name }
+                & $Provider.RemoveCollection @{ Name = $name }
+                $Changed.Add("retired: $name") | Out-Null
+            }
+            return "$($stale.Count) collection(s) and their deployments retired: $($stale -join ', ')."
+        }
+
+        'SecurityScope' {
+            & $Provider.AddSecurityScope @{ ApplicationName = $Plan.ApplicationName; SecurityScopes = $Plan.SecurityScopes }
+            return "$(@($Plan.SecurityScopes).Count) security scopes attached."
+        }
+
+        'MoveObjects' {
+            $app = & $Provider.GetApplicationObject @{ ApplicationName = $Plan.ApplicationName }
+            & $Provider.MoveObject @{ FolderPath = $Plan.ApplicationFolder; InputObject = $app; Label = $Plan.ApplicationName }
+            foreach ($collection in $Plan.Collections) {
+                $obj = & $Provider.GetCollectionObject @{ Name = $collection.Name }
+                & $Provider.MoveObject @{ FolderPath = $collection.Folder; InputObject = $obj; Label = $collection.Name }
+            }
+            return "Application and $(@($Plan.Collections).Count) collections filed."
+        }
+
+        default { throw "Unknown modify step '$Key'." }
+    }
 }
 
 function Invoke-AudiStepBody {
@@ -437,6 +638,16 @@ function Test-AudiSwPrerequisite {
     $hasContent = & $Provider.TestContentPath @{ Path = $Plan.ContentPath }
     & $add 'ContentPath' $hasContent 'Error' $(if ($hasContent) { "Source found: $($Plan.ContentPath)" }
         else { "The package source was not found at $($Plan.ContentPath). Copy the package to the content share first." })
+
+    # 1b. the package name's own site prefix must match the environment it is
+    #     being published into. INA_ADOBE_... published into ICZ would create
+    #     INA-named objects on the ICZ site, which nobody would spot until much
+    #     later. The old tool "solved" this by rewriting the first three
+    #     characters, which is what corrupted ADO_ADOBE_ into INA_INABE_.
+    $site = $Plan.Parts.Site
+    $siteOk = ($site -eq $Plan.Environment)
+    & $add 'SitePrefix' $siteOk 'Error' $(if ($siteOk) { "The package name is prefixed '$site', matching $($Plan.Environment)." }
+        else { "The package name starts with '$site' but it is being published into $($Plan.Environment). Rename the package for the target environment, or select $site instead." })
 
     # 2. the application must not already exist
     $appExists = & $Provider.TestApplication @{ ApplicationName = $Plan.ApplicationName }
@@ -645,6 +856,93 @@ function Invoke-AudiSwIntegration {
     $summary = if ($failed) { "Integration failed after $okCount of $(@(Get-AudiIntegrationStep).Count) steps." }
                else { "Integration completed - $okCount steps." }
     return & $finish (-not $failed) $summary $preflight
+}
+
+function Invoke-AudiSwModification {
+    <#  Brings an application that already exists back into line.
+
+        Deliberately NOT rolled back on failure. A rollback would have to undo
+        changes to an application that is already live and already deployed to
+        real machines, and half-undoing that is worse than stopping. Instead the
+        run stops at the first failure and reports exactly what it had changed
+        up to that point, so the operator can decide.  #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Plan,
+        $Provider,
+        [switch]$DryRun,
+        [switch]$AllowUnverifiedEnvironment,
+        [scriptblock]$OnProgress
+    )
+
+    if (-not $Provider) { $Provider = if ($DryRun) { New-AudiSccmDryRunProvider } else { New-AudiSccmProvider } }
+    $log = New-AudiLogContext -Plan $Plan -Root $null -DryRun:$DryRun
+
+    if (-not $Plan.Verified -and -not $AllowUnverifiedEnvironment -and -not $DryRun) {
+        return [pscustomobject]@{ Ok = $false; JobId = $Plan.JobId; Environment = $Plan.Environment; Package = $Plan.PackageName
+            Executor = $Plan.Executor; DryRun = [bool]$DryRun; Changed = @()
+            Message = "Environment $($Plan.Environment) is marked unverified - its settings still need confirming by Audi."
+            Steps = @(); Provider = $Provider }
+    }
+
+    $connection = Connect-AudiSccm -Plan $Plan -DryRun:$DryRun
+    if (-not $connection.Ok) {
+        return [pscustomobject]@{ Ok = $false; JobId = $Plan.JobId; Environment = $Plan.Environment; Package = $Plan.PackageName
+            Executor = $Plan.Executor; DryRun = [bool]$DryRun; Changed = @()
+            Message = $connection.Message; Steps = @(); Provider = $Provider }
+    }
+
+    Write-AudiLog -Context $log -Message ("Job {0} | MODIFY {1} | environment {2} | RFC {3} | executed as {4}{5}" -f `
+        $Plan.JobId, $Plan.PackageName, $Plan.Environment, $(if ($Plan.Rfc) { $Plan.Rfc } else { 'none' }),
+        $Plan.Executor, $(if ($DryRun) { ' | DRY RUN' } else { '' }))
+
+    $results   = New-Object System.Collections.Generic.List[object]
+    $changed   = New-Object System.Collections.Generic.List[string]
+    $succeeded = New-Object System.Collections.Generic.HashSet[string]
+    $failed    = $false
+
+    foreach ($step in (Get-AudiModifyStep)) {
+        $missing = @($step.DependsOn | Where-Object { -not $succeeded.Contains($_) })
+        if ($missing.Count -gt 0) {
+            $results.Add([pscustomobject]@{ Step = $step.Key; Name = $step.Name; Ok = $false
+                Message = "Skipped - depends on $($missing -join ', '), which did not succeed." }) | Out-Null
+            $failed = $true
+            continue
+        }
+        if ($OnProgress) { & $OnProgress $step.Name }
+        try {
+            # $stepKey, not $step.Key: Invoke-AudiWithRetry has its own -Step
+            # parameter, and PowerShell variable names are case-insensitive, so
+            # inside the scriptblock $step would resolve to that parameter.
+            $stepKey = $step.Key
+            $message = Invoke-AudiWithRetry -Description $step.Name -LogContext $log -Step $stepKey -Action {
+                Invoke-AudiModifyStepBody -Key $stepKey -Plan $Plan -Provider $Provider -Changed $changed
+            }
+            $null = $succeeded.Add($step.Key)
+            $results.Add([pscustomobject]@{ Step = $step.Key; Name = $step.Name; Ok = $true; Message = $message }) | Out-Null
+            Write-AudiLog -Context $log -Step $step.Key -Message $message
+        }
+        catch {
+            $results.Add([pscustomobject]@{ Step = $step.Key; Name = $step.Name; Ok = $false; Message = $_.Exception.Message }) | Out-Null
+            Write-AudiLog -Context $log -Step $step.Key -Level 'Error' -Message $_.Exception.Message
+            $failed = $true
+            break
+        }
+    }
+
+    $okCount = @($results | Where-Object { $_.Ok }).Count
+    $result = [pscustomobject]@{
+        Ok = (-not $failed); JobId = $Plan.JobId; Environment = $Plan.Environment; Package = $Plan.PackageName
+        Executor = $Plan.Executor; DryRun = [bool]$DryRun
+        Changed = $changed.ToArray()
+        Message = $(if ($failed) { "Modification stopped after $okCount of $(@(Get-AudiModifyStep).Count) steps - $($changed.Count) change(s) had already been made." }
+                    elseif ($changed.Count -eq 0) { 'Nothing to change - already up to date.' }
+                    else { "Modification completed - $($changed.Count) change(s)." })
+        Steps = $results.ToArray(); LogPath = $log.LogPath; Provider = $Provider
+    }
+    Write-AudiLog -Context $log -Level $(if ($result.Ok) { 'Info' } else { 'Error' }) -Message $result.Message
+    $null = Save-AudiJobRecord -Context $log -Plan $Plan -Result $result
+    return $result
 }
 
 function Invoke-AudiSwRemoval {

@@ -101,15 +101,7 @@ function Get-AudiDefaults {
             }
         }
 
-    $parts = @($result.Document.SelectNodes('/Defaults/PackageName/Part')) |
-        ForEach-Object {
-            [pscustomobject]@{
-                Name         = $_.name
-                Index        = $(if ($_.HasAttribute('index'))        { [int]$_.index }        else { $null })
-                IndexFromEnd = $(if ($_.HasAttribute('indexFromEnd')) { [int]$_.indexFromEnd } else { $null })
-                Remainder    = $(if ($_.HasAttribute('remainder'))    { [bool]::Parse($_.remainder) } else { $false })
-            }
-        }
+    $namePatterns = @($result.Document.SelectNodes('/Defaults/PackageName/Pattern') | ForEach-Object { $_.InnerText.Trim() })
 
     $scripts = @($result.Document.SelectNodes('/Defaults/PackageSource/Script')) |
         ForEach-Object {
@@ -162,9 +154,8 @@ function Get-AudiDefaults {
         OperatingSystems = $osList
         PackageName      = [pscustomobject]@{
             Separator         = $d.PackageName.separator
-            MinimumParts      = [int]$d.PackageName.minimumParts
             BrandingKeyFormat = $d.PackageName.brandingKeyFormat
-            Parts             = $parts
+            Patterns          = $namePatterns
         }
         PackageSource    = [pscustomobject]@{
             SearchDepth = [int]$d.PackageSource.searchDepth
@@ -234,6 +225,9 @@ function Get-AudiEnvironment {
         LogonPrefix       = $e.Domain.logonPrefix
         SiteCode          = $e.Site.code
         SiteServer        = $e.Site.server
+        # The machine that runs the collector. Not the SCCM server: it connects
+        # to the SMS Provider above, from Zone Global.
+        RunnerHost        = $e.Runner.host
         Service           = $e.Service
         # How the window reaches this environment. Flow 2 = DropFolder: the
         # window never connects to the server, it leaves a file in a share.
@@ -277,13 +271,14 @@ function Resolve-AudiEnvironmentCode {
 }
 
 function Split-AudiPackageName {
-    <#  Splits a package name into its parts using the layout in Defaults.xml.
+    <#  Splits a package name into its parts using the patterns in Defaults.xml.
 
         The tool being replaced did this with a text replacement, which corrupted
         any name whose site code appeared again later - ADO_ADOBE_Reader became
-        INA_INABE_Reader. Parts are located by position instead, counting from
-        the front for the leading parts and from the back for the trailing ones,
-        so a product name containing the separator still parses.  #>
+        INA_INABE_Reader. Here each naming convention is one regex with named
+        groups, tried in order, so a product name containing the separator still
+        parses and a second convention is a config line rather than a code
+        change.  #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$PackageName,
@@ -292,29 +287,26 @@ function Split-AudiPackageName {
 
     $defaults = Get-AudiDefaults -Root $Root
     $spec     = $defaults.PackageName
-    $tokens   = @($PackageName.Split($spec.Separator))
 
-    if ($tokens.Count -lt $spec.MinimumParts) {
-        throw ("Package name '{0}' has {1} parts; at least {2} are expected ({3})." -f `
-               $PackageName, $tokens.Count, $spec.MinimumParts,
-               (($spec.Parts | ForEach-Object { $_.Name }) -join $spec.Separator))
+    $match   = $null
+    $matched = $null
+    foreach ($pattern in $spec.Patterns) {
+        $regex = [regex]$pattern
+        $m = $regex.Match($PackageName)
+        if ($m.Success) { $match = $m; $matched = $regex; break }
+    }
+    if (-not $match) {
+        throw ("Package name '{0}' does not match any known naming convention. Expected something like " +
+               "INA_ETAS_INCA_x64_7.5.7-0001_MUL - site, publisher, product, architecture, version-revision, language. " +
+               "The conventions the tool accepts are the <Pattern> entries in Defaults.xml.") -f $PackageName
     }
 
-    $result   = [ordered]@{}
-    $leading  = 0
-    $trailing = 0
-
-    foreach ($part in $spec.Parts) {
-        if ($null -ne $part.Index)        { $result[$part.Name] = $tokens[$part.Index]; $leading  = [Math]::Max($leading,  $part.Index + 1) }
-        elseif ($null -ne $part.IndexFromEnd) { $result[$part.Name] = $tokens[$tokens.Count - $part.IndexFromEnd]; $trailing = [Math]::Max($trailing, $part.IndexFromEnd) }
-    }
-
-    foreach ($part in $spec.Parts) {
-        if ($part.Remainder) {
-            $count = $tokens.Count - $trailing - $leading
-            if ($count -lt 1) { throw "Package name '$PackageName' leaves nothing for '$($part.Name)'." }
-            $result[$part.Name] = ($tokens[$leading..($leading + $count - 1)] -join $spec.Separator)
-        }
+    # every named group in the pattern becomes a field, so adding one to the
+    # regex is all it takes to surface a new part
+    $result = [ordered]@{}
+    foreach ($name in $matched.GetGroupNames()) {
+        if ($name -match '^\d+$') { continue }          # skip the numbered groups
+        $result[$name] = $match.Groups[$name].Value
     }
 
     $result['PackageName'] = $PackageName
@@ -369,8 +361,13 @@ function Get-AudiDocumentText {
     Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
     $zip = $null
     try {
-        $zip   = [System.IO.Compression.ZipFile]::OpenRead($Path)
-        $entry = $zip.Entries | Where-Object { $_.FullName -eq 'word/document.xml' } | Select-Object -First 1
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+        # Word writes 'word/document.xml', but some tools that produce .docx
+        # files write the separator as a backslash. Match either, and ignore
+        # case, so a document is never silently skipped over a slash.
+        $entry = $zip.Entries |
+                 Where-Object { $_.FullName.Replace('\', '/') -ieq 'word/document.xml' } |
+                 Select-Object -First 1
         if (-not $entry) { return '' }
         $reader = New-Object System.IO.StreamReader($entry.Open())
         try { $xml = $reader.ReadToEnd() } finally { $reader.Dispose() }
@@ -378,8 +375,18 @@ function Get-AudiDocumentText {
     catch { return '' }
     finally { if ($zip) { $zip.Dispose() } }
 
-    # paragraph and line breaks become newlines, then drop the remaining markup
-    $text = $xml -replace '</w:p>', "`r`n" -replace '<w:br[^>]*/>', "`r`n"
+    # Paragraph and line breaks become newlines, then the rest of the markup goes.
+    # Closing tags are used deliberately - they never carry attributes, whereas
+    # Word writes opening tags as <w:p w14:paraId=".." ..>.
+    #
+    # Tables matter as much as paragraphs: an install instruction document
+    # usually puts "label | value" in a two-column table, and without the tab
+    # the label and value would run together into one unreadable word.
+    $text = $xml -replace '</w:p>', "`r`n"                  # paragraphs
+    $text = $text -replace '<w:br[^>]*/>', "`r`n"           # manual line breaks
+    $text = $text -replace '<w:tab[^>]*/>', "`t"            # tabs
+    $text = $text -replace '</w:tc>', "`t"                  # table cell -> tab
+    $text = $text -replace '</w:tr>', "`r`n"                # table row  -> new line
     $text = $text -replace '<[^>]+>', ''
     $text = $text -replace '&amp;', '&' -replace '&lt;', '<' -replace '&gt;', '>' -replace '&quot;', '"' -replace '&apos;', "'"
     return $text
@@ -480,8 +487,11 @@ function Get-AudiIntegrationPlan {
         [string]$JobId,
         [string]$Root,
         # What the packager types, or what Read-AudiPackageDetail found for them.
+        # Audi records both languages, so both are carried through to SCCM.
         [string]$LocalizedName,
-        [string]$LocalizedDescription
+        [string]$LocalizedDescription,
+        [string]$LocalizedNameDe,
+        [string]$LocalizedDescriptionDe
     )
 
     if ([string]::IsNullOrWhiteSpace($JobId)) { $JobId = [guid]::NewGuid().ToString() }
@@ -520,8 +530,12 @@ function Get-AudiIntegrationPlan {
         }
     })
 
-    if (-not $LocalizedName)        { $LocalizedName = "$($parts.Publisher) - $($parts.Product) - $($parts.Version)" }
-    if (-not $LocalizedDescription) { $LocalizedDescription = $LocalizedName }
+    if (-not $LocalizedName)          { $LocalizedName = "$($parts.Publisher) - $($parts.Product) - $($parts.Version)" }
+    if (-not $LocalizedDescription)   { $LocalizedDescription = $LocalizedName }
+    # German falls back to English rather than being left blank, so the German
+    # display entry in SCCM always says something useful.
+    if (-not $LocalizedNameDe)        { $LocalizedNameDe = $LocalizedName }
+    if (-not $LocalizedDescriptionDe) { $LocalizedDescriptionDe = $LocalizedDescription }
 
     return [pscustomobject]@{
         JobId           = $JobId
@@ -531,13 +545,14 @@ function Get-AudiIntegrationPlan {
         Verified        = $env.Verified
         SiteCode        = $env.SiteCode
         SiteServer      = $env.SiteServer
-        ServiceAddress  = $env.Service.address
-        ServiceConfigurationName = $env.Service.configurationName
+        RunnerHost      = $env.RunnerHost
         PackageName     = $PackageName
         Parts           = $parts
         ApplicationName = $PackageName
-        LocalizedName        = $LocalizedName
-        LocalizedDescription = $LocalizedDescription
+        LocalizedName          = $LocalizedName
+        LocalizedDescription   = $LocalizedDescription
+        LocalizedNameDe        = $LocalizedNameDe
+        LocalizedDescriptionDe = $LocalizedDescriptionDe
         InstallationBehaviorType = $defaults.DeploymentType.installationBehaviorType
         LogonRequirementType     = $defaults.DeploymentType.logonRequirementType
         MaxRuntimeMinutes        = [int]$defaults.Application.maxRuntimeMinutes

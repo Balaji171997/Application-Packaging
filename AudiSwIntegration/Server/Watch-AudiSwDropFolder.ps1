@@ -67,19 +67,21 @@ foreach ($file in $jobs) {
         $job = $read.Job
 
         $plan = Get-AudiIntegrationPlan `
-                    -PackageName          $job.PackageName `
-                    -EnvironmentCode      $job.Environment `
-                    -Rfc                  $job.Rfc `
-                    -LocalizedName        $job.NameEn `
-                    -LocalizedDescription $job.DescriptionEn `
-                    -JobId                $job.JobId
+                    -PackageName            $job.PackageName `
+                    -EnvironmentCode        $job.Environment `
+                    -Rfc                    $job.Rfc `
+                    -LocalizedName          $job.NameEn `
+                    -LocalizedDescription   $job.DescriptionEn `
+                    -LocalizedNameDe        $job.NameDe `
+                    -LocalizedDescriptionDe $job.DescriptionDe `
+                    -JobId                  $job.JobId
 
         $wantsDryRun = ($DryRun -or $job.DryRun)
 
-        $result = if ($job.Action -eq 'Remove') {
-            Invoke-AudiSwRemoval     -Plan $plan -DryRun:$wantsDryRun
-        } else {
-            Invoke-AudiSwIntegration -Plan $plan -DryRun:$wantsDryRun
+        $result = switch ($job.Action) {
+            'Remove' { Invoke-AudiSwRemoval      -Plan $plan -DryRun:$wantsDryRun }
+            'Modify' { Invoke-AudiSwModification -Plan $plan -DryRun:$wantsDryRun }
+            default  { Invoke-AudiSwIntegration  -Plan $plan -DryRun:$wantsDryRun }
         }
         $outcome = if ($result.Ok) { 'Succeeded' } else { 'Failed' }
     }

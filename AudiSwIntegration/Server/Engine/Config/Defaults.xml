@@ -35,11 +35,10 @@
                   persistContentInClientCache="false"
                   run32BitOn64Bit="false"/>
 
+  <!-- Windows 7 is out of support and no longer packaged for, so it is not
+       offered. Adding an operating system back is one line here, not a code
+       change. -->
   <OperatingSystems>
-    <OperatingSystem key="Win7x86"  label="Windows 7 x86 (out of support)"
-                     value="Windows/All_x86_Windows_7_Client"              selectedByDefault="false"/>
-    <OperatingSystem key="Win7x64"  label="Windows 7 x64 (out of support)"
-                     value="Windows/All_x64_Windows_7_Client"              selectedByDefault="false"/>
     <OperatingSystem key="Win10x64" label="Windows 10 x64"
                      value="Windows/All_x64_Windows_10_and_higher_Clients" selectedByDefault="true"/>
     <OperatingSystem key="Win11x64" label="Windows 11 x64"
@@ -70,19 +69,31 @@
        changes that can never be traced to a requester. -->
   <Audit requireRfc="true"/>
 
-  <!-- Package name layout, e.g. INA_AUDI_DummyTest_x86_1.0_0001_MUL
-       Site and Publisher are counted from the front; architecture, version,
-       revision and language from the back. Product takes whatever is left in
-       the middle, so a product name containing the separator still parses. -->
-  <PackageName separator="_" minimumParts="7"
+  <!-- Package name layout.
+
+       A real Audi package folder is the SITE CODE followed by the branding key:
+           INA_ETAS_INCA_x64_7.5.7-0001_MUL
+           ^^^ ^^^^ ^^^^ ^^^ ^^^^^ ^^^^ ^^^
+           |   |    |    |   |     |    language
+           |   |    |    |   |     revision      <- joined to the version by '-'
+           |   |    |    |   version
+           |   |    |    architecture
+           |   |    product      <- may itself contain '_'
+           |   publisher
+           site
+
+       Each pattern is tried in order and the first that matches wins, so more
+       than one naming convention can be supported at once without a code
+       change. Named groups use the (?'Name'...) form so no XML escaping is
+       needed. Every group named here becomes a field the window can show. -->
+  <PackageName separator="_"
                brandingKeyFormat="{Publisher}_{Product}_{Architecture}_{Version}-{Revision}_{Language}">
-    <Part name="Site"         index="0"/>
-    <Part name="Publisher"    index="1"/>
-    <Part name="Product"      remainder="true"/>
-    <Part name="Architecture" indexFromEnd="4"/>
-    <Part name="Version"      indexFromEnd="3"/>
-    <Part name="Revision"     indexFromEnd="2"/>
-    <Part name="Language"     indexFromEnd="1"/>
+
+    <!-- current form: version and revision joined by a hyphen -->
+    <Pattern>^(?'Site'[^_]+)_(?'Publisher'[^_]+)_(?'Product'.+)_(?'Architecture'[^_]+)_(?'Version'[^_]+)-(?'Revision'[^_-]+)_(?'Language'[^_]+)$</Pattern>
+
+    <!-- older form: revision as a part of its own -->
+    <Pattern>^(?'Site'[^_]+)_(?'Publisher'[^_]+)_(?'Product'.+)_(?'Architecture'[^_]+)_(?'Version'[^_]+)_(?'Revision'[^_]+)_(?'Language'[^_]+)$</Pattern>
   </PackageName>
 
   <!-- Where the packager window fills itself from, so nothing already recorded
@@ -112,19 +123,38 @@
       <Field name="ScriptAuthor" pattern="\$appScriptAuthor\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
     </Script>
 
-    <!-- The install instruction document that ships with the request.
+    <!-- The "Software Package Request" document that ships with the package.
 
-         STARTER PATTERNS ONLY - not yet calibrated. Audi uses the same install
-         instruction format as the GPF packages, so these are to be tuned
-         against a real GPF install instruction document. Until that is done the
-         fields stay blank and the packager types them, exactly as they do
-         today. Tuning them is an edit here, not a code change. -->
+         CALIBRATED against a real Audi request form (INA_ETAS_INCA). That form
+         is a TABLE: the label sits on one line and the value on the NEXT one,
+         indented by a tab. So these patterns match a label line and then take
+         the line below it - not "label: value" on a single line.
+
+         [ \t] is used rather than \s so the match cannot run past the following
+         line and swallow the next label.
+
+         Anything that does not match is simply left blank for the packager to
+         type. Adjusting a label is an edit here, not a code change. -->
     <Document filter="*.docx">
-      <Field name="ApplicationNameEN"        pattern="(?im)^\s*(?:Application name|Software name)\s*[:\-]\s*(.+?)\s*$"/>
-      <Field name="ApplicationNameDE"        pattern="(?im)^\s*(?:Anwendungsname|Softwarename)\s*[:\-]\s*(.+?)\s*$"/>
-      <Field name="ApplicationDescriptionEN" pattern="(?im)^\s*(?:Description|Purpose)\s*[:\-]\s*(.+?)\s*$"/>
-      <Field name="ApplicationDescriptionDE" pattern="(?im)^\s*(?:Beschreibung|Zweck)\s*[:\-]\s*(.+?)\s*$"/>
-      <Field name="OrderNumber"              pattern="(?im)^\s*(?:Auftragsnummer|Order number)\s*[:\-]\s*(\d+)\s*$"/>
+
+      <!-- Basic information block -->
+      <Field name="Manufacturer"             pattern="(?im)^[ \t]*Manufacturer[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+      <Field name="ProductName"              pattern="(?im)^[ \t]*Product Name[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+      <Field name="VersionBuild"             pattern="(?im)^[ \t]*Version */ *Build[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+
+      <!-- Descriptions: these are what SCCM shows the user -->
+      <Field name="ApplicationDescriptionEN" pattern="(?im)^[ \t]*Short description of the product in English[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+      <Field name="ApplicationDescriptionDE" pattern="(?im)^[ \t]*Short description of the product in German[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+
+      <!-- Ticked operating systems. A field named OperatingSystem:<key> ticks
+           the matching box in the window when it is found. -->
+      <Field name="OperatingSystem:Win10x64" pattern="(&#9746;)[ \t]*Windows 10"/>
+      <Field name="OperatingSystem:Win11x64" pattern="(&#9746;)[ \t]*Windows 11"/>
+
+      <!-- The order number is not on this form; it comes from the RFC the
+           packager is working to. Left here so it fills in if a form ever
+           does carry one. -->
+      <Field name="OrderNumber"              pattern="(?im)^[ \t]*(?:Auftragsnummer|Order number)[ \t]*(?::|-|\t)[ \t]*(\d+)[ \t]*$"/>
     </Document>
 
   </PackageSource>

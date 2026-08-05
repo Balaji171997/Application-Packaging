@@ -53,13 +53,22 @@
           </xs:complexType>
         </xs:element>
 
-        <!-- Where the job is sent and which account carries it out.
-             'account' and 'allowedGroup' are recorded for documentation and for
-             clear error messages. The tool never reads or stores a password. -->
+        <!-- The Script Runner: the machine in Zone Global that collects jobs and
+             carries them out. It is NOT the SCCM server - it connects to the SMS
+             Provider named in <Site>. The ConfigMgr console must be installed
+             here, and kept at the same build as the site. -->
+        <xs:element name="Runner">
+          <xs:complexType>
+            <xs:attribute name="host" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Which account carries the work out. Recorded for documentation and
+             for clear error messages; the tool never reads or stores a password.
+             (The flow-1 'address' and 'configurationName' attributes are gone -
+             they described a WinRM endpoint that is not being built.) -->
         <xs:element name="Service">
           <xs:complexType>
-            <xs:attribute name="address" type="NonEmptyString" use="required"/>
-            <xs:attribute name="configurationName" type="NonEmptyString" use="required"/>
             <xs:attribute name="account" type="NonEmptyString" use="required"/>
             <xs:attribute name="allowedGroup" type="NonEmptyString" use="required"/>
           </xs:complexType>
@@ -228,22 +237,16 @@
         <!-- How a package name is composed. Parts are located either from the
              start (index) or from the end (indexFromEnd), so a product name that
              itself contains the separator still parses correctly. -->
+        <!-- One regex per naming convention, tried in order; the first match
+             wins. Named groups use the (?'Name'...) form, so the pattern needs
+             no XML escaping. Every named group becomes a field. -->
         <xs:element name="PackageName">
           <xs:complexType>
             <xs:sequence>
-              <xs:element name="Part" maxOccurs="unbounded">
-                <xs:complexType>
-                  <xs:attribute name="name" type="NonEmptyString" use="required"/>
-                  <xs:attribute name="index" type="xs:nonNegativeInteger" use="optional"/>
-                  <xs:attribute name="indexFromEnd" type="xs:positiveInteger" use="optional"/>
-                  <!-- true = this part absorbs everything left over in the middle -->
-                  <xs:attribute name="remainder" type="xs:boolean" use="optional" default="false"/>
-                </xs:complexType>
-              </xs:element>
+              <xs:element name="Pattern" type="NonEmptyString" maxOccurs="unbounded"/>
             </xs:sequence>
             <xs:attribute name="separator" type="NonEmptyString" use="required"/>
-            <xs:attribute name="minimumParts" type="xs:positiveInteger" use="required"/>
-            <!-- Template built from the part names above, e.g.
+            <!-- Template built from the group names above, e.g.
                  {Publisher}_{Product}_{Architecture}_{Version}-{Revision}_{Language} -->
             <xs:attribute name="brandingKeyFormat" type="NonEmptyString" use="required"/>
           </xs:complexType>
@@ -369,6 +372,7 @@
         <xs:simpleType>
           <xs:restriction base="xs:string">
             <xs:enumeration value="Integrate"/>
+            <xs:enumeration value="Modify"/>
             <xs:enumeration value="Remove"/>
           </xs:restriction>
         </xs:simpleType>

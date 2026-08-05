@@ -16,9 +16,9 @@
 
   <Site code="ICZ" server="AUDIINSA1298.audi.vwg5t"/>
 
-  <Service address="AUDIINSA1298.audi.vwg5t"
-           configurationName="AudiSwIntegration"
-           account="deaudi005t\svc-swintegration"
+  <!-- CONFIRM: the machine that runs the collector task (Zone: Global). -->
+  <Runner host="AUDIINSA1298.audi.vwg5t"/>
+  <Service account="deaudi005t\svc-swintegration"
            allowedGroup="deaudi005t\G-Audi-SwIntegration-Operators"/>
 
   <!-- Direct today. Switch mode to DropFolder and fill in dropFolder to use flow 2. -->

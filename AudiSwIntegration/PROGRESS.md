@@ -3,7 +3,7 @@
 Running record of what is built, what is pending, and every decision taken so
 far. Update this at the end of each working session.
 
-**Last updated: 01.08.2026** — flow 2 wired end to end; no person recorded anywhere on the SCCM side. 185 tests passing.
+**Last updated: 01.08.2026** — flow 2 wired end to end; no person recorded anywhere on the SCCM side. 232 tests passing.
 
 ---
 
@@ -15,13 +15,15 @@ far. Update this at the end of each working session.
 | 2. SCCM engine (12 operations, preflight, retry, audit) | **Done** |
 | 3. Active Directory group via ARS/SPML | **Done** — written, not yet run against a real directory |
 | 4. Packager window | **Done** — submits through the drop folder; Preview still runs locally |
+| 4b. Modify (reconcile an existing application) | **Done** — adds what is missing, retires what the environment file no longer asks for, updates what changed |
+| 4c. German display name and description in SCCM | **Written**, via SDMPackageXML like the old tool. Not yet run against a site |
 | 5. Flow 2 — drop folder | **Done**, engine and window both |
 | 6. Flow 1 — live connection | **Dropped.** Scripts parked in `Server\_NotUsed-LiveConnection\` |
 | 7. Flow 3 — shared repository | Designed and drawn, **not built** |
 | 8. ICZ proving run | **Blocked** — needs the account, the rights and the drop folder |
 | 9. INA and PCZ rollout | Not started |
 
-**Tests: 185 passing** — 55 config, 87 engine, 43 transport. None need SCCM.
+**Tests: 232 passing** — 74 config, 115 engine, 43 transport. None need SCCM.
 
 ```powershell
 .\Tests\Invoke-AllTests.ps1
@@ -47,6 +49,10 @@ far. Update this at the end of each working session.
 | Job and result files are **XML**, not JSON | Consistent with everything else, and with Audi's own `[package].xml` |
 | Parsing rules live in `Defaults.xml` | A naming or template change is a config edit |
 | SCCM calls sit behind a provider | Gives a real dry-run preview and makes the engine testable without SCCM |
+| Modify reconciles, never rebuilds | The application object is never replaced, so live deployments and the machines in its collections are undisturbed |
+| Modify is not rolled back | Half-undoing a change to an application that is already deployed is worse than stopping and reporting |
+| Retiring only ever touches this package''s own collections | A hand-made collection can never be caught by it |
+| Package name prefix must match the environment | INA_ into ICZ is refused. The old tool rewrote the first three characters, which is what corrupted ADO_ADOBE_ into INA_INABE_ |
 | Config is read-only to the executor | The thing that executes must not rewrite the rules it runs under |
 
 ---

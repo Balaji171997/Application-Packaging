@@ -135,6 +135,11 @@ function Strip-Boilerplate {
                     $i++; if ($started -and $depth -le 0) { break }
                 }
             }
+            # POSITION MARKER: the template dialogs/process-close block sat HERE. Leave a sentinel so the section
+            # rebuild (Set-SectionBody) can tell custom code that ran ABOVE the dialogs from code that ran BELOW it,
+            # and place each on the correct side of the new template's dialogs block (instead of dumping everything
+            # above it). The sentinel is a comment; Set-SectionBody consumes/strips it, so it never reaches output.
+            $kept.Add('#__PB_DIALOGS_SPLIT__')
             continue
         }
         if ($t -match '(?i)^#\s*check\s+for\s+pending\s+reboot') { $i++; continue }

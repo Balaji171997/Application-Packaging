@@ -27,6 +27,14 @@
 [CmdletBinding()]
 param(
     [string]$EnvironmentCode,
+
+    # Overrides the drop folder from the environment file. For testing only:
+    # point it at a local folder and run the collector by hand, and the whole
+    # round trip works with no server and no share. The window shows a SANDBOX
+    # badge whenever this is in use, so a test run can never be mistaken for a
+    # real one.
+    [string]$DropFolder,
+
     # exercises the window's own code paths and exits, without showing it
     [switch]$SelfTest
 )
@@ -93,7 +101,7 @@ function Show-Warning { param([string]$Text)
 }
 
 function Set-Busy { param([bool]$Busy)
-    foreach ($b in 'btnPreview','btnIntegrate','btnRemove','btnBrowse','btnRead') { $ui[$b].IsEnabled = -not $Busy }
+    foreach ($b in 'btnPreview','btnIntegrate','btnModify','btnRemove','btnBrowse','btnRead') { $ui[$b].IsEnabled = -not $Busy }
     $ui.Window.Cursor = if ($Busy) { 'Wait' } else { 'Arrow' }
 }
 
@@ -120,7 +128,22 @@ foreach ($os in $defaults.OperatingSystems) {
     $null = $ui.pnlOperatingSystems.Children.Add($cb)
 }
 
-$ui.txtEstimate.Text = [string]$defaults.Application.estimatedInstallMinutes
+# Install minutes is deliberately NOT a field. It came from Defaults.xml and was
+# never read back, so showing it invited a packager to change something that had
+# no effect. The engine takes it from Application/@estimatedInstallMinutes.
+
+# ------------------------------------------------------------- sandbox badge
+# A test run must never be mistakable for a real one.
+if ($DropFolder) {
+    $ui.txtMode.Text = 'SANDBOX'
+    $ui.brdMode.ToolTip = "Jobs go to $DropFolder instead of the environment's drop folder."
+    $ui.brdMode.Visibility = 'Visible'
+}
+
+function Get-ActiveDropFolder { param($Environment)
+    if ($DropFolder) { return $DropFolder }
+    return $Environment.Transport.DropFolder
+}
 
 # ------------------------------------------------------- environment awareness
 function Update-EnvironmentNotice {
@@ -162,6 +185,7 @@ function Read-PackageFolder { param([string]$Path)
     try {
         $detail = Read-AudiPackageDetail -PackagePath $Path
 
+        if ($ui.txtPackagePath.Text -ne $Path) { $ui.txtPackagePath.Text = $Path }
         if (-not $ui.txtPackage.Text.Trim()) { $ui.txtPackage.Text = Split-Path -Leaf $Path }
         Update-DerivedFields
 
@@ -172,17 +196,46 @@ function Read-PackageFolder { param([string]$Path)
             if ($detail.Fields.Contains($key) -and -not $ui[$map[$key]].Text) { $ui[$map[$key]].Text = $detail.Fields[$key] }
         }
 
+        # The request form states which operating systems the software supports,
+        # as ticked boxes. A field named OperatingSystem:<key> means that box was
+        # ticked, so tick the matching one here rather than making the packager
+        # copy it across by eye.
+        $ticked = @($detail.Fields.Keys | Where-Object { $_ -like 'OperatingSystem:*' -and $detail.Fields[$_] })
+        if ($ticked.Count -gt 0) {
+            foreach ($child in $ui.pnlOperatingSystems.Children) { $child.IsChecked = $false }
+            foreach ($key in $ticked) {
+                $wanted = $key.Substring('OperatingSystem:'.Length)
+                foreach ($child in $ui.pnlOperatingSystems.Children) {
+                    if ([string]$child.Tag -eq $wanted) { $child.IsChecked = $true }
+                }
+            }
+        }
+
         # a sensible starting point rather than a blank form
         if (-not $ui.txtNameEN.Text -and $ui.txtPublisher.Text) {
             $ui.txtNameEN.Text = "$($ui.txtPublisher.Text) - $($ui.txtProduct.Text) - $($ui.txtVersion.Text)"
         }
         if (-not $ui.txtNameDE.Text) { $ui.txtNameDE.Text = $ui.txtNameEN.Text }
 
-        $found = if ($detail.Fields.Count -gt 0) { ($detail.Fields.Keys -join ', ') } else { 'nothing' }
-        $ui.txtSourceNote.Text = "Script: $(if ($detail.ScriptPath) { "$($detail.Generation) - " + (Split-Path -Leaf $detail.ScriptPath) } else { 'not found' })" +
-                                 "`r`nDocument: $(if ($detail.DocumentPath) { Split-Path -Leaf $detail.DocumentPath } else { 'not found' })" +
-                                 "`r`nRead: $found"
-        Set-Status 'Package read. Anything not found is left for you to fill in.'
+        # One line, so the card stays compact. The full detail - including which
+        # field came from where - is on the tooltip.
+        $script   = if ($detail.ScriptPath)   { "$($detail.Generation) $(Split-Path -Leaf $detail.ScriptPath)" } else { 'no script found' }
+        $document = if ($detail.DocumentPath) { Split-Path -Leaf $detail.DocumentPath } else { 'no document found' }
+        $ui.txtSourceNote.Text = "{0}  |  {1}  |  {2} field(s) read" -f $script, $document, $detail.Fields.Count
+
+        $lines = New-Object System.Collections.Generic.List[string]
+        $lines.Add("Script:   $script")
+        $lines.Add("Document: $document")
+        $lines.Add('')
+        if ($detail.Fields.Count -gt 0) {
+            foreach ($key in $detail.Fields.Keys) {
+                $lines.Add(("{0,-26} {1}   [{2}]" -f $key, $detail.Fields[$key], $detail.Origin[$key]))
+            }
+        } else { $lines.Add('Nothing could be read - fill the fields in by hand.') }
+        foreach ($n in @($detail.Notes)) { $lines.Add(''); $lines.Add($n) }
+        $ui.txtSourceNote.ToolTip = ($lines -join "`r`n")
+
+        Set-Status 'Package read. Hover the grey line for where each value came from. Anything not found is left for you to fill in.'
     }
     catch { Set-Status "Could not read the package: $($_.Exception.Message)" '#FFFF6B6B' }
 }
@@ -197,7 +250,9 @@ function New-PlanFromForm {
     return Get-AudiIntegrationPlan -PackageName $package -EnvironmentCode $code `
                                    -Rfc $ui.txtRfc.Text.Trim() `
                                    -LocalizedName $ui.txtNameEN.Text.Trim() `
-                                   -LocalizedDescription $ui.txtDescEN.Text.Trim()
+                                   -LocalizedDescription $ui.txtDescEN.Text.Trim() `
+                                   -LocalizedNameDe $ui.txtNameDE.Text.Trim() `
+                                   -LocalizedDescriptionDe $ui.txtDescDE.Text.Trim()
 }
 
 # ------------------------------------------------------------- reading results
@@ -307,7 +362,7 @@ function Start-Preview {
 # The window writes a job file into the environment's drop folder and waits for
 # the result file. It never connects to the SCCM server, holds no SCCM rights
 # and states no identity: the server takes the requester from the file's owner.
-function Start-Run { param([string]$Mode)   # Integrate | Remove
+function Start-Run { param([string]$Mode)   # Integrate | Modify | Remove
 
     try   { $plan = New-PlanFromForm }      # validates the form before queuing
     catch { Set-Status $_.Exception.Message '#FFFFC107'; return }
@@ -316,11 +371,12 @@ function Start-Run { param([string]$Mode)   # Integrate | Remove
     try   { $env = Get-AudiEnvironment -Code $code }
     catch { Set-Status $_.Exception.Message '#FFFF6B6B'; return }
 
-    if ($env.Transport.Mode -ne 'DropFolder') {
+    if ($env.Transport.Mode -ne 'DropFolder' -and -not $DropFolder) {
         Set-Status "Environment $code is set to transport '$($env.Transport.Mode)', which this window does not use." '#FFFF6B6B'
         return
     }
-    if ([string]::IsNullOrWhiteSpace($env.Transport.DropFolder)) {
+    $drop = Get-ActiveDropFolder -Environment $env
+    if ([string]::IsNullOrWhiteSpace($drop)) {
         Set-Status "Environment $code has no drop folder set. Fill in Transport/@dropFolder in $($env.Path)." '#FFFF6B6B'
         return
     }
@@ -336,12 +392,12 @@ function Start-Run { param([string]$Mode)   # Integrate | Remove
     $rfcShown = if ($rfc) { $rfc } else { 'not given' }
 
     $dryRun = [bool]$ui.chkDryRun.IsChecked
-    $verb   = if ($Mode -eq 'Remove') { 'REMOVE' } else { 'INTEGRATE' }
+    $verb   = switch ($Mode) { 'Remove' { 'REMOVE' } 'Modify' { 'MODIFY' } default { 'INTEGRATE' } }
     $what   = if ($dryRun) { "The server will rehearse this and change nothing." }
               else         { "The server will make real changes in $code." }
     $answer = [System.Windows.MessageBox]::Show(
         ("$verb '$($plan.PackageName)' in $code" + "?`r`n`r`n" + $what +
-         "`r`n`r`nThe job goes to:`r`n$($env.Transport.DropFolder)`r`n`r`n" +
+         "`r`n`r`nThe job goes to:`r`n$drop`r`n`r`n" +
          "The work is carried out by the server's service account. Your name is`r`n" +
          "not sent and is not recorded on the server - the RFC number ($rfcShown)`r`n" +
          "is what ties this change back to you."),
@@ -350,9 +406,9 @@ function Start-Run { param([string]$Mode)   # Integrate | Remove
 
     $state.Note = ''
     Set-Status "Submitting to $code ..."
-    Start-Worker -Steps $(if ($Mode -eq 'Remove') { 4 } else { 8 }) -Arguments @{
+    Start-Worker -Steps $(switch ($Mode) { 'Remove' { 4 } 'Modify' { 9 } default { 8 } }) -Arguments @{
         Action        = $Mode
-        DropFolder    = $env.Transport.DropFolder
+        DropFolder    = $drop
         Timeout       = $env.Transport.ResultTimeoutMinutes
         PackageName   = $plan.PackageName
         Environment   = $code
@@ -401,16 +457,25 @@ $ui.txtPackage.Add_LostFocus({ Update-DerivedFields })
 $ui.btnBrowse.Add_Click({
     $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
     $dialog.Description = 'Select the package folder'
-    if ($dialog.ShowDialog() -eq 'OK') { $ui['PackagePath'] = $dialog.SelectedPath; Read-PackageFolder -Path $dialog.SelectedPath }
+    if ($ui.txtPackagePath.Text -and (Test-Path -LiteralPath $ui.txtPackagePath.Text)) { $dialog.SelectedPath = $ui.txtPackagePath.Text }
+    if ($dialog.ShowDialog() -eq 'OK') {
+        $ui.txtPackagePath.Text = $dialog.SelectedPath
+        Read-PackageFolder -Path $dialog.SelectedPath
+    }
 })
 
 $ui.btnRead.Add_Click({
-    if ($ui.Contains('PackagePath') -and $ui['PackagePath']) { Read-PackageFolder -Path $ui['PackagePath'] }
-    else { Update-DerivedFields; Set-Status 'Names derived from the package name. Use Browse to also read the package contents.' }
+    $path = $ui.txtPackagePath.Text.Trim()
+    if ($path) { Read-PackageFolder -Path $path }
+    else { Update-DerivedFields; Set-Status 'Names derived from the package name. Point at a package folder to also read its script and instruction document.' }
 })
+
+# typing a path and pressing Enter reads it, same as the button
+$ui.txtPackagePath.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $ui.btnRead.RaiseEvent((New-Object System.Windows.RoutedEventArgs ([System.Windows.Controls.Button]::ClickEvent))) } })
 
 $ui.btnPreview.Add_Click({ Start-Preview })
 $ui.btnIntegrate.Add_Click({ Start-Run -Mode 'Integrate' })
+$ui.btnModify.Add_Click({ Start-Run -Mode 'Modify' })
 $ui.btnRemove.Add_Click({ Start-Run -Mode 'Remove' })
 
 $ui.btnOpenLog.Add_Click({
@@ -431,6 +496,41 @@ if ($SelfTest) {
     Write-Output ("  detected environment : {0}" -f $ui.cboEnvironment.SelectedItem)
     Write-Output ("  OS checkboxes        : {0}" -f $ui.pnlOperatingSystems.Children.Count)
     Write-Output ("  ticked by default    : {0}" -f ((Get-SelectedOperatingSystem) -join ', '))
+
+    # ---- read a REAL package and check every field the window shows is filled
+    Write-Output ''
+    $sampleRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("AudiSelfTest_{0}" -f ([guid]::NewGuid().ToString('N')))
+    try {
+        $builder = Join-Path (Split-Path -Parent $PSScriptRoot) 'Tools\New-AudiSwSamplePackage.ps1'
+        $made    = & $builder -Path $sampleRoot -PackageName 'INA_ADOBE_Acrobat_Reader_x64_2024.1_0003_MUL'
+        Read-PackageFolder -Path $made.Path
+
+        $expect = [ordered]@{
+            'Package name'     = 'txtPackage'
+            'Publisher'        = 'txtPublisher'
+            'Product'          = 'txtProduct'
+            'Version'          = 'txtVersion'
+            'Architecture'     = 'txtArchitecture'
+            'Revision'         = 'txtRevision'
+            'Language'         = 'txtLanguage'
+            'Branding key'     = 'txtBranding'
+            'Detection key'    = 'txtDetection'
+            'Name (EN)'        = 'txtNameEN'
+            'Name (DE)'        = 'txtNameDE'
+            'Description (EN)' = 'txtDescEN'
+            'Description (DE)' = 'txtDescDE'
+            'RFC number'       = 'txtRfc'
+        }
+        Write-Output '  every field the window shows, after Read details:'
+        $blank = 0
+        foreach ($label in $expect.Keys) {
+            $value = $ui[$expect[$label]].Text
+            if ([string]::IsNullOrWhiteSpace($value)) { $blank++ }
+            Write-Output ("    {0,-18} {1}" -f $label, $(if ($value) { $value } else { '*** EMPTY ***' }))
+        }
+        Write-Output ("  {0}" -f $(if ($blank -eq 0) { 'all fields filled' } else { "$blank FIELD(S) EMPTY" }))
+    }
+    finally { if (Test-Path -LiteralPath $sampleRoot) { Remove-Item -LiteralPath $sampleRoot -Recurse -Force -ErrorAction SilentlyContinue } }
 
     $ui.cboEnvironment.SelectedItem = 'INA'
     $ui.txtPackage.Text = 'INA_ADOBE_Acrobat_Reader_x64_2024.1_0003_MUL'

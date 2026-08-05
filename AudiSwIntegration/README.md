@@ -4,8 +4,16 @@ Replacement for Audi's **EQS SW Integration Tool 1.0.3**, built so that all SCCM
 and Active Directory work is carried out by a **shared service account** instead
 of each packager's personal administrator account.
 
-For the full deployment detail — accounts, permissions, the drop folder, the
-privacy rule and the security review answers — see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+**To try it — one command, no server, no SCCM, no rights:**
+
+```powershell
+.\Tools\Start-AudiSwSandbox.ps1
+```
+
+See **[TESTING.md](TESTING.md)** for what to click, and for how to test against a
+real ICZ server. For deployment detail — accounts, permissions, the drop folder,
+the privacy rule and the security review answers — see
+**[DEPLOYMENT.md](DEPLOYMENT.md)**.
 
 ---
 
@@ -35,6 +43,10 @@ AudiSwIntegration\
 ├── Client\          →  goes on a SHARE, packagers get a shortcut
 │   ├── Start-AudiSwClient.ps1        the packager window
 │   └── MainWindow.xaml               its layout
+│
+├── Tools\           →  for trying it out, not deployed
+│   ├── Start-AudiSwSandbox.ps1       whole flow on one PC, no server needed
+│   └── New-AudiSwSamplePackage.ps1   a real PSADT package + .docx to read
 │
 └── Tests\           →  stays with US. Never deployed anywhere.
     ├── Test-Config.ps1   Test-Sccm.ps1   Test-Transport.ps1   Invoke-AllTests.ps1
@@ -98,7 +110,7 @@ designed and costed but is **not** being built. Its scripts are parked under
 # if launching from a plain console, WPF needs -STA
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Client\Start-AudiSwClient.ps1
 
-# all 185 tests - no SCCM, no network, no rights needed
+# all 232 tests - no SCCM, no network, no rights needed
 .\Tests\Invoke-AllTests.ps1
 
 # check the window's wiring without opening it
@@ -113,7 +125,8 @@ From the console instead of the window:
 $plan = Get-AudiIntegrationPlan -PackageName 'INA_ADOBE_Acrobat_Reader_x64_2024.1_0003_MUL' -EnvironmentCode 'INA'
 Invoke-AudiSwIntegration -Plan $plan -DryRun     # preview, changes nothing
 Invoke-AudiSwIntegration -Plan $plan             # real run
-Invoke-AudiSwRemoval     -Plan $plan -DryRun
+Invoke-AudiSwModification -Plan $plan -DryRun   # reconcile an existing app
+Invoke-AudiSwRemoval      -Plan $plan -DryRun
 
 Read-AudiPackageDetail   -PackagePath 'D:\Packages\INA_ADOBE_...'
 Test-AudiSwPrerequisite  -Plan $plan -Provider (New-AudiSccmProvider)
@@ -151,7 +164,7 @@ content distribution — all declared in `Defaults.xml`.
 | Package reading | fills the window from the package's own PSADT script and instruction document; each value records where it came from |
 | Plan | expands package + environment into the exact list of objects, contacting nothing |
 | Preflight | verifies source path, name clashes, limiting collections, DP group and scopes **before** creating anything |
-| Engine | eight integration and four removal operations, order enforced by declared dependencies |
+| Engine | eight integration, nine modify and four removal operations, order enforced by declared dependencies |
 | Failure | the real error is reported; a failed run rolls back what it created, newest first |
 | Retry | only faults matching `TransientErrors` are retried, so a real error is not buried |
 | Distribution | polls until content actually reaches the distribution points, with a timeout |
@@ -164,7 +177,7 @@ content distribution — all declared in `Defaults.xml`.
 
 ## Tests
 
-`.\Tests\Invoke-AllTests.ps1` — 185 checks, none needing SCCM. Several guard
+`.\Tests\Invoke-AllTests.ps1` — 232 checks, none needing SCCM. Several guard
 against defects in the tool being replaced:
 
 - `ADO_ADOBE_Reader_x64_...` must survive intact — the old text replacement turned

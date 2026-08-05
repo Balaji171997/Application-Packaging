@@ -12,9 +12,9 @@
 
   <Site code="INA" server="AUDIINSC0002.audi.vwg"/>
 
-  <Service address="AUDIINSC0002.audi.vwg"
-           configurationName="AudiSwIntegration"
-           account="deaudi00\svc-swintegration"
+  <!-- CONFIRM: the machine that runs the collector task (Zone: Global). -->
+  <Runner host="AUDIINSC0002.audi.vwg"/>
+  <Service account="deaudi00\svc-swintegration"
            allowedGroup="deaudi00\G-Audi-SwIntegration-Operators"/>
 
   <Transport mode="DropFolder"

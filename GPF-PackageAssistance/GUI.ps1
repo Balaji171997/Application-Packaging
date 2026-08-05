@@ -92,6 +92,7 @@ $script:State = @{
     # Step 2: EXE parameters + loose-files options
     MstReviewNotes=@()  # report-only notes from "Match predecessor MST" (other tables the old MST touched)
     MstApplyExtras=@()  # user-confirmed predecessor MST removals to replicate at build time
+    MstOtherItems=@()   # full predecessor-MST other-table comparison (Read-MstSettings OtherItems) shown in the "Other tables" tab
     SnapshotNotes=@()   # "what did the installer do" findings (cleanups, dirs/services created) -> review items
     SnapshotUninstall=$null  # derived uninstall command + product code from the before/after snapshot
     SnapshotDisplayVersion=$null # the REAL registry DisplayVersion from the snapshot ARP entry - SoftIdent uses THIS (full version wins)
@@ -272,11 +273,11 @@ function Show-InstallerPicker {
     <Grid.ColumnDefinitions><ColumnDefinition Width="152"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
     <!-- step rail -->
     <StackPanel Grid.Column="0" Background="#21242B">
-      <TextBlock Text="PACKAGE&#10;BUILDER" Foreground="#56C8D6" FontWeight="Bold" Margin="12,14,0,16" FontSize="12"/>
+      <TextBlock Text="PACKAGE&#10;ASSISTANCE" Foreground="#56C8D6" FontWeight="Bold" Margin="12,14,0,16" FontSize="12"/>
       <TextBlock x:Name="N1" Text="1  Info" Foreground="White" Margin="14,8" FontSize="13"/>
       <TextBlock x:Name="N2" Text="2  Detection" Foreground="#888" Margin="14,8" FontSize="13"/>
       <TextBlock x:Name="N3" Text="3  Editor" Foreground="#888" Margin="14,8" FontSize="13"/>
-      <TextBlock x:Name="N4" Text="4  Create &amp; Publish" Foreground="#888" Margin="14,8" FontSize="13"/>
+      <TextBlock x:Name="N4" Text="4  Create" Foreground="#888" Margin="14,8" FontSize="13"/>
     </StackPanel>
 
     <Grid Grid.Column="1">
@@ -724,7 +725,7 @@ function Show-InstallerPicker {
         </StackPanel></ScrollViewer>
         </TabItem>
 
-        <TabItem Header="Troubleshoot">
+        <TabItem Header="Troubleshoot" Visibility="Collapsed">
         <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="12">
           <TextBlock Text="Troubleshoot - pull a target machine's logs and open them in CMTrace" Foreground="#56C8D6" FontWeight="Bold" FontSize="14" Margin="0,0,0,10"/>
           <Grid>
@@ -1383,11 +1384,37 @@ function Parse-Current {
     if ($p.IsValid) {
         $LblParsed.Text = "Vendor=$($p.Vendor)  App=$($p.AppName)  Arch=$($p.Arch)  Ver=$($p.Version)  Lang=$($p.Lang)"
         $LblParsed.Foreground = '#6A9955'
+        # Group (VWG) MECM name-length gate (#14): HARD STOP at Step 1 when Manufacturer+Product+Version+Language
+        # exceeds 34 characters - the name is treated as invalid so Next/step-jump are blocked until it is shortened.
+        if ("$($script:State.TargetBrand)".ToUpper() -eq 'VWG') {
+            $vwgLen = Get-GpfVwgNameLength -NewPkg $p
+            if ($vwgLen -gt 34) {
+                $p.IsValid = $false; $script:State.Parsed = $p
+                $LblParsed.Text = "Group/VWG name is $vwgLen characters - over the 34-character MECM limit (Manufacturer+Product+Version+Language). Shorten the name to continue."
+                $LblParsed.Foreground = '#F48771'
+                return $false
+            }
+        }
     } else {
         $LblParsed.Text = "Could not parse - expected Vendor_App_Arch_Version-Release_Lang"
         $LblParsed.Foreground = '#F48771'
     }
     return $p.IsValid
+}
+# HARD STOP on the order-number field when the brand uses AES numbers (GPF): the value must be a well-formed AES
+# number (AES-1-020436-A). Returns $true when OK (or when the brand does not use AES); on failure it warns and
+# returns $false so the caller blocks Step-1 advancement. Empty is rejected too (a valid AES number is required).
+function Test-OrderNumberGate {
+    if ("$(Get-PBBrand -Path 'OrderNumberLabel' -Default 'RITM')" -ne 'AES') { return $true }
+    $val = "$($TxtRitm.Text)".Trim()
+    if (-not (Test-AesNumberFormat $val)) {
+        [Windows.MessageBox]::Show(
+            "$(if ($val) { "'$val' is not a valid AES number." } else { 'An AES number is required.' })`n`nExpected format: AES-1-020436-A  (AES-<n>-<digits>[-<suffix>]). Correct it to continue.",
+            'AES number', 'OK', 'Warning') | Out-Null
+        try { $TxtRitm.Focus() | Out-Null } catch {}
+        return $false
+    }
+    return $true
 }
 # PROACTIVE: when a valid name is entered, check the live share for the SAME vendor+app at another version and,
 # if found, tell the user predecessor reuse is available. Server-side -Filter keeps it fast; cached per app so it
@@ -1601,7 +1628,7 @@ function Build-MultiArgRows {
             $bv.add_Click({
                 # via main-scope helpers: $script:State is NOT reachable inside this GetNewClosure block.
                 $res = Show-MsiPropertiesDialog -MsiPath $this.Tag -ExistingText (Get-MsiPropsFor $this.Tag) -MsiName (Split-Path $this.Tag -Leaf)
-                if ($null -ne $res) { Set-MsiPropsFor $this.Tag $res; $tp.Text = $res }
+                if ($null -ne $res) { $t = "$($res.Text)"; Set-MsiPropsFor $this.Tag $t; $tp.Text = $t }
             }.GetNewClosure())
             [void]$row.Children.Add($bv)
         }
@@ -2217,185 +2244,501 @@ $BtnSaveScript.add_Click({
     } catch { [Windows.MessageBox]::Show("Could not save:`n$($_.Exception.Message)", 'Save script', 'OK', 'Error') | Out-Null }
 })
 
-# ---------- MSI property editor (in-tool Orca replacement for IAGREE/AGREETOLICENSE-style edits) ----------
-# MsiPropRow implements INotifyPropertyChanged so ticking Include / editing Value updates "Changed" live -> the row
-# highlight (RowStyle DataTrigger) reflects MST changes as the user makes them. FromPred marks a value carried from
-# the predecessor's MST (pre-highlighted as a difference).
+# ---------- MSI property editor (in-tool Orca replacement) - rebuilt (#3) ----------
+# The base MSI is NEVER edited: every change here is captured as an MST, so it is safe by construction and nothing
+# is applied unless the row is ticked. Three tabs: Properties (Base | Predecessor MST | Your value | Apply),
+# the installer-CheckBox table (now editable), and the Other-tables comparison from the predecessor's MST
+# (Registry/Shortcut/RemoveFile/LaunchCondition/Feature/Environment - replicate where safe, review-only otherwise).
+# A master switch carries the predecessor MST forward (Off = ignore it entirely). Ctrl+Z / Undo + Reset can revert
+# changes even after Apply+close (Reset returns the package to the base MSI). Amber = a predecessor diff; teal = your edit.
 if (-not ([System.Management.Automation.PSTypeName]'MsiPropRow').Type) {
     Add-Type -TypeDefinition @'
 public class MsiPropRow : System.ComponentModel.INotifyPropertyChanged {
     public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
     void Raise(string n){ var h = PropertyChanged; if (h != null) h(this, new System.ComponentModel.PropertyChangedEventArgs(n)); }
-    private bool _include; public bool Include { get { return _include; } set { _include = value; Raise("Include"); Raise("Changed"); Raise("Note"); } }
-    public string Property { get; set; }
-    private string _value; public string Value { get { return _value; } set { _value = value; Raise("Value"); Raise("Changed"); Raise("Note"); } }
-    public bool FromPred { get; set; }
-    public string OrigValue { get; set; }   // the MSI Property-table value (null/absent = a brand-new property)
-    public bool InMsi { get; set; }          // true if the property exists in the MSI Property table
-    public bool Changed { get { return _include || FromPred; } }
-    // Change type shown to the packager: NEW property vs an existing property whose value is being changed (old -> new).
-    public string Note {
+    public string Property  { get; set; }
+    public string BaseValue { get; set; }   // MSI Property-table value ("" = property not in the base MSI => a NEW property)
+    public bool   InMsi     { get; set; }
+    public string PredValue { get; set; }    // predecessor MST value ("" = predecessor did not set it)
+    public bool   HasPred   { get; set; }    // predecessor MST added or changed this property
+    private bool _userEdited;
+    public bool UserEdited { get { return _userEdited; } set { _userEdited = value; RaiseC(); } }
+    private string _your = "";
+    public string YourValue { get { return _your; } set { _your = value; _userEdited = true; Raise("YourValue"); RaiseC(); } }
+    private bool _apply;
+    public bool Apply { get { return _apply; } set { _apply = value; Raise("Apply"); RaiseC(); } }
+    // amber: value carried straight from the predecessor MST (applied, predecessor-driven, not hand-edited)
+    public bool IsPredDiff { get { return _apply && HasPred && !_userEdited; } }
+    // teal: your own edit (applied and either hand-edited, or a value the predecessor did not set)
+    public bool IsYourEdit { get { return _apply && (_userEdited || !HasPred); } }
+    public string Change {
         get {
-            if (!_include && !FromPred) { return _extraNote; }
-            if (!InMsi) { return ("NEW property" + (string.IsNullOrEmpty(_extraNote) ? "" : ", " + _extraNote)); }
-            if (!string.Equals(_value, OrigValue)) { return ("changed (was '" + OrigValue + "')" + (string.IsNullOrEmpty(_extraNote) ? "" : ", " + _extraNote)); }
-            return _extraNote;
+            if (!_apply) { return ""; }
+            if (!InMsi)  { return "NEW (not in current MSI)"; }
+            if (!string.Equals(_your, BaseValue)) { return "overrides current MSI (was '" + BaseValue + "')"; }
+            return "set (same as current MSI)";
         }
     }
-    private string _extraNote = ""; public string ExtraNote { get { return _extraNote; } set { _extraNote = value; Raise("Note"); } }
+    void RaiseC(){ Raise("IsPredDiff"); Raise("IsYourEdit"); Raise("Change"); }
+    // quiet setters: change the value WITHOUT flagging a user edit (initialisation / master-toggle / reset / undo)
+    public void SetValueQuiet(string v){ _your = v; Raise("YourValue"); RaiseC(); }
+    public void SetApplyQuiet(bool v){ _apply = v; Raise("Apply"); RaiseC(); }
+    public void SetEditedQuiet(bool v){ _userEdited = v; RaiseC(); }
 }
 '@
 }
-# One row of the MSI CheckBox table (Orca "CheckBox" view): the property an installer checkbox drives + the value it sets.
+# One row of the MSI CheckBox table (Orca "CheckBox" view) - NOW EDITABLE: the property an installer checkbox drives,
+# the value it sets (editable), and an Apply tick to push that property into the MST.
 if (-not ([System.Management.Automation.PSTypeName]'MsiCheckRow').Type) {
-    Add-Type -TypeDefinition 'public class MsiCheckRow { public string Property { get; set; } public string CheckedValue { get; set; } }'
+    Add-Type -TypeDefinition @'
+public class MsiCheckRow : System.ComponentModel.INotifyPropertyChanged {
+    public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
+    void Raise(string n){ var h = PropertyChanged; if (h != null) h(this, new System.ComponentModel.PropertyChangedEventArgs(n)); }
+    public string Property { get; set; }
+    private string _val = ""; public string CheckedValue { get { return _val; } set { _val = value; Raise("CheckedValue"); } }
+    private bool _apply; public bool Apply { get { return _apply; } set { _apply = value; Raise("Apply"); } }
 }
-# Show the MSI's Property table; user ticks rows + edits values (or adds new ones). Returns the
-# "KEY=VALUE" lines (one per line) for the ticked rows, or $null on cancel.
+'@
+}
+# One row of the Other-tables comparison (from the predecessor MST): the safe-to-replicate removals are ticked via
+# Replicate (enabled only when CanApply); adds/changes are shown read-only as "review - not applied".
+if (-not ([System.Management.Automation.PSTypeName]'MstOtherRow').Type) {
+    Add-Type -TypeDefinition @'
+public class MstOtherRow : System.ComponentModel.INotifyPropertyChanged {
+    public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
+    void Raise(string n){ var h = PropertyChanged; if (h != null) h(this, new System.ComponentModel.PropertyChangedEventArgs(n)); }
+    private bool _rep; public bool Replicate { get { return _rep; } set { _rep = value; Raise("Replicate"); } }
+    public bool   CanApply { get; set; }   // false => report-only (add/change) - cannot be transformed, Replicate disabled
+    public bool   FromPred { get; set; }   // true => came from the predecessor MST (master switch governs it); false => user-added
+    public string Category { get; set; }
+    public string Action   { get; set; }   // only 'remove' rows are applied at build
+    private string _table = ""; public string Table { get { return _table; } set { _table = value; Raise("Table"); } }
+    public string PkCol    { get; set; }   // primary-key column for the table (derived; used by the build to delete-by-PK)
+    private string _keys = ""; public string Keys { get { return _keys; } set { _keys = value; Raise("Keys"); } }  // comma/newline-separated
+    public string Detail   { get; set; }
+}
+'@
+}
+# Show the MSI's Property table + checkbox table + predecessor Other-tables. The user ticks/edits rows; everything is
+# captured as an MST (base MSI untouched). Returns @{ Text=<KEY=VALUE lines>; Extras=@(selected OtherItems); Master=<bool> }
+# or $null on Cancel.
 function Show-MsiPropertiesDialog {
-    param([Parameter(Mandatory)][string]$MsiPath, [string]$ExistingText, [hashtable]$PredecessorProps, [string]$MsiName = '')
+    param(
+        [Parameter(Mandatory)][string]$MsiPath,
+        [string]$ExistingText,
+        [hashtable]$PredecessorProps,
+        [object[]]$PredecessorItems = @(),
+        [bool]$PredecessorLoaded = $false,
+        [string]$MsiName = ''
+    )
     $props = @(Get-MsiProperties -MsiPath $MsiPath)
     if (-not $props.Count) { [Windows.MessageBox]::Show("Could not read the Property table of:`n$MsiPath", 'MSI properties') | Out-Null; return $null }
     if (-not $PredecessorProps) { $PredecessorProps = @{} }
+    $hasPred = [bool]($PredecessorLoaded -or $PredecessorProps.Count -or @($PredecessorItems).Count)
     $checks     = @(Get-MsiCheckBoxTable -MsiPath $MsiPath)
     $checkProps = @{}; foreach ($c in $checks) { if ("$($c.Property)".Trim()) { $checkProps["$($c.Property)"] = "$($c.Value)" } }
     $existing   = ConvertTo-MsiPropHashtable -Text $ExistingText
+
+    # ----- Property rows -----
     $rows = New-Object 'System.Collections.ObjectModel.ObservableCollection[MsiPropRow]'
     $seen = @{}
     foreach ($p in $props) {
         $r = New-Object MsiPropRow
-        $r.Property = "$($p.Property)"; $r.InMsi = $true; $r.OrigValue = "$($p.Value)"; $r.Value = "$($p.Value)"; $seen[$r.Property] = $true
-        $notes = New-Object System.Collections.Generic.List[string]
-        if ($checkProps.ContainsKey($r.Property)) { $notes.Add('checkbox') }
-        if ($PredecessorProps.ContainsKey($r.Property)) { $r.FromPred = $true; $r.Include = $true; $r.Value = "$($PredecessorProps[$r.Property])"; $notes.Add('predecessor') }
-        if ($existing.ContainsKey($r.Property)) { $r.Include = $true; $r.Value = "$($existing[$r.Property])" }   # user's current MST value wins for the value
-        $r.ExtraNote = ($notes -join ', ')   # Note itself is COMPUTED (NEW property / changed old->new); ExtraNote adds the checkbox/predecessor tags
+        $r.Property = "$($p.Property)"; $r.InMsi = $true; $r.BaseValue = "$($p.Value)"; $seen[$r.Property] = $true
+        if ($PredecessorProps.ContainsKey($r.Property)) { $r.HasPred = $true; $r.PredValue = "$($PredecessorProps[$r.Property])" }
+        # initial Your value / Apply: user's saved MST value wins; else predecessor value (when master applies); else base.
+        if ($existing.ContainsKey($r.Property)) { $r.SetValueQuiet("$($existing[$r.Property])"); $r.SetApplyQuiet($true); $r.SetEditedQuiet($true) }
+        elseif ($r.HasPred) { $r.SetValueQuiet($r.PredValue); $r.SetApplyQuiet($true); $r.SetEditedQuiet($false) }
+        else { $r.SetValueQuiet($r.BaseValue); $r.SetApplyQuiet($false); $r.SetEditedQuiet($false) }
         $rows.Add($r)
     }
-    # properties NOT in the MSI Property table but requested by the predecessor MST or the user (added rows = NEW properties)
+    # properties requested by the predecessor MST or the user's saved value but NOT in the MSI Property table (NEW properties)
     foreach ($src in @($PredecessorProps, $existing)) {
         foreach ($k in @($src.Keys)) {
             if ($seen.ContainsKey("$k")) { continue }; $seen["$k"] = $true
-            $r = New-Object MsiPropRow; $r.Property = "$k"; $r.InMsi = $false; $r.OrigValue = ''; $r.Include = $true; $r.Value = "$($src[$k])"
-            if ($PredecessorProps.ContainsKey($k)) { $r.FromPred = $true; $r.ExtraNote = 'predecessor' }
-            if ($existing.ContainsKey($k)) { $r.Value = "$($existing[$k])" }
+            $r = New-Object MsiPropRow; $r.Property = "$k"; $r.InMsi = $false; $r.BaseValue = ''
+            if ($PredecessorProps.ContainsKey($k)) { $r.HasPred = $true; $r.PredValue = "$($PredecessorProps[$k])" }
+            if ($existing.ContainsKey($k)) { $r.SetValueQuiet("$($existing[$k])"); $r.SetApplyQuiet($true); $r.SetEditedQuiet($true) }
+            else { $r.SetValueQuiet($r.PredValue); $r.SetApplyQuiet($true); $r.SetEditedQuiet($false) }
             $rows.Add($r)
         }
     }
+    # ----- CheckBox rows (editable) -----
     $checkRows = New-Object 'System.Collections.ObjectModel.ObservableCollection[MsiCheckRow]'
     foreach ($c in $checks) { $cr = New-Object MsiCheckRow; $cr.Property = "$($c.Property)"; $cr.CheckedValue = "$($c.Value)"; $checkRows.Add($cr) }
-
-    $w = New-Object Windows.Window
-    $w.Title = "MSI properties + checkbox table - $(if ($MsiName) { $MsiName } else { Split-Path $MsiPath -Leaf })"
-    $w.Width = 720; $w.Height = 620; $w.WindowStartupLocation = 'CenterOwner'; $w.Owner = $script:Win
-    if (Get-Command Apply-PbTheme -ErrorAction SilentlyContinue) { Apply-PbTheme $w }
-    $w.Background = (New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x1E,0x1E,0x1E)))
-    $g = New-Object Windows.Controls.Grid; $g.Margin = '12'
-    foreach ($h in 'Auto','Auto','Auto','*','Auto','Auto','Auto') { $rd = New-Object Windows.Controls.RowDefinition; $rd.Height = $h; [void]$g.RowDefinitions.Add($rd) }
-
-    $hint = New-Object Windows.Controls.TextBlock
-    $predNote = if ($PredecessorProps.Count) { " Rows the predecessor MST changed are pre-ticked and highlighted amber - edit or untick as needed." } else { '' }
-    $hint.Text = "Tick the properties to set in the MST and edit their values (e.g. IAGREE=Yes, AGREETOLICENSE=1). Untouched rows are ignored.$predNote"
-    $hint.Foreground = '#9CDCFE'; $hint.FontSize = 11; $hint.TextWrapping = 'Wrap'; $hint.Margin = '0,0,0,6'
-    [Windows.Controls.Grid]::SetRow($hint, 0); [void]$g.Children.Add($hint)
-
-    # Legend: what the amber highlight means (kept readable - light text on the amber swatch).
-    $legend = New-Object Windows.Controls.TextBlock
-    $legend.Inlines.Add((New-Object Windows.Documents.Run 'Legend: '))
-    $swatch = New-Object Windows.Documents.Run ' changed / MST diff '
-    $swatch.Background = (New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x4A,0x3C,0x1E)))
-    $swatch.Foreground = (New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0xFF,0xE7,0xA6)))
-    $legend.Inlines.Add($swatch)
-    $legend.Inlines.Add((New-Object Windows.Documents.Run "   'checkbox' note = property is driven by an installer checkbox (e.g. the licence agreement)."))
-    $legend.Foreground = '#C8C8C8'; $legend.FontSize = 11; $legend.TextWrapping = 'Wrap'; $legend.Margin = '0,0,0,8'
-    [Windows.Controls.Grid]::SetRow($legend, 1); [void]$g.Children.Add($legend)
-
-    $filter = New-Object Windows.Controls.TextBox
-    $filter.Height = 24; $filter.FontFamily = 'Consolas'; $filter.Margin = '0,0,0,8'
-    [Windows.Controls.Grid]::SetRow($filter, 2); [void]$g.Children.Add($filter)
-
-    # shared dark column-header style (light-on-dark, readable next to the dark grid)
-    $mkHdrStyle = {
-        $s = New-Object Windows.Style ([Windows.Controls.Primitives.DataGridColumnHeader])
-        $s.Setters.Add((New-Object Windows.Setter ([Windows.Controls.Control]::BackgroundProperty), (New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x2D,0x2D,0x30)))))
-        $s.Setters.Add((New-Object Windows.Setter ([Windows.Controls.Control]::ForegroundProperty), (New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x9C,0xDC,0xFE)))))
-        $s.Setters.Add((New-Object Windows.Setter ([Windows.Controls.Control]::PaddingProperty),    (New-Object Windows.Thickness 8,4,8,4)))
-        $s.Setters.Add((New-Object Windows.Setter ([Windows.Controls.Control]::BorderBrushProperty),(New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x3F,0x3F,0x46)))))
-        $s.Setters.Add((New-Object Windows.Setter ([Windows.Controls.Control]::BorderThicknessProperty),(New-Object Windows.Thickness 0,0,1,1)))
-        $s
+    # ----- Other-tables rows (predecessor MST comparison) -----
+    $otherRows = New-Object 'System.Collections.ObjectModel.ObservableCollection[MstOtherRow]'
+    foreach ($it in @($PredecessorItems)) {
+        $orow = New-Object MstOtherRow
+        $orow.CanApply = [bool]$it.CanApply; $orow.FromPred = $true
+        $orow.Category = "$($it.Category)"; $orow.Action = "$($it.Action)"
+        $orow.Table = "$($it.Table)"; $orow.PkCol = "$($it.PkCol)"
+        $orow.Keys = (@($it.Keys) -join ', '); $orow.Detail = "$($it.Label)"
+        $orow.Replicate = [bool]$it.CanApply   # pre-tick safe removals when a predecessor is loaded
+        $otherRows.Add($orow)
     }
 
-    $grid = New-Object Windows.Controls.DataGrid
-    $grid.AutoGenerateColumns = $false; $grid.CanUserAddRows = $false; $grid.HeadersVisibility = 'Column'
-    $grid.Background = '#21242B'; $grid.Foreground = '#E7E9ED'   # LIGHT text on the dark rows (was near-black = invisible)
-    $grid.RowBackground = '#2A2E36'; $grid.AlternatingRowBackground = '#21242B'
-    $grid.BorderBrush = '#3F3F46'; $grid.HorizontalGridLinesBrush = '#3F3F46'
-    $grid.FontFamily = 'Consolas'; $grid.FontSize = 12; $grid.GridLinesVisibility = 'Horizontal'
-    $grid.ColumnHeaderStyle = (& $mkHdrStyle)
-    # ROW HIGHLIGHT: a changed row (ticked / edited / carried from the predecessor) gets an amber background + light
-    # amber text so the difference is CLEARLY visible (never invisible-on-dark). Live via INotifyPropertyChanged.
-    $rowStyle = New-Object Windows.Style ([Windows.Controls.DataGridRow])
-    $trg = New-Object Windows.DataTrigger; $trg.Binding = (New-Object Windows.Data.Binding('Changed')); $trg.Value = $true
-    $trg.Setters.Add((New-Object Windows.Setter ([Windows.Controls.Control]::BackgroundProperty), (New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x4A,0x3C,0x1E)))))
-    $trg.Setters.Add((New-Object Windows.Setter ([Windows.Controls.Control]::ForegroundProperty), (New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0xFF,0xE7,0xA6)))))
-    $rowStyle.Triggers.Add($trg)
-    $grid.RowStyle = $rowStyle
-    # Edited cells must also be readable: dark editing background, light text.
-    $cellEdit = New-Object Windows.Style ([Windows.Controls.TextBox])
-    $cellEdit.Setters.Add((New-Object Windows.Setter ([Windows.Controls.Control]::BackgroundProperty), (New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x1E,0x1E,0x1E)))))
-    $cellEdit.Setters.Add((New-Object Windows.Setter ([Windows.Controls.Control]::ForegroundProperty), (New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0xFF,0xFF,0xFF)))))
-    $colI = New-Object Windows.Controls.DataGridCheckBoxColumn; $colI.Header = 'Set'; $colI.Binding = (New-Object Windows.Data.Binding('Include')); $colI.Width = 40
-    $colP = New-Object Windows.Controls.DataGridTextColumn; $colP.Header = 'Property'; $colP.Binding = (New-Object Windows.Data.Binding('Property')); $colP.Width = 175
-    # Original (MSI) value - read-only, dimmed - so a value CHANGE reads left(old) -> Value(new) at a glance.
-    $colO = New-Object Windows.Controls.DataGridTextColumn; $colO.Header = 'Original (MSI)'; $colO.Binding = (New-Object Windows.Data.Binding('OrigValue')); $colO.Width = 150; $colO.IsReadOnly = $true
-    $colOelem = New-Object Windows.Style ([Windows.Controls.TextBlock]); $colOelem.Setters.Add((New-Object Windows.Setter ([Windows.Controls.TextBlock]::ForegroundProperty), (New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x9A,0x9A,0x9A))))); $colO.ElementStyle = $colOelem
-    $colV = New-Object Windows.Controls.DataGridTextColumn; $colV.Header = 'Value (MST)'; $colV.Binding = (New-Object Windows.Data.Binding('Value')); $colV.Width = 195
-    $colN = New-Object Windows.Controls.DataGridTextColumn; $colN.Header = 'Change'; $colN.Binding = (New-Object Windows.Data.Binding('Note')); $colN.Width = 150; $colN.IsReadOnly = $true
-    $colP.EditingElementStyle = $cellEdit; $colV.EditingElementStyle = $cellEdit
-    foreach ($c in @($colI,$colP,$colO,$colV,$colN)) { [void]$grid.Columns.Add($c) }
-    $grid.ItemsSource = $rows
-    [Windows.Controls.Grid]::SetRow($grid, 3); [void]$g.Children.Add($grid)
+    [xml]$xaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:pr="clr-namespace:System.Windows.Controls.Primitives;assembly=PresentationFramework"
+        xmlns:sys="clr-namespace:System;assembly=mscorlib"
+        Width="900" Height="700" WindowStartupLocation="CenterOwner" Background="#1E1E1E"
+        Title="MSI properties">
+  <Window.Resources>
+    <x:Array x:Key="RemovableTables" Type="{x:Type sys:String}">
+      <sys:String>Registry</sys:String>
+      <sys:String>Shortcut</sys:String>
+      <sys:String>RemoveFile</sys:String>
+      <sys:String>LaunchCondition</sys:String>
+      <sys:String>Feature</sys:String>
+      <sys:String>Environment</sys:String>
+    </x:Array>
+    <Style x:Key="Dim" TargetType="TextBlock"><Setter Property="Foreground" Value="#9A9A9A"/></Style>
+    <Style x:Key="Hdr" TargetType="{x:Type pr:DataGridColumnHeader}">
+      <Setter Property="Background" Value="#33373F"/><Setter Property="Foreground" Value="#9CDCFE"/>
+      <Setter Property="FontWeight" Value="Bold"/><Setter Property="Padding" Value="8,5"/>
+      <Setter Property="BorderBrush" Value="#3F3F46"/><Setter Property="BorderThickness" Value="0,0,1,1"/>
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+    </Style>
+    <Style x:Key="Grid" TargetType="DataGrid">
+      <Setter Property="AutoGenerateColumns" Value="False"/><Setter Property="CanUserAddRows" Value="False"/>
+      <Setter Property="HeadersVisibility" Value="Column"/><Setter Property="Background" Value="#21242B"/>
+      <Setter Property="Foreground" Value="#E7E9ED"/><Setter Property="RowBackground" Value="#2A2E36"/>
+      <Setter Property="AlternatingRowBackground" Value="#21242B"/><Setter Property="BorderBrush" Value="#3F3F46"/>
+      <Setter Property="HorizontalGridLinesBrush" Value="#3F3F46"/><Setter Property="FontFamily" Value="Consolas"/>
+      <Setter Property="FontSize" Value="12"/><Setter Property="GridLinesVisibility" Value="Horizontal"/>
+      <Setter Property="ColumnHeaderStyle" Value="{StaticResource Hdr}"/>
+    </Style>
+    <Style x:Key="EditBox" TargetType="TextBox"><Setter Property="Background" Value="#1E1E1E"/><Setter Property="Foreground" Value="White"/></Style>
+  </Window.Resources>
+  <Grid Margin="12">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
 
+    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
+      <CheckBox x:Name="ChkMaster" Foreground="#E7E9ED" VerticalAlignment="Center"
+                Content="Carry forward predecessor MST changes"/>
+      <TextBlock x:Name="LblMasterHint" Foreground="#888" FontSize="11" Margin="12,0,0,0" VerticalAlignment="Center"/>
+    </StackPanel>
+    <TextBlock Grid.Row="1" TextWrapping="Wrap" Foreground="#9CDCFE" FontSize="11" Margin="0,0,0,8"
+               Text="Everything here is read from the CURRENT MSI. Only YOUR VALUE is written (as an MST - the MSI itself is never edited); the Current MSI and Predecessor MST columns are read-only reference. When a predecessor value is carried, Your value starts equal to it - edit to override, untick to skip. Amber = carried from the predecessor MST; teal = your own edit. Standard ALLUSERS=1 / REBOOT=ReallySuppress are added at build."/>
+
+    <TabControl Grid.Row="2" Background="#21242B" BorderBrush="#3F3F46">
+      <TabItem Header="Properties">
+        <Grid Margin="0,6,0,0">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <TextBox x:Name="TxtFilter" Grid.Row="0" Height="24" FontFamily="Consolas" Margin="0,0,0,6"
+                   Background="#1E1E1E" Foreground="#E7E9ED" BorderBrush="#3F3F46"/>
+          <DataGrid x:Name="GridProps" Grid.Row="1" Style="{StaticResource Grid}">
+            <DataGrid.RowStyle>
+              <Style TargetType="DataGridRow">
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding IsPredDiff}" Value="True">
+                    <Setter Property="Background" Value="#4A3C1E"/><Setter Property="Foreground" Value="#FFE7A6"/>
+                  </DataTrigger>
+                  <DataTrigger Binding="{Binding IsYourEdit}" Value="True">
+                    <Setter Property="Background" Value="#123A40"/><Setter Property="Foreground" Value="#7FE3D0"/>
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </DataGrid.RowStyle>
+            <DataGrid.Columns>
+              <DataGridCheckBoxColumn Header="Apply" Binding="{Binding Apply, UpdateSourceTrigger=PropertyChanged}" Width="46"/>
+              <DataGridTextColumn Header="Property" Binding="{Binding Property}" Width="180" IsReadOnly="True"/>
+              <DataGridTextColumn Header="Current MSI (ref)" Binding="{Binding BaseValue}" Width="150" IsReadOnly="True" ElementStyle="{StaticResource Dim}"/>
+              <DataGridTextColumn Header="Predecessor MST (ref)" Binding="{Binding PredValue}" Width="150" IsReadOnly="True" ElementStyle="{StaticResource Dim}"/>
+              <DataGridTextColumn Header="Your value -> MST" Binding="{Binding YourValue}" Width="170" EditingElementStyle="{StaticResource EditBox}"/>
+              <DataGridTextColumn Header="Change" Binding="{Binding Change}" Width="150" IsReadOnly="True"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </TabItem>
+      <TabItem Header="Installer checkboxes">
+        <Grid Margin="0,6,0,0">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <TextBlock x:Name="LblChk" Grid.Row="0" Foreground="#DCDCAA" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"
+                     Text="Installer checkboxes from the CURRENT MSI only (the predecessor MSI is never mixed in here). Edit a value and tick Apply to set that property in the MST."/>
+          <DataGrid x:Name="GridChecks" Grid.Row="1" Style="{StaticResource Grid}">
+            <DataGrid.Columns>
+              <DataGridCheckBoxColumn Header="Apply" Binding="{Binding Apply, UpdateSourceTrigger=PropertyChanged}" Width="46"/>
+              <DataGridTextColumn Header="Property" Binding="{Binding Property}" Width="260" IsReadOnly="True"/>
+              <DataGridTextColumn Header="Checked value" Binding="{Binding CheckedValue}" Width="300" EditingElementStyle="{StaticResource EditBox}"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </TabItem>
+      <TabItem Header="Other tables (editable)">
+        <Grid Margin="0,6,0,0">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <TextBlock x:Name="LblOther" Grid.Row="0" Foreground="#DCDCAA" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,4"/>
+          <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,6">
+            <Button x:Name="BtnOtherAdd" Content="Add removal" Padding="10,3" Margin="0,0,8,0"/>
+            <Button x:Name="BtnOtherDel" Content="Delete selected" Padding="10,3" Margin="0,0,8,0"/>
+            <TextBlock Foreground="#E0A030" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center"
+                       Text="Only REMOVALS transform safely (delete-by-key; a no-op if the key is absent). Add/change rows are review-only and are NOT applied - make those in the source. Remove only keys you are sure the current MSI does not need."/>
+          </StackPanel>
+          <DataGrid x:Name="GridOther" Grid.Row="2" Style="{StaticResource Grid}">
+            <DataGrid.Columns>
+              <DataGridCheckBoxColumn Header="Replicate" Binding="{Binding Replicate, UpdateSourceTrigger=PropertyChanged}" Width="70">
+                <DataGridCheckBoxColumn.ElementStyle>
+                  <Style TargetType="CheckBox"><Setter Property="IsEnabled" Value="{Binding CanApply}"/><Setter Property="HorizontalAlignment" Value="Center"/></Style>
+                </DataGridCheckBoxColumn.ElementStyle>
+                <DataGridCheckBoxColumn.EditingElementStyle>
+                  <Style TargetType="CheckBox"><Setter Property="IsEnabled" Value="{Binding CanApply}"/></Style>
+                </DataGridCheckBoxColumn.EditingElementStyle>
+              </DataGridCheckBoxColumn>
+              <DataGridComboBoxColumn Header="Table" SelectedItemBinding="{Binding Table}" ItemsSource="{StaticResource RemovableTables}" Width="120"/>
+              <DataGridTextColumn Header="Key(s) - comma separated" Binding="{Binding Keys}" Width="220" EditingElementStyle="{StaticResource EditBox}">
+                <DataGridTextColumn.ElementStyle>
+                  <Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style>
+                </DataGridTextColumn.ElementStyle>
+              </DataGridTextColumn>
+              <DataGridTextColumn Header="Action" Binding="{Binding Action}" Width="80" IsReadOnly="True"/>
+              <DataGridTextColumn Header="What / note" Binding="{Binding Detail}" Width="*" IsReadOnly="True">
+                <DataGridTextColumn.ElementStyle>
+                  <Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style>
+                </DataGridTextColumn.ElementStyle>
+              </DataGridTextColumn>
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </TabItem>
+    </TabControl>
+
+    <Border Grid.Row="3" Background="#181A1F" BorderBrush="#3F3F46" BorderThickness="1" Margin="0,8,0,0" Padding="8" CornerRadius="2">
+      <StackPanel>
+        <TextBlock Text="Change summary - exactly what this MST will do:" Foreground="#6A9955" FontWeight="Bold" FontSize="11" Margin="0,0,0,4"/>
+        <ScrollViewer MaxHeight="96" VerticalScrollBarVisibility="Auto">
+          <TextBlock x:Name="TxtSummary" Foreground="#C8C8C8" FontFamily="Consolas" FontSize="11" TextWrapping="Wrap"/>
+        </ScrollViewer>
+      </StackPanel>
+    </Border>
+
+    <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+      <Button x:Name="BtnAdd" Content="Add property" Padding="10,4" Margin="0,0,8,0"/>
+      <Button x:Name="BtnDel" Content="Delete selected" Padding="10,4" Margin="0,0,8,0"/>
+      <Button x:Name="BtnUndo" Content="Undo (Ctrl+Z)" Padding="10,4" Margin="0,0,8,0"/>
+      <Button x:Name="BtnReset" Content="Reset to base MSI" Padding="10,4" Margin="0,0,16,0"/>
+      <Button x:Name="BtnOk" Content="OK" Padding="16,4" Margin="0,0,8,0" IsDefault="True"/>
+      <Button x:Name="BtnCancel" Content="Cancel" Padding="12,4" IsCancel="True"/>
+    </StackPanel>
+  </Grid>
+</Window>
+'@
+
+    $w = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xaml))
+    if (Get-Command Apply-PbTheme -ErrorAction SilentlyContinue) { Apply-PbTheme $w }
+    $w.Title = "MSI properties - $(if ($MsiName) { $MsiName } else { Split-Path $MsiPath -Leaf })"
+    try { $w.Owner = $script:Win } catch {}
+
+    $ChkMaster = $w.FindName('ChkMaster'); $LblMasterHint = $w.FindName('LblMasterHint')
+    $GridProps = $w.FindName('GridProps'); $TxtFilter = $w.FindName('TxtFilter')
+    $GridChecks = $w.FindName('GridChecks'); $GridOther = $w.FindName('GridOther')
+    $LblChk = $w.FindName('LblChk'); $LblOther = $w.FindName('LblOther'); $TxtSummary = $w.FindName('TxtSummary')
+    $BtnAdd = $w.FindName('BtnAdd'); $BtnDel = $w.FindName('BtnDel'); $BtnUndo = $w.FindName('BtnUndo'); $BtnReset = $w.FindName('BtnReset')
+    $BtnOtherAdd = $w.FindName('BtnOtherAdd'); $BtnOtherDel = $w.FindName('BtnOtherDel')
+    $BtnOk = $w.FindName('BtnOk'); $BtnCancel = $w.FindName('BtnCancel')
+
+    $GridProps.ItemsSource = $rows
+    $GridChecks.ItemsSource = $checkRows
+    $GridOther.ItemsSource = $otherRows
+
+    if (@($PredecessorItems).Count) {
+        $LblOther.Text = "$(@($PredecessorItems).Count) change(s) the predecessor MST made to other MSI tables - edit the Table/Key(s), tick Replicate, or Add/Delete your own removals below."
+    } else {
+        $LblOther.Text = 'No predecessor MST loaded. You can still Add your own removals (Table + Key) below.'
+    }
+
+    # ----- shared dialog state (single captured hashtable; per PS/WPF closure-scope rule) -----
+    $ui = @{ Init = $true; Undo_Stack = (New-Object 'System.Collections.Generic.Stack[object]') }
+
+    $ui.UpdateSummary = {
+        $lines = New-Object System.Collections.Generic.List[string]
+        if ($hasPred) { $lines.Add("Predecessor MST carry-forward: $(if ($ChkMaster.IsChecked) { 'ON' } else { 'OFF (predecessor changes ignored)' })") | Out-Null }
+        foreach ($r in $rows) {
+            if (-not $r.Apply -or -not "$($r.Property)".Trim()) { continue }
+            $tag = if ($r.IsPredDiff) { ' [carried from predecessor MST]' } elseif ($r.UserEdited -or -not $r.HasPred) { ' [your edit]' } else { '' }
+            if (-not $r.InMsi) { $lines.Add("  + NEW property $($r.Property) = $($r.YourValue)$tag") | Out-Null }
+            elseif ("$($r.YourValue)" -ne "$($r.BaseValue)") { $lines.Add("  ~ $($r.Property) = $($r.YourValue)  (current MSI has '$($r.BaseValue)')$tag") | Out-Null }
+            else { $lines.Add("  = $($r.Property) = $($r.YourValue) (set, value unchanged)") | Out-Null }
+        }
+        foreach ($c in $checkRows) { if ($c.Apply -and "$($c.Property)".Trim()) { $lines.Add("  [checkbox] $($c.Property) = $($c.CheckedValue)") | Out-Null } }
+        foreach ($o in $otherRows) { if ($o.Replicate -and "$($o.Action)" -eq 'remove' -and "$($o.Table)".Trim() -and "$($o.Keys)".Trim()) { $lines.Add("  remove from $($o.Table): $($o.Keys)$(if ($o.FromPred) { ' [predecessor]' } else { ' [your removal]' })") | Out-Null } }
+        if ($lines.Count -le $(if ($hasPred) { 1 } else { 0 })) { $lines.Add('  (no property changes yet - nothing beyond the standard ALLUSERS / REBOOT)') | Out-Null }
+        $lines.Add('  + standard: ALLUSERS=1, REBOOT=ReallySuppress (added at build)') | Out-Null
+        $TxtSummary.Text = ($lines -join "`r`n")
+    }.GetNewClosure()
+
+    $onChg = { param($s,$e) if (-not $ui.Init) { & $ui.UpdateSummary } }.GetNewClosure()
+    foreach ($r in $rows) { $r.add_PropertyChanged($onChg) }
+    foreach ($c in $checkRows) { $c.add_PropertyChanged($onChg) }
+    foreach ($o in $otherRows) { $o.add_PropertyChanged($onChg) }
+
+    # map a table name to its primary-key column (the build deletes rows by this PK); unknown table => not transformable
+    $ui.PkFor = { param($t) @{ Registry='Registry'; Shortcut='Shortcut'; RemoveFile='FileKey'; LaunchCondition='Condition'; Feature='Feature'; Environment='Environment' }["$t"] }.GetNewClosure()
+
+    # ----- undo (whole-state snapshots) -----
+    $ui.Snap = {
+        $ps = @(); foreach ($r in $rows) { $ps += ,@{ R=$r; V=$r.YourValue; A=$r.Apply; E=$r.UserEdited } }
+        $cs = @(); foreach ($c in $checkRows) { $cs += ,@{ R=$c; V=$c.CheckedValue; A=$c.Apply } }
+        $os = @(); foreach ($o in $otherRows) { $os += ,@{ R=$o; Rep=$o.Replicate; T=$o.Table; K=$o.Keys } }
+        return @{ Order=@($rows); OtherOrder=@($otherRows); Props=$ps; Checks=$cs; Other=$os; Master=[bool]$ChkMaster.IsChecked }
+    }.GetNewClosure()
+    $ui.Restore = {
+        param($snap)
+        $ui.Init = $true
+        $rows.Clear(); foreach ($r in $snap.Order) { $rows.Add($r) }
+        $otherRows.Clear(); foreach ($o in $snap.OtherOrder) { $otherRows.Add($o) }
+        foreach ($p in $snap.Props) { $p.R.SetValueQuiet($p.V); $p.R.SetApplyQuiet($p.A); $p.R.SetEditedQuiet($p.E) }
+        foreach ($c in $snap.Checks) { $c.R.CheckedValue = $c.V; $c.R.Apply = $c.A }
+        foreach ($o in $snap.Other) { $o.R.Replicate = $o.Rep; $o.R.Table = $o.T; $o.R.Keys = $o.K }
+        $ChkMaster.IsChecked = $snap.Master
+        $ui.Init = $false
+        & $ui.UpdateSummary
+    }.GetNewClosure()
+    $ui.Push = { $ui.Undo_Stack.Push((& $ui.Snap)) | Out-Null }.GetNewClosure()
+    $ui.DoUndo = { if ($ui.Undo_Stack.Count) { & $ui.Restore ($ui.Undo_Stack.Pop()) } }.GetNewClosure()
+
+    # snapshot BEFORE each cell edit so Ctrl+Z / Undo steps back one change
+    $beforeEdit = { param($s,$e) if (-not $ui.Init) { & $ui.Push } }.GetNewClosure()
+    $GridProps.add_BeginningEdit($beforeEdit)
+    $GridChecks.add_BeginningEdit($beforeEdit)
+    $GridOther.add_BeginningEdit($beforeEdit)
+
+    # ----- master switch -----
+    $ChkMaster.IsChecked = [bool]$hasPred
+    if ($hasPred) { $LblMasterHint.Text = 'Off = ignore the predecessor MST entirely.' } else { $ChkMaster.IsEnabled = $false; $LblMasterHint.Text = 'No predecessor MST loaded.' }
+    $ChkMaster.add_Checked({
+        if ($ui.Init) { return }
+        & $ui.Push; $ui.Undo_Stack.Peek().Master = $false   # a CheckBox event fires AFTER the toggle, so record the PRE-toggle state
+        $ui.Init = $true
+        foreach ($r in $rows) { if ($r.HasPred -and -not $r.UserEdited) { $r.SetValueQuiet($r.PredValue); $r.SetApplyQuiet($true); $r.SetEditedQuiet($false) } }
+        foreach ($o in $otherRows) { if ($o.FromPred -and $o.CanApply) { $o.Replicate = $true } }   # only predecessor rows; user-added removals are left alone
+        $ui.Init = $false; & $ui.UpdateSummary
+    }.GetNewClosure())
+    $ChkMaster.add_Unchecked({
+        if ($ui.Init) { return }
+        & $ui.Push; $ui.Undo_Stack.Peek().Master = $true    # a CheckBox event fires AFTER the toggle, so record the PRE-toggle state
+        $ui.Init = $true
+        foreach ($r in $rows) { if ($r.HasPred -and -not $r.UserEdited) { $r.SetApplyQuiet($false); $r.SetValueQuiet($r.BaseValue) } }
+        foreach ($o in $otherRows) { if ($o.FromPred) { $o.Replicate = $false } }   # off ignores the predecessor; keep the user's own removals
+        $ui.Init = $false; & $ui.UpdateSummary
+    }.GetNewClosure())
+
+    # ----- filter (Properties tab) -----
     $view = [Windows.Data.CollectionViewSource]::GetDefaultView($rows)
-    $filter.add_TextChanged({
-        $f = $filter.Text.Trim()
-        if ($f) { $view.Filter = { param($x) ("$($x.Property)" -like "*$f*") -or ("$($x.Value)" -like "*$f*") }.GetNewClosure() }
+    $TxtFilter.add_TextChanged({
+        $f = $TxtFilter.Text.Trim()
+        if ($f) { $view.Filter = { param($x) ("$($x.Property)" -like "*$f*") -or ("$($x.YourValue)" -like "*$f*") }.GetNewClosure() }
         else { $view.Filter = $null }
     }.GetNewClosure())
 
-    # --- CheckBox table (Orca "CheckBox" view): reference so the packager can see which property each installer
-    #     checkbox drives (e.g. the licence-agreement property to set in the MST). Read-only. ---
-    $cbHdr = New-Object Windows.Controls.TextBlock
-    $cbHdr.Text = if ($checkRows.Count) { "MSI CheckBox table ($($checkRows.Count)) - properties driven by installer checkboxes (reference):" } else { 'MSI CheckBox table: none in this MSI.' }
-    $cbHdr.Foreground = '#DCDCAA'; $cbHdr.FontWeight = 'Bold'; $cbHdr.FontSize = 11; $cbHdr.Margin = '0,10,0,4'
-    [Windows.Controls.Grid]::SetRow($cbHdr, 4); [void]$g.Children.Add($cbHdr)
+    # ----- buttons -----
+    $BtnAdd.add_Click({
+        & $ui.Push
+        $r = New-Object MsiPropRow; $r.Property = ''; $r.InMsi = $false; $r.BaseValue = ''; $r.SetApplyQuiet($true); $r.SetEditedQuiet($true)
+        $r.add_PropertyChanged($onChg); $rows.Add($r); $GridProps.ScrollIntoView($r); $GridProps.SelectedItem = $r
+        & $ui.UpdateSummary
+    }.GetNewClosure())
+    $BtnDel.add_Click({
+        $sel = @($GridProps.SelectedItems | ForEach-Object { $_ })
+        if (-not $sel.Count) { [Windows.MessageBox]::Show('Select a property row (or rows) to delete.', 'Delete property') | Out-Null; return }
+        & $ui.Push
+        foreach ($r in $sel) { [void]$rows.Remove($r) }
+        & $ui.UpdateSummary
+    }.GetNewClosure())
+    $BtnOtherAdd.add_Click({
+        & $ui.Push
+        $o = New-Object MstOtherRow
+        $o.FromPred = $false; $o.CanApply = $true; $o.Action = 'remove'; $o.Category = 'custom'
+        $o.Table = 'Registry'; $o.PkCol = 'Registry'; $o.Keys = ''; $o.Detail = 'your removal (deletes matching rows; no-op if absent)'
+        $o.Replicate = $true
+        $o.add_PropertyChanged($onChg); $otherRows.Add($o); $GridOther.ScrollIntoView($o); $GridOther.SelectedItem = $o
+        & $ui.UpdateSummary
+    }.GetNewClosure())
+    $BtnOtherDel.add_Click({
+        $sel = @($GridOther.SelectedItems | ForEach-Object { $_ })
+        if (-not $sel.Count) { [Windows.MessageBox]::Show('Select a row (or rows) in the Other tables tab to delete.', 'Delete') | Out-Null; return }
+        & $ui.Push
+        foreach ($o in $sel) { [void]$otherRows.Remove($o) }
+        & $ui.UpdateSummary
+    }.GetNewClosure())
+    $BtnUndo.add_Click({ & $ui.DoUndo }.GetNewClosure())
+    $BtnReset.add_Click({
+        & $ui.Push; $ui.Init = $true
+        foreach ($r in $rows) { $r.SetValueQuiet($r.BaseValue); $r.SetApplyQuiet($false); $r.SetEditedQuiet($false) }
+        foreach ($c in $checkRows) { $c.Apply = $false }
+        foreach ($o in $otherRows) { $o.Replicate = $false }
+        $ChkMaster.IsChecked = $false
+        $ui.Init = $false; & $ui.UpdateSummary
+    }.GetNewClosure())
+    $BtnOk.add_Click({
+        $GridProps.CommitEdit([Windows.Controls.DataGridEditingUnit]::Row, $true) | Out-Null
+        $GridChecks.CommitEdit([Windows.Controls.DataGridEditingUnit]::Row, $true) | Out-Null
+        $GridOther.CommitEdit([Windows.Controls.DataGridEditingUnit]::Row, $true) | Out-Null
+        $w.DialogResult = $true
+    }.GetNewClosure())
 
-    $cbGrid = New-Object Windows.Controls.DataGrid
-    $cbGrid.AutoGenerateColumns = $false; $cbGrid.CanUserAddRows = $false; $cbGrid.HeadersVisibility = 'Column'; $cbGrid.IsReadOnly = $true
-    $cbGrid.MaxHeight = 130; $cbGrid.Background = '#21242B'; $cbGrid.Foreground = '#E7E9ED'; $cbGrid.RowBackground = '#2A2E36'; $cbGrid.AlternatingRowBackground = '#21242B'
-    $cbGrid.BorderBrush = '#3F3F46'; $cbGrid.HorizontalGridLinesBrush = '#3F3F46'; $cbGrid.FontFamily = 'Consolas'; $cbGrid.FontSize = 12; $cbGrid.GridLinesVisibility = 'Horizontal'
-    $cbGrid.ColumnHeaderStyle = (& $mkHdrStyle)
-    $cbP = New-Object Windows.Controls.DataGridTextColumn; $cbP.Header = 'Property'; $cbP.Binding = (New-Object Windows.Data.Binding('Property')); $cbP.Width = 260
-    $cbV = New-Object Windows.Controls.DataGridTextColumn; $cbV.Header = 'Checked value'; $cbV.Binding = (New-Object Windows.Data.Binding('CheckedValue')); $cbV.Width = 300
-    foreach ($c in @($cbP,$cbV)) { [void]$cbGrid.Columns.Add($c) }
-    $cbGrid.ItemsSource = $checkRows
-    [Windows.Controls.Grid]::SetRow($cbGrid, 5); [void]$g.Children.Add($cbGrid)
+    $w.add_PreviewKeyDown({
+        param($s,$e)
+        if ($e.Key -eq 'Z' -and ([Windows.Input.Keyboard]::Modifiers -band [Windows.Input.ModifierKeys]::Control)) { & $ui.DoUndo; $e.Handled = $true }
+    }.GetNewClosure())
 
-    $btns = New-Object Windows.Controls.StackPanel; $btns.Orientation = 'Horizontal'; $btns.HorizontalAlignment = 'Right'; $btns.Margin = '0,10,0,0'
-    $bAdd = New-Object Windows.Controls.Button; $bAdd.Content = 'Add property'; $bAdd.Padding = '10,4'; $bAdd.Margin = '0,0,8,0'
-    $bAdd.add_Click({ $r = New-Object MsiPropRow; $r.Include = $true; $r.Property = ''; $r.Value = ''; $rows.Add($r); $grid.ScrollIntoView($r); $grid.SelectedItem = $r }.GetNewClosure())
-    $bOk = New-Object Windows.Controls.Button; $bOk.Content = 'OK'; $bOk.Padding = '16,4'; $bOk.Margin = '0,0,8,0'; $bOk.IsDefault = $true
-    $bOk.add_Click({ $w.DialogResult = $true }.GetNewClosure())
-    $bCancel = New-Object Windows.Controls.Button; $bCancel.Content = 'Cancel'; $bCancel.Padding = '12,4'; $bCancel.IsCancel = $true
-    foreach ($b in @($bAdd,$bOk,$bCancel)) { [void]$btns.Children.Add($b) }
-    [Windows.Controls.Grid]::SetRow($btns, 6); [void]$g.Children.Add($btns)
+    # Build the OK result (the KEY=VALUE lines + selected replications + master state) from the current UI state.
+    # Factored out so the headless test seam can exercise the exact same output logic without the modal loop.
+    $ui.BuildResult = {
+        $keys = @{}
+        $outLines = New-Object System.Collections.Generic.List[string]
+        foreach ($r in $rows) {
+            if ($r.Apply -and "$($r.Property)".Trim()) { $k = "$($r.Property)".Trim(); $keys[$k] = $true; $outLines.Add("$k=$($r.YourValue)") | Out-Null }
+        }
+        foreach ($c in $checkRows) {
+            if ($c.Apply -and "$($c.Property)".Trim()) { $k = "$($c.Property)".Trim(); if (-not $keys.ContainsKey($k)) { $keys[$k] = $true; $outLines.Add("$k=$($c.CheckedValue)") | Out-Null } }
+        }
+        # Rebuild the replication list from the (editable) Other-tables grid. Only ticked REMOVALS with a known
+        # table + at least one key are transformable; the tick state already reflects the master switch (off unticks
+        # predecessor rows). A no-op at build if the key is absent, so it can never corrupt the new MSI.
+        $extras = New-Object System.Collections.Generic.List[object]
+        foreach ($o in $otherRows) {
+            if (-not $o.Replicate) { continue }
+            if ("$($o.Action)" -ne 'remove') { continue }
+            $tbl = "$($o.Table)".Trim(); if (-not $tbl) { continue }
+            $pk = & $ui.PkFor $tbl; if (-not $pk) { continue }
+            $ks = @("$($o.Keys)" -split '[\r\n,;]+' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if (-not $ks.Count) { continue }
+            [void]$extras.Add([pscustomobject]@{ Action='remove'; Table=$tbl; PkCol=$pk; Keys=$ks; Category="$($o.Category)"; Label="$($o.Detail)" })
+        }
+        return @{ Text = ($outLines -join "`r`n"); Extras = @($extras.ToArray()); Master = [bool]$ChkMaster.IsChecked }
+    }.GetNewClosure()
 
-    $w.Content = $g
-    if ($w.ShowDialog()) {
-        $grid.CommitEdit([Windows.Controls.DataGridEditingUnit]::Row, $true) | Out-Null
-        $out = @($rows | Where-Object { $_.Include -and "$($_.Property)".Trim() } | ForEach-Object { "$($_.Property.Trim())=$($_.Value)" })
-        return ($out -join "`r`n")
+    $ui.Init = $false
+    & $ui.UpdateSummary
+
+    # Dormant test seam (normally $script:MsiDlgSmoke is unset => skipped): the WPF modal loop cannot run in a headless
+    # station, so this runs the SAME logic paths and returns without ShowDialog. Modes: 'reset' (Reset button),
+    # 'masteroff' (untick master), 'ok'/anything-else (accept current state), 'cancel' (return $null).
+    if ($script:MsiDlgSmoke) {
+        try {
+            switch ("$script:MsiDlgSmoke") {
+                'cancel'    { return $null }
+                'reset'     { $BtnReset.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Primitives.ButtonBase]::ClickEvent))) }
+                'masteroff' { $ChkMaster.IsChecked = $false }
+                'undo'      { $ChkMaster.IsChecked = $false; & $ui.DoUndo }
+                'del'       { & $ui.Push; foreach ($x in @($rows | Where-Object { $_.Property -eq 'IAGREE' })) { [void]$rows.Remove($x) } }
+                'delundo'   { & $ui.Push; foreach ($x in @($rows | Where-Object { $_.Property -eq 'IAGREE' })) { [void]$rows.Remove($x) }; & $ui.DoUndo }
+                'otheradd'  { $BtnOtherAdd.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Primitives.ButtonBase]::ClickEvent))); ($otherRows | Select-Object -Last 1).Keys = 'k1, k2' }
+                'otheredit' { ($otherRows | Where-Object { $_.FromPred -and $_.Action -eq 'remove' } | Select-Object -First 1).Keys = 'edited1, edited2' }
+                'otherdel'  { & $ui.Push; foreach ($x in @($otherRows)) { [void]$otherRows.Remove($x) } }
+                'otherundo' { $k=($otherRows | Where-Object { $_.FromPred } | Select-Object -First 1).Keys; & $ui.Push; ($otherRows | Where-Object { $_.FromPred } | Select-Object -First 1).Keys='ZZZ'; & $ui.DoUndo }
+            }
+        } catch { $script:MsiDlgSmokeErr = "$($_.Exception.Message)" }
+        return (& $ui.BuildResult)
     }
+
+    if ($w.ShowDialog()) { return (& $ui.BuildResult) }
     return $null
 }
 
@@ -2574,11 +2917,16 @@ $BtnMsiPropsView.add_Click({
         try {
             $pMsi = Get-ChildItem -LiteralPath $script:State.PredecessorPath -Recurse -Filter *.msi -ErrorAction SilentlyContinue | Sort-Object Length -Descending | Select-Object -First 1
             $pMst = Get-ChildItem -LiteralPath $script:State.PredecessorPath -Recurse -Filter *.mst -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($pMsi -and $pMst) { $ps = Read-MstSettings -MsiPath $pMsi.FullName -MstPath $pMst.FullName; if ($ps -and $ps.ExtraProps) { $script:State.PredMstProps = $ps.ExtraProps } }
+            if ($pMsi -and $pMst) { $ps = Read-MstSettings -MsiPath $pMsi.FullName -MstPath $pMst.FullName; if ($ps) { if ($ps.ExtraProps) { $script:State.PredMstProps = $ps.ExtraProps }; if ($ps.OtherItems) { $script:State.MstOtherItems = @($ps.OtherItems) } } }
         } catch {}
     }
-    $res = Show-MsiPropertiesDialog -MsiPath $msi.FullName -ExistingText $TxtMsiProps.Text -PredecessorProps $script:State.PredMstProps -MsiName $msi.Name
-    if ($null -ne $res) { $TxtMsiProps.Text = $res }
+    $predLoaded = [bool]($script:State.PredecessorPath -and (Test-Path "$($script:State.PredecessorPath)") -and (@($script:State.PredMstProps.Keys).Count -or @($script:State.MstOtherItems).Count))
+    $res = Show-MsiPropertiesDialog -MsiPath $msi.FullName -ExistingText $TxtMsiProps.Text -PredecessorProps $script:State.PredMstProps -PredecessorItems @($script:State.MstOtherItems) -PredecessorLoaded $predLoaded -MsiName $msi.Name
+    if ($null -ne $res) {
+        $TxtMsiProps.Text = "$($res.Text)"
+        # the Other-tables tab is the authority for which predecessor removals to replicate at build (master-gated)
+        $script:State.MstApplyExtras = @($res.Extras)
+    }
 })
 # AUTO-MATCH the predecessor's MST onto the new MSI (no separate button/dialog - runs when the predecessor loads):
 # reads the predecessor's transform and applies it as the DEFAULT - shortcut/Run-key Keep toggles, extra properties
@@ -2611,6 +2959,7 @@ function Set-PredecessorMstAuto {
     $ChkKeepRunKey.IsChecked   = $fl.KeepRunKey
     if ($s.ExtraProps -and $s.ExtraProps.Count) { $TxtMsiProps.Text = (($s.ExtraProps.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join "`r`n") }
     # replicate the predecessor's can-apply removals at build; manual-only items -> review notes (Step 4)
+    $script:State.MstOtherItems  = @($s.OtherItems)   # full comparison for the "Other tables" tab of View MSI properties
     $script:State.MstApplyExtras = @($s.OtherItems | Where-Object { $_.CanApply })
     $manual = @($s.OtherItems | Where-Object { -not $_.CanApply } | ForEach-Object { $_.Label })
     $script:State.MstReviewNotes = @($manual)
@@ -2647,6 +2996,7 @@ $CmbBrand.add_SelectionChanged({
     $tag = "$($CmbBrand.SelectedItem.Tag)".ToUpper()
     if ($tag -in 'INA','VWG','G1V' -and $tag -ne "$($script:State.TargetBrand)") {
         $script:State.TargetBrand = $tag
+        if ("$($TxtPkg.Text)".Trim()) { Parse-Current | Out-Null }   # re-check the Group/VWG 34-char name gate for the new brand
         Invalidate-From 3                 # brand drives InstallTitle / ProcToClose / name rules => rebuild Step 3
     }
 })
@@ -5333,7 +5683,8 @@ $BtnNext.add_Click({
         return
     }
   if ($script:Step -eq 1) {
-        if (-not (Parse-Current)) { return }
+        if (-not (Parse-Current)) { return }       # HARD STOP: name format / Group 34-char limit
+        if (-not (Test-OrderNumberGate)) { return } # HARD STOP: AES number format (GPF)
         if (Test-LiveShareDuplicate) { return }   # warn once if this exact name is already in the live share
         $script:State.Ritm = $TxtRitm.Text.Trim()
         if (-not $script:State.ChosenInstallers -or $script:State.ChosenInstallers.Count -eq 0) {
@@ -5356,7 +5707,16 @@ $BtnNext.add_Click({
 foreach ($i in 1..4) {
     $lbl = Get-Variable -Name "N$i" -ValueOnly
     $lbl.Tag = $i; $lbl.Cursor = 'Hand'
-    $lbl.add_MouseLeftButtonDown({ Show-Step ([int]$this.Tag) })
+    $lbl.add_MouseLeftButtonDown({
+        $target = [int]$this.Tag
+        # Leaving Step 1 forward must pass the same hard stops as Next (name format / Group 34-char / AES number),
+        # so the clickable rail can't be used to skip validation. Backward jumps are always allowed.
+        if ($script:Step -eq 1 -and $target -gt 1) {
+            if (-not (Parse-Current)) { return }
+            if (-not (Test-OrderNumberGate)) { return }
+        }
+        Show-Step $target
+    })
 }
 
 Show-Step 1

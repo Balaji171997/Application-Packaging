@@ -27,9 +27,9 @@
 
   <Site code="PCZ" server="AUDIINSC0027.audi.prod.vwg"/>
 
-  <Service address="AUDIINSC0027.audi.prod.vwg"
-           configurationName="AudiSwIntegration"
-           account="audiprod\svc-swintegration"
+  <!-- CONFIRM: the machine that runs the collector task (Zone: Global). -->
+  <Runner host="AUDIINSC0027.audi.prod.vwg"/>
+  <Service account="audiprod\svc-swintegration"
            allowedGroup="audiprod\G-Audi-SwIntegration-Operators"/>
 
   <!-- CONFIRM: the old script used INA's share here. -->

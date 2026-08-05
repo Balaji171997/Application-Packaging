@@ -2076,8 +2076,20 @@ try {
     $fjIna = Set-GpfProcToCloseNonUI -Text $fjWrap -Brand 'INA'
     Assert 'FJ#16: INA ProcToClose -> NonUI'       (($fjIna -match "VWG_ProcToCloseNonUI\s*=\s*@\('app\.exe'\)") -and ($fjIna -match "VWG_ProcToClose\s*=\s*@\(\)"))
     Assert 'FJ#16: non-Audi unchanged'             ((Set-GpfProcToCloseNonUI -Text $fjWrap -Brand 'VWG') -eq $fjWrap)
+    # #9 reuse carries the predecessor's ProcToClose into $adtSession.AppProcessesToClose (authoritative GPF field)
+    $fjSess    = "        AppProcessesToClose = @()`r`n        AppVendor = 'X'"
+    $fjSessOut = Set-SessionValue -Text $fjSess -Field 'AppProcessesToClose' -Value "@('word.exe')"
+    Assert 'FJ#9: reuse fills AppProcessesToClose from predecessor' ($fjSessOut -match "AppProcessesToClose\s*=\s*@\('word\.exe'\)")
     # #14 34-char length
     Assert 'FJ#14: name length sum'                ((Get-GpfVwgNameLength -NewPkg @{Vendor='AB';AppName='CD';Version='1';Lang='MUL'}) -eq 8)
+    # AES number format hard-stop helper (Step-1 order-number gate)
+    Assert 'AES: valid AES-1-020436-A'             (Test-AesNumberFormat 'AES-1-020436-A')
+    Assert 'AES: valid no-suffix AES-1-1'          (Test-AesNumberFormat 'AES-1-1')
+    Assert 'AES: trims surrounding spaces'         (Test-AesNumberFormat '  AES-1-020436-A  ')
+    Assert 'AES: empty rejected'                   (-not (Test-AesNumberFormat ''))
+    Assert 'AES: wrong prefix rejected'            (-not (Test-AesNumberFormat 'RFC-1-020436-A'))
+    Assert 'AES: trailing text rejected'           (-not (Test-AesNumberFormat 'AES-1-020436-A Vendor_App'))
+    Assert 'AES: inner space rejected'             (-not (Test-AesNumberFormat 'AES-1-020 436-A'))
     # #8 branding guard matches predecessor
     $fjTpl = "#*====================================POST-UNINSTALLATION BEGIN====`r`n    `$flag = `$true`r`n    ## Branding Uninstall`r`n    Remove-Branding`r`n#*====================================POST-UNINSTALLATION END===="
     Assert 'FJ#8: predecessor bare -> NOT wrapped'  ((Set-GpfFlagGuardedBranding -Text $fjTpl -Model @{ RawV4Content = "## Branding Uninstall`r`nRemove-Branding" }) -notmatch '(?is)If\s*\(\s*\$flag\s*\)\s*\{[^}]*Remove-Branding')
@@ -2101,6 +2113,41 @@ try {
     $fjAl = $fjAlign -split "`r?`n"
     Assert 'FJ-align: successful-log matches command indent' (([regex]::Match(($fjAl | Where-Object { $_ -match 'is successful' })[0],'^ *').Length) -eq ([regex]::Match(($fjAl | Where-Object { $_ -match 'Start-ADTMsiProcess' })[0],'^ *').Length))
     Assert 'FJ-align: non-template log NOT touched' ((Align-GpfScaffoldLogs -Text "        Write-ADTLogEntry -Message 'Installation finished with' -Source 'INSTALLATION'") -eq "        Write-ADTLogEntry -Message 'Installation finished with' -Source 'INSTALLATION'")
+    # #1/#2: predecessor PRE-INSTALL custom code lands BEFORE the user-dialogs block (as in the predecessor) and is
+    # re-indented to the template's indent (not left at column 0).
+    $fjPreTpl  = "#*====================================PRE-INSTALLATION BEGIN====`r`n    # check for pending reboot`r`n    if (`$VWG_CheckForReboot){ Set-Reboot }`r`n`r`n    # user dialogs (deprecated)`r`n    if (`$VWG_UseDialogs){ Show-ADTInstallationWelcome }`r`n#*====================================PRE-INSTALLATION END===="
+    $fjPreBody = "#Checking Dependency `"Dot Net`"`r`nIf (`$Ver -ge `$Ver1) { Write-ADTLogEntry -Message 'present' -Source 'DEP' }"
+    $fjPreOut  = Set-SectionBody -Template $fjPreTpl -Begin '#\*=+\s*PRE-INSTALLATION BEGIN\s*=+' -End '#\*=+\s*PRE-INSTALLATION END\s*=+' -Body $fjPreBody -Pre $true
+    Assert 'FJ#1: dep block BEFORE user-dialogs, AFTER reboot' (($fjPreOut.IndexOf('Checking Dependency') -gt $fjPreOut.IndexOf('pending reboot')) -and ($fjPreOut.IndexOf('Checking Dependency') -lt $fjPreOut.IndexOf('user dialogs')))
+    Assert 'FJ#2: carried dep block re-indented (not col 0)' (@($fjPreOut -split "`r?`n" | Where-Object { $_ -match 'Checking Dependency' })[0] -match '^ +#Checking')
+    # #1/#2 SPLIT: predecessor PRE-INSTALL code that ran ABOVE the dialogs stays between reboot & dialogs; code that ran
+    # BELOW the dialogs stays below (not all dumped above). Full pipeline: Strip-Boilerplate (leaves the split sentinel)
+    # -> Set-SectionBody. Also: no sentinel leaks, no duplicated reboot check, inner indentation preserved, still parses.
+    $fjSplitPred = "`t`t# check for pending reboot`r`n`t`tif (`$VWG_CheckForReboot){`r`n`t`t`tSet-Reboot -ForceExitScript`r`n`t`t}`r`n`r`n`t`t#Dependency check ABOVE dialogs`r`n`t`tIf (`$Ver -ge 1) {`r`n`t`t`tWrite-ADTLogEntry -Message 'dep' -Source 'DEP'`r`n`t`t}`r`n`r`n`t`t# user dialogs (deprecated)`r`n`t`tif (`$VWG_UseDialogs){`r`n`t`t`tif (`$VWG_ProcToClose) {`r`n`t`t`t`tShow-ADTInstallationWelcome -CloseProcesses `$VWG_ProcToClose`r`n`t`t`t}`r`n`t`t}`r`n`r`n`t`t#Cleanup BELOW dialogs`r`n`t`tCopy-Item 'a' 'b' -Force"
+    $fjSplitTpl  = "#*====PRE-INSTALLATION BEGIN====`r`n`t`t# check for pending reboot`r`n`t`tif (`$VWG_CheckForReboot){`r`n`t`t`tSet-Reboot -ForceExitScript`r`n`t`t}`r`n`r`n`t`t# user dialogs (deprecated)`r`n`t`tif (`$VWG_UseDialogs){`r`n`t`t`tif (`$VWG_ProcToClose) {`r`n`t`t`t`tShow-ADTInstallationWelcome -CloseProcesses `$VWG_ProcToClose`r`n`t`t`t}`r`n`t`t}`r`n#*====PRE-INSTALLATION END===="
+    $fjSplitStrip = Strip-Boilerplate -Body $fjSplitPred
+    $fjSplitOut  = Set-SectionBody -Template $fjSplitTpl -Begin '#\*=+\s*PRE-INSTALLATION BEGIN\s*=+' -End '#\*=+\s*PRE-INSTALLATION END\s*=+' -Body $fjSplitStrip -Pre $true
+    $fjS_reb = $fjSplitOut.IndexOf('pending reboot'); $fjS_dep = $fjSplitOut.IndexOf('Dependency check ABOVE'); $fjS_dlg = $fjSplitOut.IndexOf('user dialogs (deprecated)'); $fjS_cl = $fjSplitOut.IndexOf('Cleanup BELOW dialogs')
+    Assert 'FJ#1b: ABOVE-code between reboot and dialogs' (($fjS_dep -gt $fjS_reb) -and ($fjS_dep -lt $fjS_dlg))
+    Assert 'FJ#1b: BELOW-code stays below dialogs'        (($fjS_cl -gt $fjS_dlg))
+    Assert 'FJ#1b: no split sentinel leaks'               (-not $fjSplitOut.Contains('__PB_DIALOGS_SPLIT__'))
+    Assert 'FJ#1b: reboot check not duplicated'           ((([regex]::Matches($fjSplitOut,'CheckForReboot')).Count) -eq 1)
+    Assert 'FJ#2b: carried inner line keeps deeper indent' (@($fjSplitOut -split "`r?`n" | Where-Object { $_ -match "Write-ADTLogEntry -Message 'dep'" })[0] -match "^\t\t\tWrite")
+    $fjSplitErr = $null; [void][System.Management.Automation.Language.Parser]::ParseInput($fjSplitOut,[ref]$null,[ref]$fjSplitErr)
+    Assert 'FJ#1b: split output parses'                   ($fjSplitErr.Count -eq 0)
+    # #1c: predecessor uninstall-block stripping must NOT run on the code BETWEEN reboot & dialogs (even if it matches the
+    # uninstall format); only the REST (below the dialogs) is scanned. Mirrors the Build-PredecessorScript PreInstall logic.
+    $fjUnId  = @{ Vendor='Acme'; AppName='MyApp' }
+    $fjUnBtw = "If (Get-ADTApplication -Name 'MyApp') {`r`n`t`tStart-ADTMsiProcess -Action Uninstall -Path 'BETWEEN.msi'`r`n`t}"
+    $fjUnBel = "If (Get-ADTApplication -Name 'MyApp') {`r`n`t`tStart-ADTMsiProcess -Action Uninstall -Path 'BELOW.msi'`r`n`t}"
+    $fjUnBody = $fjUnBtw + "`r`n#__PB_DIALOGS_SPLIT__`r`n" + $fjUnBel
+    $fjUnSx   = $fjUnBody.IndexOf('#__PB_DIALOGS_SPLIT__')
+    $fjUnRest = $fjUnBody.Substring($fjUnSx)
+    $fjUnSplit = Split-ExistingUninstallBlocks -Code $fjUnRest -Identity $fjUnId
+    Assert 'FJ#1c: BETWEEN uninstall block NOT extracted'  ($fjUnBody.Substring(0,$fjUnSx) -match 'BETWEEN\.msi')
+    Assert 'FJ#1c: BELOW uninstall block IS extracted'     ((($fjUnSplit.Blocks -join "`n") -match 'BELOW\.msi') -and ($fjUnSplit.Body -notmatch 'BELOW\.msi'))
+    # SAFETY NET: a leaked dialogs-split marker must never survive Format-OutputScript (it can ride along inside a reused body).
+    Assert 'FJ#1d: split marker stripped from final output' ((Format-OutputScript -Text "`$x = 1`r`n    #__PB_DIALOGS_SPLIT__`r`nWrite-Host 'ok'") -notmatch '__PB_DIALOGS_SPLIT__')
     # Point2: heads-up notices channel works (reset/add/get).
     Reset-GpfNotices; Add-GpfNotice 'test notice'
     Assert 'FJ-notice: add + get'                     ((@(Get-GpfNotices)).Count -eq 1 -and (@(Get-GpfNotices))[0] -eq 'test notice')

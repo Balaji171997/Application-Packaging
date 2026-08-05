@@ -229,6 +229,19 @@ function Set-SectionBody {
     $bodyTrim = "$Body".Trim("`r","`n")
     if (-not $bodyTrim) { return $Template }   # nothing authored: leave the template section PRISTINE
 
+    # PRE-INSTALL split marker: Strip-Boilerplate leaves '#__PB_DIALOGS_SPLIT__' where the predecessor's user-dialogs /
+    # process-close block sat. Custom code BEFORE it ran above the dialogs; code AFTER it ran below. Split so each lands
+    # on the correct side of the NEW template's dialogs block. Everywhere else uses a sentinel-free recombined body.
+    $splitTok  = '#__PB_DIALOGS_SPLIT__'
+    $bodyAbove = $bodyTrim; $bodyBelow = ''
+    $sx = $bodyTrim.IndexOf($splitTok)
+    if ($sx -ge 0) {
+        $bodyAbove = $bodyTrim.Substring(0, $sx).Trim("`r","`n"," ","`t")
+        $bodyBelow = $bodyTrim.Substring($sx + $splitTok.Length).Trim("`r","`n"," ","`t")
+        $bodyTrim  = (@($bodyAbove, $bodyBelow) | Where-Object { $_ }) -join "`r`n`r`n"   # sentinel-free (non-split branches)
+        if (-not $bodyTrim) { return $Template }
+    }
+
     # NEVER wipe template lines. Insert the authored body INTO the marker, keeping the
     # template's own scaffolding (e.g. its Write-ADTLogEntry "Start.."/"..successful" lines):
     #   - if the section has a trailing "...successful" log, put body just before it
@@ -280,16 +293,38 @@ function Set-SectionBody {
         # required reboot" block that MUST stay LAST (team finding: branding/reboot were emitted FIRST because
         # the body was appended after them). Insert the authored body BEFORE that block so it trails.
         $brand = [regex]::Match($mid, '(?m)^[ \t]*##[ \t]*(Branding[ \t]+(?:Install|Uninstall)|Handling for required reboot)\b')
-        # HTML prompt (Show-HTMLInstallationWelcome) must sit ABOVE the proc-close/UseDialogs block, not after it
-        # (team finding: "HTML prompt ... should be above line 265 as per predecessor"). Anchor = the template's
-        # "# user dialogs (deprecated)" line.
+        # PRE sections + HTML prompt: the carried code must sit ABOVE the proc-close / "user dialogs (deprecated)" block,
+        # not after it. Two findings:
+        #   - "HTML prompt (Show-HTMLInstallationWelcome) should be above the UseDialogs block as per predecessor".
+        #   - Predecessor PRE-INSTALL custom code (e.g. a "Checking Dependency Dot Net Framework" block) that ran BEFORE
+        #     closing the processes must STAY before it - the tool was relocating it AFTER the dialogs block. Since the GPF
+        #     template's PRE-* sections end with the UseDialogs block (nothing follows it), ANY PRE body (Pre=$true) is
+        #     inserted just before that block - i.e. between the reboot check and the dialogs, exactly as in the predecessor.
+        # Anchor = the template's "# user dialogs (deprecated)" line. MAIN sections never reach here (they take the
+        # success-log path above); POST sections have Pre=$false and fall to the branding anchor below.
         $htmlAnchor = [regex]::Match($mid, '(?im)^[ \t]*#[ \t]*user dialogs \(deprecated\)')
         if ($mk.Success) {
             $newMid = $mk.Value + $bodyTrim + "`r`n" + $mid.Substring($mk.Length)
-        } elseif (($bodyTrim -match '(?i)Show-HTMLInstallationWelcome') -and $htmlAnchor.Success) {
+        } elseif ($htmlAnchor.Success -and ($Pre -or ($bodyTrim -match '(?i)Show-HTMLInstallationWelcome'))) {
             $before = $mid.Substring(0, $htmlAnchor.Index).TrimEnd("`r","`n")
-            $after  = $mid.Substring($htmlAnchor.Index)
-            $newMid = $before + "`r`n`r`n" + $bodyTrim + "`r`n`r`n" + $after
+            $after  = $mid.Substring($htmlAnchor.Index).Trim("`r","`n")
+            # #2: re-indent each carried block to the user-dialogs line's indent so it lines up with the surrounding
+            # template code (the predecessor body is usually at column 0). Only when a block isn't already indented that far.
+            $anchorIndent = [regex]::Match($htmlAnchor.Value, '^[ \t]*').Value
+            $reindent = {
+                param([string]$blk)
+                if (-not $blk) { return '' }
+                if (-not $anchorIndent) { return $blk }
+                return (Set-CarriedBlockIndent -Body $blk -Prefix $anchorIndent)
+            }
+            # ABOVE-dialogs custom code -> between the reboot check ($before) and the dialogs block ($after).
+            # BELOW-dialogs custom code -> AFTER the dialogs block (the GPF PRE section ends with that block).
+            $parts = New-Object System.Collections.Generic.List[string]
+            $bt = "$before".Trim("`r","`n"); if ($bt) { $parts.Add($bt) }
+            $ab = & $reindent $bodyAbove;    if ($ab) { $parts.Add($ab) }
+            if ($after) { $parts.Add($after) }
+            $bl = & $reindent $bodyBelow;    if ($bl) { $parts.Add($bl) }
+            $newMid = ($parts -join "`r`n`r`n") + "`r`n"
         } elseif ($brand.Success) {
             $before = $mid.Substring(0, $brand.Index).TrimEnd("`r","`n")
             $after  = $mid.Substring($brand.Index)
@@ -397,9 +432,44 @@ function Remove-SelfUninstallGuard {
 
 function Insert-IntoPreInstall {
     param([string]$Script, [hashtable]$Section, [string]$Block)
+    $Block = [regex]::Replace("$Block", '(?m)^[ \t]*#__PB_DIALOGS_SPLIT__[ \t]*\r?\n?', '')   # never carry the internal split marker
+    # MTB template: insert right after the "## <Perform ... tasks here>" author marker (top of the section).
     $m = [regex]::Match($Script, "(?s)($($Section.B))(.*?)##\s*<Perform.*?tasks here>\s*\r?\n")
     if ($m.Success) { return $Script.Insert($m.Index + $m.Length, "`r`n" + $Block + "`r`n") }
-    return (Set-SectionBody -Template $Script -Begin $Section.B -End $Section.E -Body $Block -Pre $true)
+    # GPF template (no author marker): place the uninstall-previous group AFTER the whole user-dialogs / process-close
+    # block - below the dialogs, matching where the team's predecessors put it - NEVER between the reboot check and the
+    # dialogs (which would nest it inside any carried custom code that sits there). Locate the section, then brace-match
+    # the "if (...UseDialogs...){ ... }" block and insert right after its closing brace.
+    $sec = [regex]::Match($Script, "(?s)($($Section.B))(.*?)($($Section.E))")
+    if ($sec.Success) {
+        $mid = $sec.Groups[2].Value
+        $dlg = [regex]::Match($mid, '(?im)^[ \t]*#[ \t]*user dialogs \(deprecated\)[^\r\n]*\r?\n')
+        if ($dlg.Success) {
+            # find the "if (...) {" that opens the dialogs block, then walk braces (ignoring quotes) to its close.
+            $ifm = [regex]::Match($mid.Substring($dlg.Index + $dlg.Length), '(?im)^[ \t]*if\s*\(')
+            if ($ifm.Success) {
+                $j = $dlg.Index + $dlg.Length + $ifm.Index
+                $open = $mid.IndexOf('{', $j)
+                if ($open -ge 0) {
+                    $depth = 0; $q = $null; $k = $open; $endPos = -1
+                    while ($k -lt $mid.Length) {
+                        $c = $mid[$k]
+                        if ($q) { if ($c -eq $q) { $q = $null } }
+                        elseif ($c -eq "'" -or $c -eq '"') { $q = $c }
+                        elseif ($c -eq '{') { $depth++ }
+                        elseif ($c -eq '}') { $depth--; if ($depth -eq 0) { $endPos = $k; break } }
+                        $k++
+                    }
+                    if ($endPos -ge 0) {
+                        $insAt = $sec.Index + $sec.Groups[1].Length + $endPos + 1   # absolute index just past the dialogs block's closing brace
+                        return $Script.Insert($insAt, "`r`n`r`n" + $Block + "`r`n")
+                    }
+                }
+            }
+        }
+    }
+    # last resort: the sentinel-prefixed body makes Set-SectionBody place it BELOW the dialogs (not between).
+    return (Set-SectionBody -Template $Script -Begin $Section.B -End $Section.E -Body ("#__PB_DIALOGS_SPLIT__`r`n" + $Block) -Pre $true)
 }
 
 # --- Locate the blank v4 template script. Prefer an extracted PSADT_Template\ folder
@@ -901,6 +971,54 @@ function Convert-LeadingTabsToSpaces {
     }
     return ($lines -join "`r`n")
 }
+# Prefix every (non-blank) line of a body with $Prefix - used to re-indent carried predecessor code to the surrounding
+# template's indent (finding #2: "indent carried code 1 or 2 tabs"). Relative indentation inside the body is preserved
+# (uniform prefix). SAFE: here-string interiors and their column-0 terminator are NOT prefixed (that whitespace is part
+# of the string / the terminator must stay at column 0).
+function Add-GpfBodyIndent {
+    param([string]$Body, [string]$Prefix)
+    if (-not $Body -or -not $Prefix) { return $Body }
+    $lines = $Body -split "`r?`n", -1
+    $inHere = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($inHere) { if ($lines[$i] -match '^[ \t]*("@|''@)') { $inHere = $false }; continue }   # interior + terminator: leave
+        if ($lines[$i].Trim()) { $lines[$i] = $Prefix + $lines[$i] }                                 # prefix real code lines
+        if ($lines[$i] -match '@("|'')\s*$') { $inHere = $true }                                      # a here-string opened here
+    }
+    return ($lines -join "`r`n")
+}
+
+# Re-indent a CARRIED predecessor block to sit at $Prefix while PRESERVING its own relative structure.
+# Strip-Boilerplate's final .Trim() removes ONLY the first line's leading whitespace, so a naive prefix-every-line
+# (Add-GpfBodyIndent) over-indents the already-indented inner lines. This: (1) repairs the trimmed first line up to
+# the block's base indent, (2) dedents by the block's common leading-whitespace, (3) indents every code line by
+# $Prefix. Here-string interiors are never touched (content must stay byte-exact) and are excluded from the maths.
+function Set-CarriedBlockIndent {
+    param([string]$Body, [string]$Prefix)
+    if (-not $Body) { return $Body }
+    $lines = $Body -split "`r?`n", -1
+    # classify: code line indices (with leading-whitespace) vs here-string interior/terminator lines (left alone)
+    $code = New-Object System.Collections.Generic.List[object]
+    $inHere = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($inHere) { if ($lines[$i] -match '^[ \t]*("@|''@)') { $inHere = $false }; continue }
+        if ($lines[$i].Trim()) { [void]($lines[$i] -match '^([ \t]*)'); $code.Add(@{ I=$i; W=$Matches[1] }) }
+        if ($lines[$i] -match '@("|'')\s*$') { $inHere = $true }
+    }
+    if ($code.Count -eq 0) { return $Body }
+    if ($code.Count -ge 2) {
+        $restMinW = ($code[1..($code.Count-1)] | Sort-Object { $_.W.Length } | Select-Object -First 1).W
+        if ($code[0].W.Length -lt $restMinW.Length) { $lines[$code[0].I] = $restMinW + $lines[$code[0].I]; $code[0].W = $restMinW }
+    }
+    $lcp = ($code | Sort-Object { $_.W.Length } | Select-Object -First 1).W
+    foreach ($x in $code) { while ($lcp.Length -gt 0 -and -not $x.W.StartsWith($lcp)) { $lcp = $lcp.Substring(0, $lcp.Length-1) } }
+    foreach ($x in $code) {
+        $rest = if ($lcp.Length) { $lines[$x.I].Substring($lcp.Length) } else { $lines[$x.I] }
+        $lines[$x.I] = $Prefix + $rest
+    }
+    return ($lines -join "`r`n")
+}
+
 # Align the TEMPLATE scaffold log lines ("Start <Action> ..." and "<Action> of ... [is successful]." with -Source
 # $adtSession.DeployAppScriptFriendlyName) to the indent of the install/uninstall/repair COMMAND next to them, so the
 # log pair and the command it wraps share ONE indent. Needed because a changed template can leave the "successful" log
@@ -941,6 +1059,10 @@ function Format-OutputScript {
     # direction marks and any stray INLINE BOM -> removed. Done BEFORE Invoke-Formatter (which also chokes on a NBSP).
     $Text = [regex]::Replace($Text, '[\u00A0\u2007\u202F]', ' ')                       # NBSP variants -> space
     $Text = [regex]::Replace($Text, '[\u200B\u200C\u200D\u200E\u200F\u2060\uFEFF]', '')   # zero-width / direction marks / inline BOM -> gone
+    # SAFETY NET: the internal PRE-INSTALL dialogs-split marker must NEVER reach a shipped script. Set-SectionBody normally
+    # consumes it, but it can leak when a body carrying it is reused (e.g. a predecessor Pre-Uninstall section folded into
+    # the generated uninstall-previous block). Remove the whole marker line here, unconditionally.
+    $Text = [regex]::Replace($Text, '(?m)^[ \t]*#__PB_DIALOGS_SPLIT__[ \t]*\r?\n?', '')
     # Normalise to CRLF first: assembled scripts mix \r\n and \n (template + injected
     # bodies), and Invoke-Formatter refuses input with mixed line endings.
     $Text = [regex]::Replace($Text, "\r\n?|\n", "`r`n")
@@ -2103,15 +2225,28 @@ function Build-PredecessorScript {
     foreach ($s in $script:SectionMarkers) {
         $body = "$($Model.Code.$($s.F))"
         if ($s.F -eq 'PreInstallCode') {
-            # Extract EVERY existing uninstall block (the predecessor's own chain) so the later version swap can't touch
-            # them; they are re-inserted verbatim below (ALWAYS - regardless of the $AddUninstallPrevious checkbox).
-            $split = Split-ExistingUninstallBlocks -Code $body -Identity $Model.Identity
+            # SEPARATE between-code handling (does NOT change the uninstall logic): the custom code BETWEEN the template's
+            # reboot-check and user-dialogs blocks is carried VERBATIM and is NEVER counted as a predecessor uninstall
+            # block (user rule) - so the uninstall-chain extraction / self-uninstall-guard removal run ONLY on the REST
+            # (the code below the dialogs). The dialogs position is marked by '#__PB_DIALOGS_SPLIT__'. Everything the
+            # extraction does to the REST is exactly the original working behaviour; the between-code is simply set aside.
+            $splitTok = '#__PB_DIALOGS_SPLIT__'
+            $sx = $body.IndexOf($splitTok)
+            $between = if ($sx -ge 0) { $body.Substring(0, $sx) } else { '' }
+            $rest    = if ($sx -ge 0) { $body.Substring($sx) } else { $body }   # sentinel stays at the front of $rest
+            # Extract EVERY existing uninstall block from the REST (the predecessor's own chain) so the later version swap
+            # can't touch them; they are re-inserted verbatim below (ALWAYS - regardless of the $AddUninstallPrevious checkbox).
+            $split = Split-ExistingUninstallBlocks -Code $rest -Identity $Model.Identity
             foreach ($b in $split.Blocks) { $preservedOldBlocks.Add($b) }
-            $body = $split.Body
-            $body = [regex]::Replace($body, '(?im)^[ \t]*#+[ \t]*Unin\w*ation of predecessor package[^\r\n]*\r?\n?', '')
+            $rest = $split.Body
+            $rest = [regex]::Replace($rest, '(?im)^[ \t]*#+[ \t]*Unin\w*ation of predecessor package[^\r\n]*\r?\n?', '')
             # Drop the predecessor's bare "##Uninstalling <...> if present" self-uninstall guard (redundant with the
             # generated immediate-predecessor block; on reuse it reads as a current-version uninstall in pre-install).
-            $body = Remove-SelfUninstallGuard -Body $body
+            $rest = Remove-SelfUninstallGuard -Body $rest
+            # Split-ExistingUninstallBlocks .Trim()s its Body, which would drop the leading sentinel; re-attach it so
+            # Set-SectionBody can still tell above-dialogs from below-dialogs. Between-code is left completely untouched.
+            if ($sx -ge 0 -and "$rest" -notmatch [regex]::Escape($splitTok)) { $rest = $splitTok + "`r`n" + $rest }
+            $body = "$between" + "$rest"
         }
         if ($s.F -in 'MainInstallCode','MainUninstallCode','MainRepairCode','PreRepairCode') {
             # PreRepair is the "uninstall-then-reinstall" of the CURRENT package, so its ProductCode/filenames must be
@@ -2280,8 +2415,6 @@ function Build-PredecessorScript {
     #                predecessor (24), matching the new package. Runs LAST (covers main body + preserved block); only
     #                turns 23.x -> 24.x, never the predecessor(24)/new(26) refs; bare years/dates/copyrights are safe.
     if (-not $AddUninstallPrevious) {
-        # Detect NOW - $out is complete (main body + preserved block(s)), so the pred-of-pred ref is found wherever it
-        # sits (inline main sections OR an extracted-then-reinjected block).
         $predPredVer = Get-PredecessorOfPredecessorVersion -Text $out -Identity $NewPkg -PredVersion $predVer
         if ($predPredVer) {
             $out = Invoke-VersionSwap -Text $out -OldVersion $predPredVer -NewVersion $predVer

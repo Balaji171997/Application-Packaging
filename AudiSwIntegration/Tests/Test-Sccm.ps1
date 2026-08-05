@@ -25,8 +25,13 @@ function Assert-Equal { param([string]$Name, $Expected, $Actual)
 }
 
 $package = 'INA_AUDI_DummyTest_x86_1.0_0001_MUL'
+
+# A package is named for the environment it is published into, so the test plan
+# is built with a matching prefix. Preflight rejects a mismatch on purpose - see
+# the SitePrefix check, and the dedicated test for it further down.
 function New-TestPlan { param([string]$Code = 'INA')
-    Get-AudiIntegrationPlan -PackageName $package -EnvironmentCode $Code -Rfc 'RFC0012345'
+    $name = $package -replace '^[A-Za-z0-9]+_', "${Code}_"
+    Get-AudiIntegrationPlan -PackageName $name -EnvironmentCode $Code -Rfc 'RFC0012345'
 }
 
 Write-Host ''
@@ -222,6 +227,82 @@ Assert-Equal 'no steps ran for the blocked environment' 0 $blocked.Steps.Count
 $pczPreview = Invoke-AudiSwIntegration -Plan $pczPlan -Provider (New-AudiSccmDryRunProvider) -DryRun
 Assert-True  'an unverified environment can still be previewed' $pczPreview.Ok
 Assert-Equal 'the PCZ preview covers ten collections' 10 (@($pczPreview.Provider.Log | Where-Object Operation -eq 'NewCollection').Count)
+
+# ---------------------------------------------------------------- modify
+# Modify reconciles an application that already exists: add what is missing,
+# retire what the environment file no longer asks for, update what changed. It
+# must never create a second application, and it must never touch a collection
+# that does not belong to this package.
+Write-Host ''
+Write-Host 'Modify - reconciling an existing application' -ForegroundColor Cyan
+
+$modPlan = New-TestPlan
+$allCollections = @($modPlan.Collections | ForEach-Object { $_.Name })
+
+# nothing exists yet -> Modify must refuse rather than silently create
+$noApp = Invoke-AudiSwModification -Plan $modPlan -Provider (New-AudiSccmDryRunProvider) -DryRun
+Assert-True 'Modify refuses when the application does not exist' (-not $noApp.Ok)
+Assert-True 'and says to use Integrate instead' ($noApp.Steps[0].Message -like '*Integrate*')
+
+# fully in step already -> updates the definition, adds nothing
+$upToDate = New-AudiSccmDryRunProvider -ExistingApplications @($modPlan.ApplicationName) `
+                                       -ExistingCollections $allCollections -ExistingDeployments $allCollections
+$same = Invoke-AudiSwModification -Plan $modPlan -Provider $upToDate -DryRun
+Assert-True  'a package already in step succeeds' $same.Ok $same.Message
+Assert-Equal 'no collection is created'  0 (@($upToDate.Log | Where-Object Operation -eq 'NewCollection').Count)
+Assert-Equal 'no deployment is created'  0 (@($upToDate.Log | Where-Object Operation -eq 'NewDeployment').Count)
+Assert-Equal 'nothing is retired'        0 (@($upToDate.Log | Where-Object Operation -eq 'RemoveCollection').Count)
+Assert-Equal 'the application is updated, not created' 1 (@($upToDate.Log | Where-Object Operation -eq 'SetApplication').Count)
+Assert-Equal 'no second application is made' 0 (@($upToDate.Log | Where-Object Operation -eq 'NewApplication').Count)
+Assert-True  'the deployment type is refreshed' (@($upToDate.Log | Where-Object Operation -eq 'SetDeploymentType').Count -eq 1)
+
+# three collections missing -> exactly those three are added, with deployments
+$partial = @($allCollections | Select-Object -First 6)
+$gapped  = New-AudiSccmDryRunProvider -ExistingApplications @($modPlan.ApplicationName) `
+                                      -ExistingCollections $partial -ExistingDeployments $partial
+$filled = Invoke-AudiSwModification -Plan $modPlan -Provider $gapped -DryRun
+Assert-True  'a partial package is completed' $filled.Ok $filled.Message
+Assert-Equal 'exactly the missing collections are added' 3 (@($gapped.Log | Where-Object Operation -eq 'NewCollection').Count)
+Assert-Equal 'and their deployments'                     3 (@($gapped.Log | Where-Object Operation -eq 'NewDeployment').Count)
+Assert-Equal 'nothing is retired'                        0 (@($gapped.Log | Where-Object Operation -eq 'RemoveCollection').Count)
+Assert-True  'the changes are listed for the operator'   ($filled.Changed.Count -ge 3)
+
+# a collection the environment file no longer asks for -> retired
+$stale   = $allCollections + 'SM1-INA_AUDI_DummyTest_x86_1.0_0001_MUL_Retired'
+$retiring = New-AudiSccmDryRunProvider -ExistingApplications @($modPlan.ApplicationName) `
+                                       -ExistingCollections $stale -ExistingDeployments $stale
+$retired = Invoke-AudiSwModification -Plan $modPlan -Provider $retiring -DryRun
+Assert-True  'a package with a stale collection succeeds' $retired.Ok $retired.Message
+Assert-Equal 'exactly the stale collection is removed' 1 (@($retiring.Log | Where-Object Operation -eq 'RemoveCollection').Count)
+Assert-Equal 'its deployment goes with it'            1 (@($retiring.Log | Where-Object Operation -eq 'RemoveDeployment').Count)
+Assert-True  'and it is the right one' ((@($retiring.Log | Where-Object Operation -eq 'RemoveCollection')[0]).Detail -like '*_Retired')
+Assert-Equal 'the wanted collections are left alone'  0 (@($retiring.Log | Where-Object { $_.Operation -eq 'RemoveCollection' -and $_.Detail -notlike '*_Retired' }).Count)
+
+# the application itself is never removed by Modify
+Assert-Equal 'Modify never removes the application' 0 (@($retiring.Log | Where-Object Operation -eq 'RemoveApplication').Count)
+
+# German reaches SCCM as well as English
+$dePlan = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'INA' -Rfc 'R' `
+                                  -LocalizedName 'Adobe Reader' -LocalizedNameDe 'Adobe Lesegeraet' `
+                                  -LocalizedDescriptionDe 'Liest PDF-Dokumente.'
+Assert-Equal 'the plan carries the German name'        'Adobe Lesegeraet'     $dePlan.LocalizedNameDe
+Assert-Equal 'the plan carries the German description' 'Liest PDF-Dokumente.' $dePlan.LocalizedDescriptionDe
+$deFallback = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'INA' -Rfc 'R' -LocalizedName 'Only English'
+Assert-Equal 'German falls back to English when not given' 'Only English' $deFallback.LocalizedNameDe
+
+# A package named for one environment must not be published into another. The old
+# tool rewrote the first three characters instead, which is what turned
+# ADO_ADOBE_Reader into INA_INABE_Reader.
+$crossed  = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'ICZ' -Rfc 'RFC0012345'
+$crossPre = Test-AudiSwPrerequisite -Plan $crossed -Provider (New-AudiSccmDryRunProvider)
+$sitePrefix = @($crossPre.Findings | Where-Object { $_.Check -eq 'SitePrefix' })
+Assert-Equal 'the site prefix is checked'                1 $sitePrefix.Count
+Assert-True  'an INA package into ICZ is rejected'       (-not $sitePrefix[0].Ok)
+Assert-True  'and it blocks the run'                     (-not $crossPre.Ok)
+Assert-True  'the message names both sides'              ($sitePrefix[0].Message -like "*INA*ICZ*")
+
+$aligned = Test-AudiSwPrerequisite -Plan (New-TestPlan -Code 'ICZ') -Provider (New-AudiSccmDryRunProvider)
+Assert-True  'a matching prefix passes' (@($aligned.Findings | Where-Object { $_.Check -eq 'SitePrefix' })[0].Ok)
 
 # One identity only: the shared account. A person must not survive into the result.
 Assert-True  'the result carries no requester' (-not $run.PSObject.Properties['Requester'])

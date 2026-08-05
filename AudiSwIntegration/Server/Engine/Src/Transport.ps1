@@ -63,7 +63,7 @@ function New-AudiSwJobFile {
     param(
         [Parameter(Mandatory = $true)][string]$PackageName,
         [Parameter(Mandatory = $true)][string]$EnvironmentCode,
-        [ValidateSet('Integrate', 'Remove')][string]$Action = 'Integrate',
+        [ValidateSet('Integrate', 'Modify', 'Remove')][string]$Action = 'Integrate',
         [string]$Rfc = '',
         [string]$NameEn = '', [string]$NameDe = '',
         [string]$DescriptionEn = '', [string]$DescriptionDe = '',

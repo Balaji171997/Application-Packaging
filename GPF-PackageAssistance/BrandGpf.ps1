@@ -12,6 +12,14 @@
 # Normalise a name for matching: lowercase, only letters+digits (kills _ - . and spaces).
 function Get-GpfNameKey { param([string]$Name) return ("$Name".ToLower() -replace '[^a-z0-9]', '') }
 
+# Is a string a well-formed AES number on its own? (AES-<n>-<digits>[-<suffix>], e.g. AES-1-020436-A.)
+# Same shape as the request-folder prefix, anchored so trailing text / spaces are rejected. Used to HARD-STOP
+# an invalid AES number at Step 1 (GPF order-number field).
+function Test-AesNumberFormat {
+    param([string]$Value)
+    return ("$Value".Trim() -match '^AES-\d+-\d+(?:-[A-Za-z0-9]+)?$')
+}
+
 # Strip the ticket prefix "AES-1-020436-A " from a request folder name -> the identity text.
 function Split-GpfRequestName {
     param([string]$FolderName)
