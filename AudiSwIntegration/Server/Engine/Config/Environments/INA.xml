@@ -14,14 +14,14 @@
 
   <!-- CONFIRM: the machine that runs the collector task (Zone: Global). -->
   <Runner host="AUDIINSC0002.audi.vwg"/>
-  <Service account="deaudi00\svc-swintegration"
-           allowedGroup="deaudi00\G-Audi-SwIntegration-Operators"/>
+  <Service account="MN-MAN\AW140"
+           allowedGroup="MN-MAN\AW140"/>
 
   <Transport mode="DropFolder"
-             dropFolder="\\audiinsv0259.in.audi.vwg\SwIntegration-Inbox$"
+             dropFolder="C:\AudiSwIntegration\DropFolder\INA"
              resultTimeoutMinutes="30"/>
 
-  <Content share="\\audiinsv0259.in.audi.vwg\sccm-store\pkg\prod"
+  <Content share="C:\temp"
            distributionPointGroup="INA-DP-Group all"/>
 
   <ApplicationFolder>INA-Applications</ApplicationFolder>

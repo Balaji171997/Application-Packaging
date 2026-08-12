@@ -1,0 +1,100 @@
+﻿body {
+  background: #F4F7FC;
+  font-family: 'Segoe UI';
+}
+h1 {
+  font-size: 15px;
+  font-weight: normal;
+  text-align: center;
+}
+h2 {
+    font-size: 13px;
+    font-weight: normal;
+    text-align: center;
+}
+select {
+  padding: 2px;
+  font-size: 12px;
+}
+.inner {
+    position: absolute;
+    bottom: 20px;
+    left: 0;
+    right: 0;
+    margin: auto;
+}
+.clear {
+  clear: both;
+}
+.tile-content-inner {
+  padding: 10px;
+  vertical-align: middle;
+}
+.clickable:hover {
+   background: #fafafa;
+   cursor: pointer;
+}
+.clickable:active {
+   background: transparent;
+}
+
+@media screen and (-ms-high-contrast: active) {
+    .c3-gauge-value {
+        stroke: WindowText !important;
+        fill: WindowText !important;
+    }
+
+    .c3-axis .domain {
+        stroke: WindowText !important;
+    }
+
+    .c3-axis line {
+        stroke: WindowText !important;
+    }
+
+    .c3-axis text {
+        stroke: WindowText !important;
+    }
+
+    .c3-legend-item text {
+        stroke: WindowText !important;
+    }
+}
+
+
+.row {
+    height: 17px;
+    display: table-row
+}
+
+.cell {
+    border: .5px solid gainsboro;
+    font-size: 12px;
+    display: table-cell;
+    vertical-align: middle;
+}
+
+.linkbutton {
+    background: none !important;
+    border: none;
+    padding: 0 !important;
+    /*optional*/
+    font-family: arial, sans-serif;
+    /*input has OS specific font-family*/
+    color: #069;
+    text-decoration: underline;
+    cursor: pointer;
+    float: none;
+}
+
+.O365Clients-table,
+.NonOfficeClients-table,
+.O365Versions-table,
+.O365languages-table,
+.O365Channels-table {
+    width: 300px;
+    display: none;
+    margin-left: auto;
+    margin-right: auto;
+    margin-top: 6px;
+}

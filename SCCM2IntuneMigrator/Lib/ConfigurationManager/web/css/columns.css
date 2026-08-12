@@ -1,0 +1,141 @@
+:root {
+    --background-color: #F4F7FC;
+    --foreground-color: #000000;
+    --focus-color: #444444;
+    --hyperlink-color: #0026ff
+}
+
+body {
+    background: var(--background-color);
+    font-family: 'Segoe UI';
+    color: var(--foreground-color);
+}
+
+a {
+    color: var(--hyperlink-color)
+}
+
+.tile {
+  column-gap: 10px;
+  vertical-align: middle;
+  text-align: center;
+  border: 1px solid gainsboro;
+  margin: 5px;
+  float: left;
+  font-size: 16px;
+  background: var(--background-color);
+  position: relative;
+  height: 300px;
+}
+
+.hide-tile {
+  column-gap: 10px;
+  vertical-align: middle;
+  text-align: center;
+  border: 0px solid gainsboro;
+  margin: 5px;
+  float: left;
+  font-size: 16px;
+  background:none;
+  position: relative;
+  height: 300px;
+}
+
+
+.tile-1-1 {
+  height: 144px;
+  width: 164px;
+}
+.tile-2-1 {
+  height: 350px;
+  width: 164px;
+}
+.tile-2-2 {
+  height: 350px;
+  width: 340px;
+}
+.tile-2-3 {
+  height: 350px;
+  width: 512px;
+}
+.tile-2-4 {
+  height: 350px;
+  width: 692px;
+}
+.tile-2-5 {
+  height: 350px;
+  width: 864px;
+}
+.tile-2-6 {
+  height: 350px;
+  width: 1044px;
+}
+
+.tile-1-6 {
+  height: 144px;
+  width: 1044px;
+}
+
+.tile-container-base {
+  height: 312px;
+  display: inline-block;
+  float: left;
+}
+.tile-container-2-2 {
+  height: 362px;
+  display: inline-block;
+  float: left;
+  width: 352px;
+}
+.tile-container-2-6 {
+  height: 362px;
+  display: inline-block;
+  float: left;
+  width: 1056px;
+}
+.tile-container-2-5 {
+  height: 362px;
+  display: inline-block;
+  float: left;
+  width: 880px;
+}
+.tile-container-2-4 {
+  height: 362px;
+  display: inline-block;
+  float: left;
+  width: 704px;
+}
+.tile-content {
+  height: 100%;
+  width: 100%;
+  display: table;
+}
+.tile-content-inner {
+  display: table-cell;
+  text-align: center;
+}
+.list-2-3 {
+  max-height: 220px;
+}
+
+.tile-container-1-6 {
+  height: 156px;
+  display: inline-block;
+  float: left;
+  width: 1056px;
+}
+.tile-container-1-6-small {
+    height: 108px;
+    display: inline-block;
+    float: left;
+    width: 1056px;
+}
+.tile-1-6-small {
+    height: 96px;
+    width: 1044px;
+}
+
+.plus {
+  width: 40px;
+  height: 40px;
+}

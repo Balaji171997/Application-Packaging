@@ -29,15 +29,15 @@
 
   <!-- CONFIRM: the machine that runs the collector task (Zone: Global). -->
   <Runner host="AUDIINSC0027.audi.prod.vwg"/>
-  <Service account="audiprod\svc-swintegration"
-           allowedGroup="audiprod\G-Audi-SwIntegration-Operators"/>
+  <Service account="MN-MAN\AW140"
+           allowedGroup="MN-MAN\AW140"/>
 
   <!-- CONFIRM: the old script used INA's share here. -->
   <Transport mode="DropFolder"
-             dropFolder="\\audiinsc0027.audi.prod.vwg\SwIntegration-Inbox$"
+             dropFolder="C:\AudiSwIntegration\DropFolder\PCZ"
              resultTimeoutMinutes="30"/>
 
-  <Content share="\\audiinsc0027.audi.prod.vwg\SCCM-STORE\PKG\PROD"
+  <Content share="C:\temp"
            distributionPointGroup="INA-DP-Group all"/>
 
   <!-- CONFIRM: reads INA-Applications in the old configuration. -->

@@ -1,148 +1,212 @@
 # How to test this
 
-Two ways, depending on what you have access to.
+There is no sandbox and no simulator. These are the real scripts, run against
+real folders on this PC. Only two things are stand-ins for now, and both are
+plain config:
 
-| | Needs | Proves |
+| | While testing | Later |
 |---|---|---|
-| **A. Sandbox** | nothing at all | the window, reading a package, and the whole job round trip |
-| **B. Test server (ICZ)** | the ICZ SCCM server + an account | that it really creates objects in SCCM |
+| Drop folder | `C:\AudiSwIntegration\DropFolder\<ENV>` | the share on the Script Runner |
+| Content share | `C:\temp` for a dry run only - a REAL run needs a UNC path, `\\server\share` | the SCCM store |
+| Account | your own user | the gMSA |
 
-Start with A. It takes one command and needs no rights, no server and no SCCM.
+**SCCM is bypassed by the Dry run tick**, which is on by default. Every step runs
+and reports, nothing touches a site. That is how to test the whole flow without
+SCCM.
 
 ---
 
-## A. Sandbox — on any Windows PC
+## A. The flow, end to end
+
+You need two PowerShell windows: one for the packager, one standing in for the
+Script Runner.
+
+### Window 1 - the collector (this is the Script Runner)
 
 ```powershell
-.\Tools\Start-AudiSwSandbox.ps1
+cd <tool folder>
+while ($true) {
+    .\Server\Watch-AudiSwDropFolder.ps1 -DropFolder C:\AudiSwIntegration\DropFolder\INA -Verbose
+    Start-Sleep -Seconds 5
+}
 ```
 
-That one command:
+Leave it running. This is the real collector script - the same one the scheduled
+task will run on the server. Change `INA` to whichever environment you are
+testing.
 
-1. makes a drop folder under `%LOCALAPPDATA%\AudiSwSandbox`
-2. builds a sample package to read (a real PSADT v4 script and a real `.docx`)
-3. starts the collector in the background — this stands in for the scheduled task
-   on the Script Runner
-4. opens the packager window, pointed at that folder
-
-The window shows an amber **SANDBOX** badge so a test can never be mistaken for a
-real run.
-
-### What to try
-
-1. **Browse** to the sample package it printed the path of, then **Read details**.
-   Everything on the left fills in, and so do the names, descriptions and the RFC
-   number on the right. Hover the grey line under the left column to see which
-   value came from which file.
-2. Leave **Dry run** ticked and press **Integrate**. The window writes a job file,
-   waits, and a few seconds later the result appears in section 4 — eight steps,
-   each with what it did.
-3. Press **Preview on this PC** instead. Same eight steps, but it runs locally and
-   nothing is written to the drop folder at all.
-4. Clear the **RFC number** and press Integrate. It refuses, and says why.
-5. Look in `%LOCALAPPDATA%\AudiSwSandbox\DropFolder\Done` — the job file and the
-   result file are both there.
-
-Close the window to stop the collector. Delete `%LOCALAPPDATA%\AudiSwSandbox` to
-start clean.
-
-### Without opening the window at all
+### Window 2 - the packager
 
 ```powershell
-.\Tests\Invoke-AllTests.ps1                    # 232 checks, no SCCM, no rights
+powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Client\Start-AudiSwClient.ps1
+```
+
+Then:
+
+1. **Browse** to a package - for example `C:\temp\INA_ETAS_INCA_x64_7.5.7-0001_MUL`.
+2. Press **Read details**. Everything fills in from the deployment script, the
+   description comes from the request document, and **the Environment dropdown
+   moves itself to INA** because the package name says so.
+3. **Change anything you like.** Every field is editable now. Correct the
+   revision, the branding key, the SoftIdent, the descriptions - whatever the
+   packager needs. What you leave on the screen is what the server uses.
+4. Check the **RFC number**. It is filled from `VWG_OrderNumber` in the script.
+   It is required.
+5. Leave **Dry run** ticked and press **Integrate**.
+6. Watch window 1 pick the job up within five seconds and run it.
+7. The result appears in section 4 of the window - eight steps, each saying what
+   it did.
+
+### What to try next
+
+- **Preview on this PC** - the same eight steps, run locally, nothing written to
+  the drop folder at all. Useful for checking a package before queueing it.
+- **Change the Environment to the wrong one on purpose.** The strip turns amber
+  and Integrate refuses: *"This package is named for INA but ICZ is selected."*
+  Nothing is submitted and nothing is renamed.
+- **Clear the RFC** and press Integrate. It refuses and says why.
+- **Modify** - submit an Integrate first, then press Modify. It reports what it
+  would add, change or retire rather than creating a second application.
+- **Remove** - needs only the package name and the RFC. No package folder.
+- Look in `C:\AudiSwIntegration\DropFolder\INA\Done` - the job file and the
+  result file are both there, and neither names a person.
+- **Close the window, reopen it, and type the same package name.** The Result tab
+  shows the run you just did, read straight back out of `\Done`. This is what a
+  packager gets the next morning for a job that was still queued when they left.
+
+### Without opening the window
+
+```powershell
+.\Tests\Invoke-AllTests.ps1                    # 323 checks, no SCCM, no rights
 .\Client\Start-AudiSwClient.ps1 -SelfTest      # drives the window's own code, no screen
 ```
 
-The self test reads a real sample package and prints **every field the window
-shows**, so you can see at a glance whether anything came through empty.
+The self test reads a real package and prints **every field the window shows**,
+so you can see at a glance whether anything came through empty.
 
 ---
+## B. On the machine with the SCCM console - ICZ
 
-## B. Test server — ICZ
+Same window, same collector, same temporary folders. The only difference is that
+you untick **Dry run** at the end, and then it talks to ICZ for real.
 
-This is the part that needs someone with access. Nothing below changes any SCCM
-setting; the first three steps create nothing at all.
+### B0. Before you start
 
-### B1. Does it see the site?
+- The **ConfigMgr console must be installed** on that machine. The tool loads its
+  PowerShell module from `$env:SMS_ADMIN_UI_PATH`. No console, no integration.
+- **Copy the package to the content share yourself.** The tool never copies -
+  see the note below. Put it where `ICZ.xml` says `Content share` points.
+- Copy the whole tool folder across, then set the three testing values in
+  `Server\Engine\Config\Environments\ICZ.xml`:
 
-On the machine that will act as the **Script Runner**, with the ConfigMgr console
-installed:
+```xml
+<Runner   host="<that machine>"/>
+<Service  account="<your user>" allowedGroup="<your user>"/>
+<Transport mode="DropFolder" dropFolder="C:\AudiSwIntegration\DropFolder\ICZ" resultTimeoutMinutes="30"/>
+<Content  share="<the real ICZ content share>" distributionPointGroup="Test"/>
+```
+
+### B0a. If the test machine is a different site
+
+The test site is not ICZ - it is site **II1** on **AUDIINSA1299.audi.vwg5t**.
+That is `Config\Environments\II1.xml`: everything is ICZ's except the site code,
+the server and the drop folder.
+
+Three things follow, and getting any of them wrong is what makes a job sit there
+untouched:
+
+1. **Name the package `II1_...`** - rename the folder under the content share and
+   type the matching name in the window. Packages are named for the environment
+   they go into and preflight refuses a mismatch, which is what stops a package
+   being built on the wrong site.
+2. **Select II1 in the dropdown.** With an `II1_` package it selects itself. With
+   a package still named `ICZ_` or `INA_` the dropdown will move *itself* to that
+   environment when you press Read details, and the job goes to that
+   environment's folder.
+3. **Point the collector at II1's folder:**
+   `-DropFolder C:\AudiSwIntegration\DropFolder\II1`
+
+One folder serves one environment. A job that lands in the wrong one is now
+refused rather than run - the result says which environment it was for and which
+folder it was found in.
+
+**Delete `II1.xml` once testing moves to the real ICZ site.**
+
+### B1. Does it reach the site? (creates nothing)
 
 ```powershell
 . .\Server\Engine\AudiSwIntegration.ps1
-$plan = Get-AudiIntegrationPlan -PackageName 'ICZ_ADOBE_Acrobat_Reader_x64_2024.1_0003_MUL' -EnvironmentCode 'ICZ' -Rfc 'RFC0000001'
+$plan = Get-AudiIntegrationPlan -PackageName 'ICZ_ETAS_INCA_x64_7.5.7-0001_MUL' -EnvironmentCode 'ICZ' -Rfc 'AES-1-020627-A'
 Connect-AudiSccm -Plan $plan
 ```
 
-Expected: `Connected to ICZ on AUDIINSA1298.audi.vwg5t.`
-If it fails it says why — console missing, name not resolving, or no rights.
+Expect `Connected to ICZ on AUDIINSA1298.audi.vwg5t.` If it fails it says why -
+console missing, name not resolving, or no rights.
 
-### B2. What would it do? (still creates nothing)
-
-```powershell
-Invoke-AudiSwIntegration -Plan $plan -DryRun
-```
-
-Eight steps, all OK, against the dry-run provider.
-
-### B3. Preflight against the real site (reads only)
+### B2. Preflight against the real site (reads only)
 
 ```powershell
-Test-AudiSwPrerequisite -Plan $plan -Provider (New-AudiSccmProvider)
+Test-AudiSwPrerequisite -Plan $plan -Provider (New-AudiSccmProvider) | Select-Object -ExpandProperty Findings | Format-Table Check, Ok, Message -AutoSize
 ```
 
-This is the first thing that talks to SCCM for real. It only reads: does the
-content path exist, is the application name free, do the limiting collections,
-the distribution point group and the security scopes exist. Fix whatever it
-reports before going further.
+This is the first thing that touches SCCM, and it only reads. It checks the
+content path exists, the application name is free, and that the limiting
+collections, the distribution point group and the security scopes are real.
+**Fix everything it reports before going on.**
 
-### B4. A real run
+### B3. The full flow, still changing nothing
 
-Put a real test package on the ICZ content share first, then:
+Two windows, exactly as in section A, but with `ICZ`:
 
 ```powershell
-Invoke-AudiSwIntegration -Plan $plan
+# window 1
+while ($true) { .\Server\Watch-AudiSwDropFolder.ps1 -DropFolder C:\AudiSwIntegration\DropFolder\ICZ -Verbose; Start-Sleep 5 }
+
+# window 2
+powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Client\Start-AudiSwClient.ps1
 ```
 
-Then check in the console: 1 application, 1 deployment type, 4 collections,
-4 deployments, the security scopes, the folder placement, and the AD group.
+Browse to the package, Read details, leave **Dry run ticked**, Integrate. Eight
+steps, nothing created.
 
-Then a **modify** — this is the one to exercise carefully, because it changes an
-application that is already live:
+### B4. The real one
 
-```powershell
-Invoke-AudiSwModification -Plan $plan -DryRun   # says exactly what it would change
-Invoke-AudiSwModification -Plan $plan
-```
+Same again with **Dry run unticked**. Then check in the console:
 
-Worth trying in this order:
-1. Run it unchanged — it should report *"Nothing to change"* beyond refreshing the
-   definition. It must **not** create a second application.
-2. Delete one collection by hand, run modify — it puts that one collection and its
-   deployment back, and touches nothing else.
-3. Comment a collection out of `Config\Environments\ICZ.xml`, run modify — it
-   retires exactly that collection. Check that a collection you made by hand,
-   named after the same package, is **not** touched.
-4. Bump the package revision (`0003` → `0004`) and run modify — the detection rule
-   and content path update, and the content re-distributes.
+| | Expect |
+|---|---|
+| Application | `ICZ_ETAS_INCA_x64_7.5.7-0001_MUL`, **Owner = the account in ICZ.xml** |
+| Localised name | English **and German** both filled |
+| Deployment type | `..._INSTALLCOMPUTER`, install and uninstall commands, content location |
+| Detection rules | **two, both required** - `HKLM\Software\VWG\CM\ETAS_INCA_x64_7.5.7-0001_MUL` `Revision`=`0001`, and `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\INCA7.5.7` `DisplayVersion`=`7.5.7` |
+| Requirements | Windows 10 and Windows 11 |
+| Deployment type settings | Hidden, Install for system, Whether or not a user is logged on, 120 min, download on slow network, no branch cache, fallback allowed, not 32-bit |
+| Category | Development |
+| Content | distributed to the `Test` DP group |
+| Collections | 4, each under its limiting collection, commented with the job ID and RFC |
+| Deployments | 4 - three Available, `_RemoveComputer` **Uninstall** |
+| Security scopes | ICZ00001, ICZ00002, ICZ00005, ICZ00006 |
+| Folders | app in `\Software Library\...\Applications\ICZ-Applications`; collections in `\Assets and Compliance\...\Device Collections\II1-Site\` and `\SCCM-Manager\`. Missing folders are created |
+| AD group | `G-AUDI-AG-SW-ICZ_ETAS_INCA_x64_7.5.7-0001_MUL` |
 
-And the removal:
+Then **Modify** (change the revision first and watch the detection rule follow),
+and finally **Remove** to put ICZ back as you found it.
 
-```powershell
-Invoke-AudiSwRemoval -Plan $plan
-```
+### B5. Things that will only show up here
 
-### B5. The collector
+These have never run against a site. If something breaks, it will be one of
+these, and the message will say which step:
 
-```powershell
-.\Server\Watch-AudiSwDropFolder.ps1 -DropFolder '\\<server>\SwIntegration-Inbox$' -DryRun -Verbose
-```
-
-Runs once against the folder, without a scheduled task and without changing SCCM.
-When that looks right, register the task (see `DEPLOYMENT.md` section 3.3).
+- `New-CMDetectionClauseRegistryKeyValue` - the two detection rules, and replacing them on Modify
+- `New-CMRequirementRuleOperatingSystemValue` - the OS requirements
+- the German display entry, written through `SDMPackageXML`
+- the ARS/SPML call that creates the AD group
+- `Move-CMObject` and `New-CMFolder` - filing into the console folders, and creating any that are missing
+- everything else on the site, in fact: no ConfigMgr cmdlet runs unless the
+  current location IS the `<SITE>:` drive. The tool steps into it on connect and
+  back onto the filesystem before it touches a file
 
 ---
-
 ## What a tester should check, and why
 
 | Check | Why it matters |
@@ -157,6 +221,34 @@ When that looks right, register the task (see `DEPLOYMENT.md` section 3.3).
 
 ---
 
+## Two things to know before the real run
+
+**The tool never copies content.** It only checks that the package is already on
+the content share, and refuses to create anything if it is not:
+
+> The package source was not found at `<share>\<package>`. Copy the package to
+> the content share first.
+
+That matches the tool being replaced, which also expected the content to be in
+place. Copying it there stays a manual step - say the word if it should become
+part of the job.
+
+**The window will not always get an immediate result.** On this PC the collector
+runs every five seconds, so the answer comes straight back. On the real Script
+Runner the scheduled task runs every few minutes, so the window waits - the
+progress bar goes indeterminate and the step line counts the minutes against
+`resultTimeoutMinutes` (30 by default, in the environment file).
+
+If the packager closes the window before the result arrives, **the job still
+runs** and the result file is still written to `\Done` or `\Failed`. Reopen the
+tool, type or browse to the same package, and the **Result** tab fills itself in
+from the drop folder: the *Earlier run* strip gives the date, the outcome and the
+message, the grid below gives the steps, and the strip's tooltip lists every
+earlier run of that package. So fire and forget works - submit, close the window,
+come back tomorrow and ask again.
+
+---
+
 ## Known limits, so they are not reported as bugs
 
 - **PCZ is refused for real runs.** Four of its values are copies of INA's and one
@@ -167,10 +259,10 @@ When that looks right, register the task (see `DEPLOYMENT.md` section 3.3).
   - if the German entry cannot be written the English one is already in place and
   a warning is logged, rather than the whole integration failing. **Check the
   German name in the console on the first ICZ run.**
-- **The instruction-document patterns are not calibrated.** They work on the
-  sample, and they are tuned for `Label: value` and `Label <tab> value`. Against a
-  real GPF document some fields may come back empty until the patterns in
-  `Defaults.xml` are adjusted - that is a config edit, not a code change.
+- **The document patterns are calibrated against one real form** (INA_ETAS_INCA).
+  A form laid out differently may leave the descriptions blank until the patterns
+  in `Defaults.xml` are adjusted - a config edit, not a code change. Everything
+  else comes from the deployment script, which does not vary.
 - **The live SCCM and ARS calls have never run.** Everything testable without a
   site is tested; B3 onwards is the first time real calls happen.
 - **On a display shorter than about 800 px the page scrolls.** Nothing is lost,

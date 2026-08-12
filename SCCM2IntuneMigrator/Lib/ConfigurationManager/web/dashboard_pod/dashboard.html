@@ -1,0 +1,60 @@
+﻿<!DOCTYPE html>
+<html ng-app="dashboard">
+<head>
+    <meta charset="utf-8" />
+    <title>Phased Deployment Dashboard</title>
+    <meta content="IE=edge" http-equiv="X-UA-Compatible" />
+    <meta name="description" content="Phased Deployment Dashboard" />
+    <meta name="keywords" content="Phased Deployment, POD, PD, Dashboard" />
+    <link href="../css/c3.min.css" rel="stylesheet" type="text/css" />
+    <link href="../css/columns.css" rel="stylesheet" type="text/css" />
+    <link href="css/styles.css" rel="stylesheet" type="text/css" />
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="../js/utility.js" type="text/javascript"></script>
+    <script src="../js/external.js" type="text/javascript"></script>
+    <script src="../js/d3.min.js" type="text/javascript"></script>
+    <script src="../js/c3.min.js" type="text/javascript"></script>
+    <script src="js/controller.js" type="text/javascript"></script>
+    <noscript>Javascript is not enabled</noscript>
+</head>
+<body ng-controller="dashboardController" class="ng-cloak">
+  <div class="tile-container-1-6-small">
+    <div class="tile tile-1-6-small scroll">
+      <h4 tabindex="1" class="header" ng-model="PODMetadata"><b>{{strings.advancedMonitoring}}</b> - {{PODMetadata.PODName}}</h4>
+      <h6 tabindex="2" class="header" ng-model="PODMetadata"><b>{{strings.software}}</b> {{PODMetadata.DeployedObjectName}}</h6>
+      <h6 tabindex="3" class="header" ng-model="PODType"><b>{{strings.softwareType}}</b> {{PODType}}</h6>
+    </div>
+  </div>
+  <br class="clear">
+  <label ng-bind="strings.selectPhase"></label>
+  <select ng-options="phase as phase.PhaseName for phase in PhasesChartData" ng-model="selectedPhase" ng-change="phaseChanged()"></select>
+  <br class="clear">
+  <div class="tile-container-2-6">
+    <div class="tile tile-2-6 scroll">
+      <table class="table-format">
+        <tr>
+          <th class="table-element left">{{strings.name}}</th>
+          <th class="table-element center">{{strings.totalDevices}}</th>
+          <th class="table-element center">{{strings.status}}</th>
+          <th class="table-element left">{{strings.progress}}</th>
+        </tr>
+        <tr ng-repeat="phase in PhasesChartData">
+          <td class="table-element left" ng-model="phase">{{phase.PhaseName}}</td>
+          <td class="table-element center" ng-model="phase">{{phase.NumberTotal}}</td>
+          <td class="table-element center" ng-model="phase">{{getCurrentState(phase)}}</td>
+          <td class="table-element left" id="{{'phase' + phase.PhaseID}}"></td>
+        </tr>
+      </table>
+    </div>
+  </div>
+  <br class="clear">
+  <div class="tile-container-2-3">
+    <div class="tile tile-2-3">
+      <h4><b>{{strings.successCriteria}}</b></h4>
+      <h5>{{strings.deploymentSuccess}}</h5>
+      <h6>{{strings.phaseGoal + ' ' + targetCompliance + successCriteriaFormatter}}</h6>
+      <div id="successCriteria"></div>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,57 @@
+﻿<!DOCTYPE html>
+<html ng-app="dashboard">
+<head>
+    <title>Surface Driver Dashboard</title>
+    <meta charset="UTF-8">
+    <meta content="IE=edge" http-equiv="X-UA-Compatible">
+    <meta name="description" content="Surface driver dashboard contains information about the surface devices used by a a client">
+    <meta name="keywords" content="Surface, Dashboard">
+
+    <link href="../css/c3.min.css" rel="stylesheet" type="text/css">
+    <link href="../css/columns.css" rel="stylesheet" type="text/css">
+    <link href="css/styles.css" rel="stylesheet" type="text/css">
+
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="../js/utility.js" type="text/javascript"></script>
+    <script src="../js/external.js" type="text/javascript"></script>
+    <script src="../js/d3.min.js" type="text/javascript"></script>
+    <script src="../js/c3.min.js" type="text/javascript"></script>
+    <script src="js/controller.js" type="text/javascript"></script>
+    <noscript>Javascript is not enabled</noscript>
+</head>
+
+<body ng-controller="dashboardController">
+    <div ng-style="{'opacity' : surfaceExists ? 1 : 0.25}">
+        <div class="tile-container-2-6">
+            <div class="tile tile-2-2">
+                <h1 ng-model="strings" ng-bind ="getString('GaugeModelTitle')"></h1>
+                <div id="Gauge" tabindex="1">
+                </div>
+            </div>
+            <div class="tile tile-2-2">
+                <h1 ng-model="strings" ng-bind="getString('ChartModelTitle')"></h1>
+                <div id="Models" tabindex="1">
+                </div>
+            </div>
+            <div class="tile tile-2-2">
+                <div class="tile-content">
+                    <div ng-model="strings" ng-bind-html="getHTMLString('tileMessage')" class="tile-content-inner" tabindex="1"></div>
+                </div>
+            </div>
+        </div>
+        <div class="tile-container-2-6">
+            <div class="tile-2-6">
+                <h1 id="FirmwareVersionTitle" ng-model="strings" ng-bind="getString('FirmwareVersionTitle')" tabindex="1" aria-label="">
+                </h1>
+                <div id="Versions" tabindex="1">
+                </div>
+            </div>
+        </div>
+    </div>
+    <div ng-model="surfaceExists" class="overlay" ng-if="!surfaceExists">
+        <div class="tile-content">
+            <div ng-model="strings" ng-bind-html="getHTMLString('overlayMessage')" class="tile-content-inner" tabindex="1"></div>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,158 @@
+﻿<!DOCTYPE html>
+<html ng-app="dashboard">
+<head>
+    <title>Client Data Sources Dashboard</title>
+    <meta charset="UTF-8">
+    <meta content="IE=edge" http-equiv="X-UA-Compatible">
+    <meta name="description" content="Client data sources dashboard containing data about where clients get content from">
+    <meta name="keywords" content="Client data, content, dashboard">
+
+    <link href="../css/c3.min.css" rel="stylesheet" type="text/css">
+    <link href="../css/columns.css" rel="stylesheet" type="text/css">
+    <link href="css/styles.css" rel="stylesheet" type="text/css">
+
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="../js/utility.js" type="text/javascript"></script>
+    <script src="../js/d3.min.js" type="text/javascript"></script>
+
+    <script src="../js/c3.min.js" type="text/javascript"></script>
+    <script src="js/controller.js" type="text/javascript"></script>
+    <script src="../js/external.js" type="text/javascript"></script>
+    <noscript>JavaScript is not enabled</noscript>
+</head>
+
+
+<body ng-controller="dashboardController">
+    <form id="clientSelection" autocomplete="off">
+
+        <div class="row">
+            <label for="time-period-select">{{strings["ReportPeriod"]}}: </label>
+            <select id="time-period-select" enabled ng-model="timePeriod" title={{strings["FiltersComingSoon"]}} ng-options="t.label for t in timePeriods" tabindex="1"></select>
+        </div>
+
+        <div class="row" id="dataSourcesDesc">
+            <label>{{strings["ClientSelection"]}}:</label>
+        </div>
+
+        <div class="row" id="dashboard-controls">
+            <div>
+                <input id="boundaryGroupAria" name="clientType" value=0 type="radio" ng-model="singleBoundaryGroup" tabindex="2" />
+                <label for="boundary-group-select">{{strings["SingleBoundaryGroup"]}}: </label>
+                <button class="button" id="browseButton" ng-click="LaunchBoundaryGroupPickerWizard()" tabindex="3">{{strings["Browse"]}}</button>
+                <input id="displayLabel" type="text" value={{boundaryGroupName}} title={{boundaryGroupName}} readonly disabled tabindex="2" />
+            </div>
+        </div>
+
+        <div class="row">
+            <input id="allBoundaryGroupsAria" name="clientType" value=1 ng-model="allBoundaryGroups" type="radio" tabindex="4" />
+            <label ng-bind="strings.AllBoundaryGroups"></label>
+        </div>
+
+        <div class="row">
+            <input id="internetClientsAria" name="clientType" value=2 ng-model="internetClients" type="radio" tabindex="5" />
+            <label ng-bind="strings.InternetClients"></label>
+        </div>
+
+        <div class="row">
+            <input id="outsideClientsAria" name="clientType" value=3 ng-model="outsideClients" type="radio" tabindex="6" />
+            <label ng-bind="strings.ClientsOutsideBG"></label>
+        </div>
+    </form>
+
+    <hr />
+    <br class="clear">
+    <div class="tile-container-2-6">
+        <div class="tile tile-2-2">
+            <h1  ng-bind="strings.DataSourceUsage"></h1>
+            <div class="tabl">
+                <div class="row">
+                    <div class="cell" ng-bind="strings.DataSourceType"></div>
+                    <div class="cell" ng-bind="strings.DataSourceCount"></div>
+                    <div class="cell" ng-bind="strings.ClientsUsingSource"></div>
+                </div>
+                <div class="row" id="dataSourceDPAria">
+                    <div class="cell" ng-bind="strings.DistributionPoint"></div>
+                    <div class="cell">{{deviceCounts.DPCount}}</div>
+                    <div class="cell">{{deviceCounts.DPUsingClientCount}}</div>
+                </div>
+                <div class="row" id="dataSourcePeerAria">
+                    <div class="cell" ng-bind="strings.PeerCache"></div>
+                    <div class="cell">{{deviceCounts.PeerClientCount}}</div>
+                    <div class="cell">{{deviceCounts.PeerUsingClientCount}}</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="tile tile-2-2">
+            <h1>{{strings["ClientContentSources"]}}</h1>
+            <button class="link" id="showClientContentSourcesChartButton" ng-click="toggleClientContentSourcesChart()">{{strings["ShowTable"]}}</button>
+            <div id="content-sources-table" class="content-sources-table">
+                <div class="row">
+                    <div class="cell" ng-bind="strings.DataSourceType"></div>
+                    <div class="cell" ng-bind="strings.DataSizeMB"></div>
+                </div>
+                <div class="row" id="dataSourceDPAria">
+                    <div class="cell">{{strings["DistributionPoint"]}}</div>
+                    <div class="cell">{{contentSourceCounts.DPBytes}}</div>
+                </div>
+                <div class="row" id="dataSourcePeerAria">
+                    <div class="cell">{{strings["PeerCache"]}}</div>
+                    <div class="cell">{{contentSourceCounts.SPBytes}}</div>
+                </div>
+                <div class="row" id="dataSourcePeerAria">
+                    <div class="cell">{{strings["CloudDistributionPoint"]}}</div>
+                    <div class="cell">{{contentSourceCounts.CloudDPBytes}}</div>
+                </div>
+                <div class="row" id="dataSourcePeerAria">
+                    <div class="cell">{{strings["BranchCache"]}}</div>
+                    <div class="cell">{{contentSourceCounts.BranchCacheBytes}}</div>
+                </div>
+                <div class="row" id="dataSourcePeerAria">
+                    <div class="cell">{{strings["DOPeerBytes"]}}</div>
+                    <div class="cell">{{contentSourceCounts.DOPeerBytes}}</div>
+                </div>
+                <div class="row" id="dataSourcePeerAria">
+                    <div class="cell">{{strings["WUMUBytes"]}}</div>
+                    <div class="cell">{{contentSourceCounts.WUMUBytes}}</div>
+                </div>
+            </div>
+            <div id='content-sources-chart' dashboard-chart chart-status="contentData">
+                <div id="content-types" tabindex="8"></div>
+            </div>
+        </div>
+
+        <div class="tile tile-2-2">
+            <h1>{{strings["FallbackCounts"]}}</h1>
+            <div dashboard-chart chart-status="fallbackCountData">
+                <div id="fallback-counts" tabindex="10"></div>
+            </div>
+        </div>
+
+    </div>
+
+    <br />
+    <div class="tile-container-2-6" id="package-sources-container">
+        <div class="tile tile-2-6" id="package-sources-chart">
+            <h1>{{strings["TopDistributedContent"]}}</h1>
+            <button class="link" id="showTopContentChartButton" ng-click="toggleTopContentChart()">{{strings["ShowTable"]}}</button>
+            <div id="top-content-table" class="top-content-table">
+                <div class="row">
+                    <div class="cell">{{strings["ContentName"]}}</div>
+                    <div class="cell">{{strings["DistributionPoint"]}}</div>
+                    <div class="cell">{{strings["CloudDistributionPoint"]}}</div>
+                    <div class="cell">{{strings["BranchCache"]}}</div>
+                    <div class="cell">{{strings["PeerCache"]}}</div>
+                    <div class="cell">{{strings["DOPeerBytes"]}}</div>
+                    <div class="cell">{{strings["WUMUBytes"]}}</div>
+                </div>
+            </div>
+            <span class="top-content-table-footnote" id="top-content-table-footnote">{{strings["AllNumbersInMB"]}}</span>
+
+            <div id='top-content-chart' dashboard-chart chart-status="packageChartData">
+                <div id="package-sources" tabindex="12"></div>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>

@@ -141,6 +141,7 @@
       <xs:attribute name="code" type="SiteCode" use="required"/>
       <xs:attribute name="description" type="NonEmptyString" use="required"/>
       <xs:attribute name="schemaVersion" type="NonEmptyString" use="required"/>
+
       <!-- false = the values were inherited from another environment and still
            need confirming by Audi. The tool warns before using such a file. -->
       <xs:attribute name="verified" type="xs:boolean" use="required"/>
@@ -186,9 +187,23 @@
           </xs:complexType>
         </xs:element>
 
+        <!-- The second detection rule, built from the package's own SoftIdent.
+             'pattern' pulls hive, key, value name and value out of the form
+             the deployment script writes:
+               HKLM:\SOFTWARE\...\Uninstall\INCA7.5.7 [DisplayVersion=7.5.7] -->
+        <xs:element name="SoftIdentDetection">
+          <xs:complexType>
+            <xs:attribute name="pattern" type="NonEmptyString" use="required"/>
+            <xs:attribute name="dataType" type="NonEmptyString" use="required"/>
+            <xs:attribute name="is64Bit" type="xs:boolean" use="required"/>
+            <xs:attribute name="method" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
         <xs:element name="DeploymentType">
           <xs:complexType>
             <xs:attribute name="distributionPointSetting" type="NonEmptyString" use="required"/>
+            <xs:attribute name="slowNetworkDeploymentMode" type="NonEmptyString" use="required"/>
             <xs:attribute name="programVisibility" type="NonEmptyString" use="required"/>
             <xs:attribute name="installationBehaviorType" type="NonEmptyString" use="required"/>
             <xs:attribute name="logonRequirementType" type="NonEmptyString" use="required"/>
@@ -350,6 +365,23 @@
             <xs:attribute name="descriptionDe" type="xs:string" use="optional" default=""/>
           </xs:complexType>
         </xs:element>
+        <!-- Exactly what the packager saw, including anything they corrected.
+             Sent so the server uses the values that were on the screen rather
+             than deriving them again. Empty attributes mean "as derived". -->
+        <xs:element name="Detail" minOccurs="0">
+          <xs:complexType>
+            <xs:attribute name="publisher"    type="xs:string" use="optional" default=""/>
+            <xs:attribute name="product"      type="xs:string" use="optional" default=""/>
+            <xs:attribute name="version"      type="xs:string" use="optional" default=""/>
+            <xs:attribute name="architecture" type="xs:string" use="optional" default=""/>
+            <xs:attribute name="revision"     type="xs:string" use="optional" default=""/>
+            <xs:attribute name="language"     type="xs:string" use="optional" default=""/>
+            <xs:attribute name="brandingKey"  type="xs:string" use="optional" default=""/>
+            <xs:attribute name="detectionKey" type="xs:string" use="optional" default=""/>
+            <xs:attribute name="softIdent"    type="xs:string" use="optional" default=""/>
+          </xs:complexType>
+        </xs:element>
+
         <!-- An empty list is valid and means "use the defaults". -->
         <xs:element name="OperatingSystems" minOccurs="0">
           <xs:complexType>
@@ -388,6 +420,15 @@
     <xs:complexType>
       <xs:sequence>
         <xs:element name="Message" type="xs:string"/>
+        <!-- What a failed run undid before giving up. Empty on success, and on a
+             failure that had created nothing yet. -->
+        <xs:element name="RolledBack" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Item" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
         <xs:element name="Steps">
           <xs:complexType>
             <xs:sequence>
@@ -410,11 +451,18 @@
       <xs:attribute name="executor"      type="NonEmptyString" use="required"/>
       <xs:attribute name="completed"     type="NonEmptyString" use="required"/>
       <xs:attribute name="dryRun"        type="xs:boolean"     use="required"/>
+      <!-- How many steps the run has in total. Only set while it is Running, so
+           the window can show a real progress bar instead of a spinner. -->
+      <xs:attribute name="stepCount"     type="xs:int"         use="optional" default="0"/>
       <xs:attribute name="outcome" use="required">
         <xs:simpleType>
           <xs:restriction base="xs:string">
             <xs:enumeration value="Succeeded"/>
             <xs:enumeration value="Failed"/>
+            <!-- Written while the job is still being worked on, so the window
+                 can show what the server is doing without connecting to it.
+                 Replaced by Succeeded or Failed when the job ends. -->
+            <xs:enumeration value="Running"/>
           </xs:restriction>
         </xs:simpleType>
       </xs:attribute>

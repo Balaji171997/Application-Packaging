@@ -1,0 +1,120 @@
+﻿body {
+  background: #F4F7FC;
+  font-family: 'Segoe UI';
+}
+h1 {
+  font-size: 15px;
+  font-weight: normal;
+  text-align: center;
+}
+h2 {
+    font-size: 13px;
+    font-weight: normal;
+    text-align: center;
+}
+select {
+    padding: 2px;
+    font-size: 12px;
+    width: 150px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+    select option {
+        width: 150px;
+        text-overflow: ellipsis;
+        overflow: hidden;
+    }
+.inner {
+    position: absolute;
+    bottom: 20px;
+    left: 0;
+    right: 0;
+    margin: auto;
+}
+.clear {
+  clear: both;
+}
+.tile-content {
+    height: 100%;
+    width: 100%;
+    display: table;
+}
+.tile-1-1 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: white;
+    position: relative;
+    height: 92px;
+    width: 160px;
+}
+
+.tile-1-2 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: white;
+    position: relative;
+    height: 144px;
+    width: 340px;
+}
+.tile-content-inner {
+  padding: 10px;
+  vertical-align: middle;
+}
+.clickable:hover {
+   background: #fafafa;
+   cursor: pointer;
+}
+.clickable:active {
+   background: transparent;
+}
+
+.tile-container-2-6-short{
+  height: 50px;
+  display: inline-block;
+  float: left;
+  width: 1056px;
+}
+
+.tile-container-2-2-short{
+  height: 50px;
+  display: inline-block;
+  float: left;
+  width: 400px;
+}
+
+.tile-container-2-1 {
+    height: 312px;
+    display: inline-block;
+    float: left;
+    width: 170px;
+}
+
+@media screen and (-ms-high-contrast: active) {
+    .c3-gauge-value {
+        stroke: WindowText !important;
+        fill: WindowText !important;
+    }
+    .c3-axis .domain {
+        stroke: WindowText !important;
+    }
+    .c3-axis line {
+        stroke: WindowText !important;
+    }
+    .c3-axis text {
+        stroke: WindowText !important;
+    }
+    .c3-legend-item text {
+        stroke: WindowText !important;
+    }
+}

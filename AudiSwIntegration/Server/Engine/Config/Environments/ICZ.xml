@@ -18,15 +18,15 @@
 
   <!-- CONFIRM: the machine that runs the collector task (Zone: Global). -->
   <Runner host="AUDIINSA1298.audi.vwg5t"/>
-  <Service account="deaudi005t\svc-swintegration"
-           allowedGroup="deaudi005t\G-Audi-SwIntegration-Operators"/>
+  <Service account="MN-MAN\AW140"
+           allowedGroup="MN-MAN\AW140"/>
 
   <!-- Direct today. Switch mode to DropFolder and fill in dropFolder to use flow 2. -->
   <Transport mode="DropFolder"
-             dropFolder="\\audiinsv1059.in.audi.vwg5t\SwIntegration-Inbox$"
+             dropFolder="C:\AudiSwIntegration\DropFolder\ICZ"
              resultTimeoutMinutes="30"/>
 
-  <Content share="\\audiinsv1059.in.audi.vwg5t\sccm-store\pkg\prod"
+  <Content share="C:\temp"
            distributionPointGroup="Test"/>
 
   <ApplicationFolder>ICZ-Applications</ApplicationFolder>

@@ -1,0 +1,65 @@
+﻿<!doctype html>
+<html>
+
+<head>
+    <title>What's New</title>
+    <meta charset="UTF-8">
+    <meta content="IE=edge" http-equiv="X-UA-Compatible">
+    <meta content="text/html; charset=UTF-8; X-Content-Type-Options=nosniff" http-equiv="Content-Type" />
+    <meta name="description" content="Configuration Manager What's New">
+    <meta name="keywords" content="Configuration Manager What's New, What's New, Tech Preview">
+    <link href="css/styles.css" rel="stylesheet" type="text/css">
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="js/script.js" type="text/javascript"></script>
+    <noscript>Javascript is not enabled</noscript>
+</head>
+
+<body ng-app="ngApp" ng-controller="controller">
+    <div ng-controller="controller">
+        <div id="top">
+            <div id="overview" tabindex="0">
+                <p>Welcome to update {{milestone}} for Configuration Manager Technical Preview. Below you can find information about some of the new features and scenarios that are now available for you to try. You can also view which of the new scenarios
+                    you have completed for each feature. <a target="__blank" href="https://go.microsoft.com/fwlink/?LinkID=785011">Read more</a> about the latest changes in the Technical Preview build.</p>
+                <p id="feedbackTop">Please continue to give us feedback! To report any issues, file <a target="_blank" href="https://aka.ms/configmgrsendasmile">product feedback</a> in the console.</p>
+            </div>
+        </div>
+        <div ng-repeat="release in releases" ng-class="{'release on': 0 == $index, 'release': 0 != $index}">
+            <div class="toggle" ng-click="toggle($event)">
+                <div class="releaseTitle" tabindex="0">What's New in {{release.Milestone}}</div>
+                <div class="barChart" ng-show="barData[$index].Visible">
+                    <div class="table">
+                        <div class="progress cell">Progress:</div>
+                    </div>
+                    <div class="barBorder">
+                        <div class="completedBar table" ng-show="0 < barData[$index].Completed" ng-style="{'width': barData[$index].CompletedWidth + '%'}">
+                            <div class="completedText strong cell">{{barData[$index].Completed}}</div>
+                        </div>
+                        <div class="incompleteBar table" ng-show="0 < barData[$index].Incomplete" ng-style="{'width': barData[$index].IncompleteWidth + '%'}">
+                            <div class="cell">{{barData[$index].Incomplete}}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <ul ng-class="{'content': 0 == $index, 'content hidden': 0 != $index}">
+                <li ng-repeat="feature in release.Features" ng-class="{'feature hasscenario': 0 < feature.Scenarios.length, 'feature': (null == feature.Scenarios) || (0 == feature.Scenarios.length)}">
+                    <div class="description" tabindex="0">
+                        <div class="featureTitle strong">{{feature.Title}}</div>
+                        <div class="featureDescription" ng-bind-html="renderHtml(feature.Content)"></div>
+                        <div ng-show="null != feature.Feedback"><a target="_blank" href="{{feature.Feedback.Link}}">{{feature.Feedback.Text}}</a></div>
+                    </div>
+                    <div class="scenario" tabindex="0">
+                        <div class="scenarioHeader">
+                            <img class="scenario" src="img/scenario.jpg">
+                            <span class="strong">Scenarios:</span>
+                        </div>
+                        <ul ng-repeat="scenario in feature.Scenarios">
+                            <li ng-class="scenario.Completed ? 'scenario on' : 'scenario'">{{scenario.Name}}</li>
+                        </ul>
+                    </div>
+                </li>
+            </ul>
+        </div>
+    </div>
+</body>
+
+</html>

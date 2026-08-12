@@ -24,9 +24,32 @@
                estimatedInstallMinutes="5"
                defaultLanguage="en-us"/>
 
+  <!--
+    TWO detection rules, both of which must be true.
+
+    Rule 1 - the branding key the package itself writes:
+        HKLM\Software\VWG\CM\<branding key>   Revision = <revision>
+      There is no separate "detection key" to keep in step: the branding key IS
+      the rule, with brandingRegistryRoot in front of it.
+
+    Rule 2 - the product's own uninstall entry, taken from VWG_SoftIdent in the
+      deployment script, e.g.
+        HKLM:\SOFTWARE\$($VWG_CurrentRegWOW)Microsoft\...\INCA7.5.7 [DisplayVersion=7.5.7]
+      The script's own Wow6432Node placeholder decides 32-bit or 64-bit, so the
+      package tells us which view it lives in and we never guess. is64Bit stays
+      true because the resolved path already contains Wow6432Node when the
+      package is 32-bit, and that node exists only in the 64-bit view.
+
+    A package with no SoftIdent, or one written in a shape the pattern does not
+    recognise, simply gets rule 1.
+  -->
   <Detection valueName="Revision" dataType="String" is64Bit="true" method="Value"/>
 
+  <SoftIdentDetection dataType="String" is64Bit="true" method="Value"
+                      pattern="^\s*(?'Hive'HK[A-Za-z_]+):?\\(?'Key'[^\[]+?)\s*(?:\[\s*(?'ValueName'[^=\]]+?)\s*=\s*(?'Value'[^\]]*?)\s*\])?\s*$"/>
+
   <DeploymentType distributionPointSetting="AutoDownload"
+                  slowNetworkDeploymentMode="Download"
                   programVisibility="Hidden"
                   installationBehaviorType="InstallForSystem"
                   logonRequirementType="WhetherOrNotUserLoggedOn"
@@ -172,6 +195,12 @@
       <Field name="ApplicationDescriptionDE"     pattern="(?im)^[ \t]*Short description of the product in German[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
       <Field name="ApplicationDescriptionENLong" pattern="(?im)^[ \t]*Detailed description of the product in English[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
       <Field name="ApplicationDescriptionDELong" pattern="(?im)^[ \t]*Detailed description of the product in German[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+
+      <!-- The supported operating systems, as ticked on the form. A field named
+           OperatingSystem:<key> ticks the matching box in the window. The key
+           must match an <OperatingSystem key="..."> above. -->
+      <Field name="OperatingSystem:Win10x64" pattern="(&#9746;)[ \t]*Windows 10"/>
+      <Field name="OperatingSystem:Win11x64" pattern="(&#9746;)[ \t]*Windows 11"/>
     </Document>
 
   </PackageSource>

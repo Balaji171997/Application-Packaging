@@ -67,6 +67,10 @@ function New-AudiSwJobFile {
         [string]$Rfc = '',
         [string]$NameEn = '', [string]$NameDe = '',
         [string]$DescriptionEn = '', [string]$DescriptionDe = '',
+        # What the packager saw and, where they corrected it, what they changed
+        # it to. Sent so the server uses exactly what was on the screen rather
+        # than deriving it again and possibly differing.
+        [hashtable]$Detail = @{},
         [string[]]$OperatingSystems = @(),
         [switch]$DryRun,
         [string]$JobId
@@ -96,6 +100,13 @@ function New-AudiSwJobFile {
     $localised.SetAttribute('descriptionEn', $DescriptionEn)
     $localised.SetAttribute('descriptionDe', $DescriptionDe)
     $null = $job.AppendChild($localised)
+
+    $detailNode = $doc.CreateElement('Detail')
+    foreach ($name in 'Publisher','Product','Version','Architecture','Revision','Language','BrandingKey','SoftIdent') {
+        $value = if ($Detail.Contains($name)) { [string]$Detail[$name] } else { '' }
+        $detailNode.SetAttribute($name.Substring(0,1).ToLowerInvariant() + $name.Substring(1), $value)
+    }
+    $null = $job.AppendChild($detailNode)
 
     $osList = $doc.CreateElement('OperatingSystems')
     foreach ($key in $OperatingSystems) {
@@ -172,9 +183,30 @@ function Read-AudiSwJobFile {
         DescriptionEn = $(if ($j.Localised) { $j.Localised.descriptionEn } else { '' })
         DescriptionDe = $(if ($j.Localised) { $j.Localised.descriptionDe } else { '' })
         OperatingSystems = $os
+        Detail        = $(
+            $d = @{}
+            if ($result.Document.Job.Detail) {
+                foreach ($name in 'Publisher','Product','Version','Architecture','Revision','Language','BrandingKey','SoftIdent') {
+                    $attr = $name.Substring(0,1).ToLowerInvariant() + $name.Substring(1)
+                    $d[$name] = [string]$result.Document.Job.Detail.$attr
+                }
+            }
+            $d
+        )
         Path          = $Path
     }
     return @{ Ok = $true; Errors = @(); Job = $job }
+}
+
+function Test-AudiResultMember {
+    <#  Does this result carry that member? A heartbeat is a plain object with
+        only the few fields it needs, while a finished run is the engine's full
+        result - and under StrictMode reading a member that is not there throws. #>
+    [CmdletBinding()]
+    param($Result, [string]$Name)
+    if ($null -eq $Result) { return $false }
+    if ($Result -is [hashtable]) { return $Result.ContainsKey($Name) }
+    return [bool]$Result.PSObject.Properties[$Name]
 }
 
 function Write-AudiSwJobResult {
@@ -184,7 +216,12 @@ function Write-AudiSwJobResult {
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)]$Job,
         [Parameter(Mandatory = $true)][string]$Executor,
-        [Parameter(Mandatory = $true)]$Result
+        [Parameter(Mandatory = $true)]$Result,
+        # 'Running' while the job is still being worked on - see
+        # Write-AudiSwJobProgress. Left alone, the outcome follows Result.Ok.
+        [ValidateSet('', 'Succeeded', 'Failed', 'Running')][string]$Outcome = '',
+        # only meaningful while Running - lets the window size its progress bar
+        [int]$StepCount = 0
     )
 
     $doc = New-Object System.Xml.XmlDocument
@@ -198,12 +235,25 @@ function Write-AudiSwJobResult {
     $root.SetAttribute('executor', $Executor)
     $root.SetAttribute('completed', (Get-Date).ToString('o'))
     $root.SetAttribute('dryRun', $(if ($Result.DryRun) { 'true' } else { 'false' }))
-    $root.SetAttribute('outcome', $(if ($Result.Ok) { 'Succeeded' } else { 'Failed' }))
+    $root.SetAttribute('outcome', $(if ($Outcome) { $Outcome } elseif ($Result.Ok) { 'Succeeded' } else { 'Failed' }))
+    if ($StepCount -gt 0) { $root.SetAttribute('stepCount', [string]$StepCount) }
     $null = $doc.AppendChild($root)
 
     $message = $doc.CreateElement('Message')
     $message.InnerText = [string]$Result.Message
     $null = $root.AppendChild($message)
+
+    # What a failed run undid. Without this the packager is told the run failed
+    # and left to guess whether an application is sitting half-made on the site.
+    $rolledBack = $doc.CreateElement('RolledBack')
+    if (Test-AudiResultMember -Result $Result -Name 'RolledBack') {
+        foreach ($item in @($Result.RolledBack)) {
+            $entry = $doc.CreateElement('Item')
+            $entry.InnerText = [string]$item
+            $null = $rolledBack.AppendChild($entry)
+        }
+    }
+    $null = $root.AppendChild($rolledBack)
 
     $steps = $doc.CreateElement('Steps')
     foreach ($s in @($Result.Steps)) {
@@ -215,10 +265,109 @@ function Write-AudiSwJobResult {
     }
     $null = $root.AppendChild($steps)
 
+    # 'FileSystem::' because the heartbeat is written DURING a run, while the
+    # current location is the site drive. A UNC drop folder - which is what
+    # production uses - has no drive qualifier, so without this the ConfigMgr
+    # provider tries to resolve it and the write fails. $doc.Save is .NET and
+    # takes the plain path.
     $folder = Split-Path -Parent $Path
-    if (-not (Test-Path -LiteralPath $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
+    if (-not (Test-Path -LiteralPath "FileSystem::$folder")) { New-Item -ItemType Directory -Path "FileSystem::$folder" -Force | Out-Null }
     $doc.Save($Path)
     return $Path
+}
+
+function Write-AudiSwJobProgress {
+    <#  A heartbeat the collector drops beside the job while it is still working.
+
+        This is what lets the window feel connected to a server it never talks
+        to. The collector writes one of these after every step; the window reads
+        the folder and shows how far the job has got - live, and again after the
+        window has been closed and reopened.
+
+        Same shape as the finished result, with outcome="Running", so there is
+        one schema, one parser and one code path in the window. It is replaced by
+        the real result when the job ends.  #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)]$Job,
+        [Parameter(Mandatory = $true)][string]$Executor,
+        [Parameter(Mandatory = $true)][string]$CurrentStep,
+        [int]$StepNumber,
+        [int]$StepCount,
+        $Completed,
+        [switch]$DryRun
+    )
+
+    $text = if ($StepCount -gt 0) { "Working on the server - {0} ({1} of {2})" -f $CurrentStep, $StepNumber, $StepCount }
+            else                  { "Working on the server - $CurrentStep" }
+
+    $progress = [pscustomobject]@{ Ok = $false; DryRun = [bool]$DryRun; Message = $text; Steps = @($Completed) }
+
+    # A half-written heartbeat must never be read as the truth, so it goes to a
+    # temporary name and is renamed into place.
+    $temp = "$Path.writing"
+    try {
+        $null = Write-AudiSwJobResult -Path $temp -Job $Job -Executor $Executor -Result $progress `
+                                      -Outcome 'Running' -StepCount $StepCount
+        Move-Item -LiteralPath "FileSystem::$temp" -Destination "FileSystem::$Path" -Force
+    }
+    catch {
+        # progress is a convenience - it must never stop the job it reports on
+        Write-Verbose "Could not write progress for job $($Job.JobId): $($_.Exception.Message)"
+        if (Test-Path -LiteralPath "FileSystem::$temp") { Remove-Item -LiteralPath "FileSystem::$temp" -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Get-AudiSwJobHistory {
+    <#  Every result the drop folder holds for one package, newest first.
+
+        The window does not have to stay open waiting. The collector writes the
+        result whether anyone is watching or not, so a packager can close the
+        tool, come back later, type the package name and see what happened.
+
+        Returns @{ Outcome; Completed; JobId; Rfc; Executor; DryRun; Message;
+                   Steps; Path } per run.  #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$DropFolder,
+        [Parameter(Mandatory = $true)][string]$PackageName,
+        [int]$Newest = 20
+    )
+
+    $paths = Get-AudiDropFolderPath -DropFolder $DropFolder
+    $runs  = New-Object System.Collections.Generic.List[object]
+
+    # \Working first: a job being worked on right now matters more than one that
+    # finished yesterday, and its heartbeat is what makes the window look live.
+    foreach ($folder in @($paths.Working, $paths.Done, $paths.Failed)) {
+        if (-not (Test-Path -LiteralPath $folder)) { continue }
+        $files = @(Get-ChildItem -LiteralPath $folder -Filter "$PackageName*.result.xml" -File -ErrorAction SilentlyContinue)
+        foreach ($file in $files) {
+            try {
+                $doc = New-Object System.Xml.XmlDocument
+                $doc.Load($file.FullName)
+                $r = $doc.JobResult
+                $runs.Add([pscustomobject]@{
+                    Outcome   = $r.outcome
+                    Completed = $(try { [datetime]$r.completed } catch { $file.LastWriteTime })
+                    JobId     = $r.jobId
+                    Rfc       = $(if ($r.HasAttribute('rfc')) { $r.rfc } else { '' })
+                    Executor  = $r.executor
+                    DryRun    = [bool]::Parse($r.dryRun)
+                    StepCount = $(if ($r.HasAttribute('stepCount')) { [int]$r.stepCount } else { 0 })
+                    RolledBack = @($doc.SelectNodes('/JobResult/RolledBack/Item') | ForEach-Object { $_.InnerText })
+                    Message   = $doc.SelectSingleNode('/JobResult/Message').InnerText
+                    Steps     = @($doc.SelectNodes('/JobResult/Steps/Step') | ForEach-Object {
+                                    [pscustomobject]@{ Step = $_.key; Ok = [bool]::Parse($_.ok); Message = $_.message } })
+                    Path      = $file.FullName
+                }) | Out-Null
+            }
+            catch { }   # a half-written or hand-edited result is skipped, not fatal
+        }
+    }
+
+    return @($runs | Sort-Object Completed -Descending | Select-Object -First $Newest)
 }
 
 function Wait-AudiSwJobResult {
@@ -249,6 +398,7 @@ function Wait-AudiSwJobResult {
                         Executor  = $r.executor
                         Steps     = @($doc.SelectNodes('/JobResult/Steps/Step') | ForEach-Object {
                                         [pscustomobject]@{ Step = $_.key; Ok = [bool]::Parse($_.ok); Message = $_.message } })
+                        RolledBack = @($doc.SelectNodes('/JobResult/RolledBack/Item') | ForEach-Object { $_.InnerText })
                         Path      = $candidate
                     }
                 }
@@ -257,7 +407,10 @@ function Wait-AudiSwJobResult {
         }
         if ((Get-Date) -ge $deadline) {
             return @{ Ok = $false; Found = $false
-                Message = "No result after $TimeoutMinutes minutes. The job is still queued in the drop folder, or the collector on the server is not running."
+                # Name the exact folder. "Somewhere in the drop folder" is no help
+                # when the usual cause is a collector watching a different one.
+                Message = ("No result after {0} minutes. The job is still sitting in {1}. Either the collector is not running, or it is watching a different folder - it must be started with -DropFolder pointing at {2}." -f `
+                           $TimeoutMinutes, $Submission.Path, (Split-Path -Parent (Split-Path -Parent $Submission.Path)))
                 Steps = @() }
         }
         if ($OnWait) { & $OnWait }

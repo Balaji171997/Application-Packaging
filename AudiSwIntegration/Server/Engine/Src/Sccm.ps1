@@ -21,6 +21,39 @@
 
 Set-StrictMode -Version 2.0
 
+# Declared up front. Under StrictMode a script-scope variable that has never been
+# assigned throws the moment it is READ, so a machine whose console matches its
+# site - where no version warning is ever raised - would fail on the first
+# connect rather than the tenth.
+$script:AudiConsoleVersionNote = ''
+$script:AudiPreviousLocation   = $null
+
+function Get-AudiErrorText {
+    <#  Readable text for an error record, never an empty string.
+
+        Some ConfigMgr cmdlets throw with NO message at all - their own
+        validation fails and the error record carries nothing. Passing that
+        straight to the log then fails a second time with "Cannot bind argument
+        to parameter 'Message' because it is an empty string", and THAT is what
+        the operator ends up reading instead of the real problem. So an empty
+        message becomes something that at least names the step and the fault. #>
+    [CmdletBinding()]
+    param($ErrorRecord, [string]$Context = '')
+
+    $text = ''
+    if ($ErrorRecord) {
+        try { $text = [string]$ErrorRecord.Exception.Message } catch { }
+        if ([string]::IsNullOrWhiteSpace($text)) {
+            $type = try { $ErrorRecord.Exception.GetType().Name } catch { 'Exception' }
+            $text = "$type was thrown with no message."
+            try { if ($ErrorRecord.CategoryInfo) { $text += " Category: $($ErrorRecord.CategoryInfo.Category)." } } catch { }
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($text)) { $text = 'Failed with no reason given.' }
+    if ($Context) { $text = "$Context $text" }
+    return $text
+}
+
 # ------------------------------------------------------------------ providers
 
 function New-AudiSccmProvider {
@@ -38,20 +71,46 @@ function New-AudiSccmProvider {
         TestApplication = { param($c) [bool](Get-CMApplication -Name $c.ApplicationName -Fast -ErrorAction SilentlyContinue) }
 
         NewApplication = { param($c)
+            # -AutoInstall matches their <AllowInstallFromTaskSequence>true.
+            # -Owner is set explicitly rather than left to whoever ran it: the
+            # whole point of the project is that it reads as the service
+            # account, so it is stated rather than assumed.
             New-CMApplication -Name $c.ApplicationName -Publisher $c.Publisher -SoftwareVersion $c.Version `
                               -LocalizedApplicationName $c.LocalizedName -LocalizedApplicationDescription $c.LocalizedDescription `
                               -AutoInstall $true -ErrorAction Stop | Out-Null
+            Set-CMApplication -Name $c.ApplicationName -Owner $c.Owner -SupportContact $c.Owner -ErrorAction Stop | Out-Null
             & $script:AudiSetGermanDisplay $c
         }
 
         AddDeploymentType = { param($c)
+            # A detection rule must be a CLAUSE OBJECT, not a string. Passing the
+            # key path as text is accepted by the parameter binder and then fails
+            # inside SCCM, so the clauses are built properly here.
+            $clauses = & $script:AudiNewDetectionClause $c
+
             Add-CMScriptDeploymentType -ApplicationName $c.ApplicationName -DeploymentTypeName $c.DeploymentTypeName `
                                        -ContentLocation $c.ContentPath -InstallCommand $c.InstallCommand `
-                                       -UninstallCommand $c.UninstallCommand -AddDetectionClause $c.DetectionClause `
+                                       -UninstallCommand $c.UninstallCommand -AddDetectionClause $clauses `
                                        -InstallationBehaviorType $c.InstallationBehaviorType `
                                        -LogonRequirementType $c.LogonRequirementType `
+                                       -UserInteractionMode $c.ProgramVisibility `
                                        -MaximumRuntimeMins $c.MaxRuntimeMinutes -EstimatedRuntimeMins $c.EstimatedInstallMinutes `
+                                       -ContentFallback:$c.AllowClientToUseFallback `
+                                       -EnableBranchCache:$c.AllowClientToShareContent `
+                                       -SlowNetworkDeploymentMode $c.OnSlowNetworkMode `
+                                       -Force32Bit:$c.Run32BitOn64Bit `
                                        -ErrorAction Stop | Out-Null
+
+            # Operating system requirement rules, as the old tool set from its
+            # <SccmOSRequirements> block. The platform strings in Defaults.xml
+            # are the same values it used.
+            if (@($c.OperatingSystems).Count -gt 0) {
+                $condition = Get-CMGlobalCondition -Name 'Operating System' | Select-Object -First 1
+                $rule = New-CMRequirementRuleOperatingSystemValue -GlobalCondition $condition `
+                            -RuleOperator OneOf -PlatformString @($c.OperatingSystems) -ErrorAction Stop
+                Set-CMScriptDeploymentType -ApplicationName $c.ApplicationName -DeploymentTypeName $c.DeploymentTypeName `
+                                           -AddRequirement $rule -ErrorAction Stop | Out-Null
+            }
         }
 
         SetCategory = { param($c) Set-CMApplication -Name $c.ApplicationName -AddAppCategory $c.Category -ErrorAction Stop | Out-Null }
@@ -96,6 +155,16 @@ function New-AudiSccmProvider {
                                        -LogonRequirementType $c.LogonRequirementType `
                                        -MaximumRuntimeMins $c.MaxRuntimeMinutes -EstimatedRuntimeMins $c.EstimatedInstallMinutes `
                                        -ErrorAction Stop | Out-Null
+
+            # The detection rules have to be REPLACED, not added to. A new
+            # revision changes rule 1, and adding it beside the old one would
+            # give a deployment type that can never detect itself as installed:
+            # SCCM ANDs the clauses, and the old revision will not be there.
+            $existing = @(& $script:AudiGetDetectionClauseName $c)
+            $replace  = @{ ApplicationName = $c.ApplicationName; DeploymentTypeName = $c.DeploymentTypeName
+                           AddDetectionClause = (& $script:AudiNewDetectionClause $c); ErrorAction = 'Stop' }
+            if ($existing.Count -gt 0) { $replace['RemoveDetectionClause'] = $existing }
+            Set-CMScriptDeploymentType @replace | Out-Null
         }
 
         TestDeployment = { param($c)
@@ -111,7 +180,24 @@ function New-AudiSccmProvider {
         }
 
         # ---- preflight probes: read-only, used before anything is created
-        TestContentPath    = { param($c) Test-Path -LiteralPath $c.Path }
+        # 'FileSystem::' IS NOT OPTIONAL HERE.
+        #
+        # These run while the current location is the site drive, and a path with
+        # no drive qualifier is resolved by the CURRENT provider. 'C:\temp\...'
+        # names a drive so it reaches the filesystem, but '\\server\share\...'
+        # does not - the ConfigMgr provider tries to resolve it, fails, and
+        # Test-Path answers $false for a share that is sitting right there and
+        # perfectly readable. Naming the provider pins it to the filesystem.
+        TestContentPath    = { param($c) Test-Path -LiteralPath "FileSystem::$($c.Path)" }
+
+        # The share without the package folder. Test-Path answers false both when
+        # a folder is missing and when this account cannot see the share at all,
+        # and those need different fixes - so ask separately and say which it is.
+        TestContentShare   = { param($c) Test-Path -LiteralPath "FileSystem::$($c.Path)" }
+        GetContentShareNames = { param($c)
+            @(Get-ChildItem -LiteralPath "FileSystem::$($c.Path)" -Directory -ErrorAction SilentlyContinue |
+              Select-Object -First 8 | ForEach-Object { $_.Name })
+        }
         TestCollectionId   = { param($c) [bool](Get-CMCollection -Id $c.Id -ErrorAction SilentlyContinue) }
         TestDpGroup        = { param($c) [bool](Get-CMDistributionPointGroup -Name $c.Name -ErrorAction SilentlyContinue) }
         TestSecurityScope  = { param($c) [bool](Get-CMSecurityScope -Id $c.Id -ErrorAction SilentlyContinue) }
@@ -125,7 +211,31 @@ function New-AudiSccmProvider {
                       Failed = [int]$status.NumberErrors; InProgress = [int]$status.NumberInProgress }
         }
 
-        MoveObject = { param($c) Move-CMObject -FolderPath $c.FolderPath -InputObject $c.InputObject -ErrorAction Stop | Out-Null }
+        # The environment file holds the folder as the console shows it -
+        # 'ICZ-Applications', 'II1-Site\II1-Software Management'. Move-CMObject
+        # wants a PROVIDER path rooted at the object type:
+        #
+        #   console   \Software Library\...\Applications\ICZ-Applications
+        #   provider  ICZ:\Application\ICZ-Applications
+        #
+        #   console   \Assets and Compliance\...\Device Collections\II1-Site\...
+        #   provider  ICZ:\DeviceCollection\II1-Site\II1-Software Management
+        #
+        # Passing the bare name binds happily and then fails at the site, so the
+        # path is built here. Each level is created if it is not already there,
+        # which is what the old tool did too - otherwise a new environment needs
+        # every folder made by hand before the first integration will file.
+        MoveObject = { param($c)
+            $path = "$($c.SiteCode):\$($c.ObjectType)"
+            foreach ($segment in @($c.FolderPath -split '\\' | Where-Object { $_ })) {
+                $parent = $path
+                $path   = Join-Path $parent $segment
+                if (-not (Test-Path -LiteralPath $path)) {
+                    New-CMFolder -Name $segment -ParentFolderPath $parent -ErrorAction Stop | Out-Null
+                }
+            }
+            Move-CMObject -FolderPath $path -InputObject $c.InputObject -ErrorAction Stop | Out-Null
+        }
 
         GetApplicationObject = { param($c) Get-CMApplication -Name $c.ApplicationName -Fast -ErrorAction Stop }
         GetCollectionObject  = { param($c) Get-CMDeviceCollection -Name $c.Name -ErrorAction Stop }
@@ -195,6 +305,70 @@ function New-AudiSccmProvider {
     }
 }
 
+# ----------------------------------------------------------- detection clauses
+#
+# One clause per rule on the plan, ANDed by SCCM: rule 1 is the branding key the
+# package writes, rule 2 is the product's own uninstall entry from the deployment
+# script's VWG_SoftIdent. A rule with no value name is a key-exists test.
+#
+# The hive comes from the rule rather than being assumed, because a SoftIdent is
+# free text in the package and could name HKCU.
+$script:AudiGetDetectionClauseName = {
+    <#  The logical names of the detection clauses a deployment type already has,
+        so Modify can replace them rather than pile new ones on top.
+
+        They are only reachable through the deployment type's SDMPackageXML -
+        there is no Get-CMDetectionClause cmdlet. If they cannot be read this
+        returns nothing, and the caller adds without removing; that is visible
+        in the console rather than silently wrong.  #>
+    param($c)
+
+    try {
+        $dt = Get-CMDeploymentType -ApplicationName $c.ApplicationName -DeploymentTypeName $c.DeploymentTypeName -ErrorAction Stop
+        if (-not $dt) { return @() }
+        $xml = [string]$dt.SDMPackageXML
+        if ([string]::IsNullOrWhiteSpace($xml)) { return @() }
+        return @([regex]::Matches($xml, 'LogicalName="(?<n>(?:RegistrySetting|File|Folder|MSI|Script)_[^"]+)"') |
+                 ForEach-Object { $_.Groups['n'].Value } | Select-Object -Unique)
+    }
+    catch { return @() }
+}
+
+$script:AudiNewDetectionClause = {
+    param($c)
+
+    $rules = @($c.DetectionRules)
+    if ($rules.Count -eq 0) {
+        throw "The plan carries no detection rule for '$($c.DeploymentTypeName)'. An application with no detection rule would reinstall on every evaluation."
+    }
+
+    $clauses = New-Object System.Collections.Generic.List[object]
+    foreach ($rule in $rules) {
+        $hive = switch -Regex ($rule.Hive) {
+            'HKLM|LOCAL_MACHINE' { 'LocalMachine'; break }
+            'HKCU|CURRENT_USER'  { 'CurrentUser';  break }
+            'HKCR|CLASSES_ROOT'  { 'ClassesRoot';  break }
+            default              { 'LocalMachine' }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($rule.ValueName)) {
+            # the key itself is the evidence - no value to compare
+            $clause = New-CMDetectionClauseRegistryKey -Hive $hive -KeyName $rule.Key `
+                          -Existence -Is64Bit:$rule.Is64Bit -ErrorAction Stop
+        }
+        else {
+            $clause = New-CMDetectionClauseRegistryKeyValue -Hive $hive -KeyName $rule.Key `
+                          -ValueName $rule.ValueName -PropertyType $rule.DataType `
+                          -ExpectedValue $rule.Value -ExpressionOperator IsEquals `
+                          -Value -Is64Bit:$rule.Is64Bit -ErrorAction Stop
+        }
+        $clauses.Add($clause) | Out-Null
+    }
+
+    # .ToArray(): @() on a List[object] of PSObjects throws under PowerShell 5.1
+    return $clauses.ToArray()
+}
+
 # ------------------------------------------------------- German display entry
 #
 # SCCM keeps one display name and description PER LANGUAGE, inside the
@@ -259,13 +433,24 @@ function New-AudiSccmDryRunProvider {
 
     $provider.TestApplication          = { param($c) $ExistingApplications -contains $c.ApplicationName }.GetNewClosure()
     $provider.NewApplication           = { param($c) & $record 'NewApplication'           $c.ApplicationName }.GetNewClosure()
-    $provider.AddDeploymentType        = { param($c) & $record 'AddDeploymentType'        $c.DeploymentTypeName }.GetNewClosure()
+    # The detection rules are described INLINE, not by calling a helper function.
+    # These handlers are closures: a closure carries the session state it was
+    # made in, so a function defined at load time is not reliably reachable from
+    # inside one - which is how this line silently failed every step once.
+    $describe = {
+        param($rules)
+        (@($rules | ForEach-Object {
+            if ([string]::IsNullOrWhiteSpace($_.ValueName)) { "{0}\{1} exists" -f $_.Hive, $_.Key }
+            else { "{0}\{1}\{2}={3}" -f $_.Hive, $_.Key, $_.ValueName, $_.Value }
+        }) -join ' AND ')
+    }
+    $provider.AddDeploymentType        = { param($c) & $record 'AddDeploymentType' ("{0} | detection {1} | OS {2}" -f $c.DeploymentTypeName, (& $describe $c.DetectionRules), (@($c.OperatingSystems).Count)) }.GetNewClosure()
     $provider.SetCategory              = { param($c) & $record 'SetCategory'              $c.Category }.GetNewClosure()
     $provider.StartContentDistribution = { param($c) & $record 'StartContentDistribution' $c.DistributionPointGroup }.GetNewClosure()
     $provider.NewCollection            = { param($c) & $record 'NewCollection'            $c.Name }.GetNewClosure()
     $provider.NewDeployment            = { param($c) & $record 'NewDeployment'            ("{0} -> {1} ({2})" -f $c.ApplicationName, $c.CollectionName, $c.DeploymentAction) }.GetNewClosure()
     $provider.AddSecurityScope         = { param($c) & $record 'AddSecurityScope'         ($c.SecurityScopes -join ',') }.GetNewClosure()
-    $provider.MoveObject               = { param($c) & $record 'MoveObject'               ("{0} -> {1}" -f $c.Label, $c.FolderPath) }.GetNewClosure()
+    $provider.MoveObject               = { param($c) & $record 'MoveObject'               ("{0} -> {1}:\{2}\{3}" -f $c.Label, $c.SiteCode, $c.ObjectType, $c.FolderPath) }.GetNewClosure()
     $provider.GetApplicationObject     = { param($c) [pscustomobject]@{ Kind = 'Application'; Name = $c.ApplicationName } }.GetNewClosure()
     $provider.GetCollectionObject      = { param($c) [pscustomobject]@{ Kind = 'Collection';  Name = $c.Name } }.GetNewClosure()
     $provider.RemoveDeployment         = { param($c) & $record 'RemoveDeployment'         ("{0} -> {1}" -f $c.ApplicationName, $c.CollectionName) }.GetNewClosure()
@@ -282,6 +467,8 @@ function New-AudiSccmDryRunProvider {
 
     # preflight probes: everything present unless the caller says otherwise
     $provider.TestContentPath    = { param($c) -not ($Missing -contains 'ContentPath') }.GetNewClosure()
+    $provider.TestContentShare   = { param($c) -not ($Missing -contains 'ContentShare') }.GetNewClosure()
+    $provider.GetContentShareNames = { param($c) @() }.GetNewClosure()
     $provider.TestCollectionId   = { param($c) -not ($Missing -contains "Collection:$($c.Id)") }.GetNewClosure()
     $provider.TestDpGroup        = { param($c) -not ($Missing -contains "DpGroup:$($c.Name)") }.GetNewClosure()
     $provider.TestSecurityScope  = { param($c) -not ($Missing -contains "Scope:$($c.Id)") }.GetNewClosure()
@@ -315,8 +502,23 @@ function Connect-AudiSccm {
             if (Test-Path -LiteralPath $candidate) { $module = $candidate }
         }
         if (-not $module) { return @{ Ok = $false; Message = 'The ConfigMgr console is not installed on this machine, so its PowerShell module cannot be loaded.'; Drive = $null } }
-        try { Import-Module $module -ErrorAction Stop }
-        catch { return @{ Ok = $false; Message = "The ConfigMgr module could not be loaded: $($_.Exception.Message)"; Drive = $null } }
+
+        # The SAME version-warning trap as the drive below, which is easy to miss
+        # here. When the console build differs from the site build the module
+        # complains - "A new version of the console is available" - but it still
+        # loads and every one of its cmdlets is exported. With -ErrorAction Stop
+        # that complaint becomes a terminating error and the job fails having
+        # done nothing. So import quietly and judge by whether the module is
+        # actually there.
+        Import-Module $module -ErrorAction SilentlyContinue -WarningAction SilentlyContinue -ErrorVariable importError
+        if (-not (Get-Module -Name ConfigurationManager)) {
+            $detail = if ($importError) { [string]$importError[0] } else { 'no further detail' }
+            return @{ Ok = $false; Message = "The ConfigMgr module could not be loaded: $detail"; Drive = $null }
+        }
+        # It loaded, but a mismatch is still worth saying out loud rather than
+        # swallowing: cmdlets from a different build than the site are Microsoft's
+        # own caveat, not ours.
+        if ($importError) { $script:AudiConsoleVersionNote = [string]$importError[0] }
     }
 
     $drive = $Plan.Environment
@@ -332,7 +534,53 @@ function Connect-AudiSccm {
             return @{ Ok = $false; Message = ("Could not connect to site {0} on {1}. {2} {3}" -f $Plan.Environment, $Plan.SiteServer, $detail, $hint).Trim(); Drive = $null }
         }
     }
-    return @{ Ok = $true; Message = "Connected to $drive on $($Plan.SiteServer)."; Drive = $drive }
+    # Creating the drive is not enough. Every ConfigMgr cmdlet refuses to run
+    # unless the CURRENT LOCATION is that drive:
+    #
+    #   "This command cannot be run from the current drive. To run this command
+    #    you must first connect to a Configuration Manager drive."
+    #
+    # So step into it here. The caller must step back out before doing file work
+    # - Get-ChildItem with -Filter/-Recurse/-File throws under the CMSite
+    # provider - which is what Restore-AudiFileSystemLocation is for.
+    # Remember where we were standing, so it can be handed back exactly. Setting
+    # the location changes the PROCESS working directory: a collector started
+    # with a relative path and looping would find its own script gone on the
+    # second pass if we dropped it somewhere else.
+    $here = Get-Location
+    if ($here.Provider.Name -eq 'FileSystem') { $script:AudiPreviousLocation = $here }
+
+    try { Set-Location -LiteralPath "${drive}:" -ErrorAction Stop }
+    catch { return @{ Ok = $false; Message = "The site drive ${drive}: was created but could not be entered: $($_.Exception.Message)"; Drive = $null } }
+
+    $message = "Connected to $drive on $($Plan.SiteServer)."
+    if ($script:AudiConsoleVersionNote) { $message += " Note: $($script:AudiConsoleVersionNote)" }
+    return @{ Ok = $true; Message = $message; Drive = $drive }
+}
+
+function Restore-AudiFileSystemLocation {
+    <#  Steps back off the CMSite drive onto the filesystem path we came from.
+
+        The ConfigMgr provider does not support -Filter, -Recurse or -File, so
+        any Get-ChildItem left running under it throws "the provider does not
+        support filters". The collector reads its drop folder that way on every
+        pass, so it must come back before the next one.
+
+        It returns to WHERE IT WAS, not to C:\. Set-Location changes the process
+        working directory, so a collector started as .\Server\Watch-... and left
+        sitting on C:\ cannot find its own script on the second pass:
+        "The term '.\Server\Watch-AudiSwDropFolder.ps1' is not recognized."  #>
+    [CmdletBinding()]
+    param()
+
+    if ((Get-Location).Provider.Name -eq 'FileSystem') { return }
+
+    if ($script:AudiPreviousLocation -and (Test-Path -LiteralPath $script:AudiPreviousLocation.Path)) {
+        Set-Location -LiteralPath $script:AudiPreviousLocation.Path
+    }
+    else {
+        Set-Location -LiteralPath "$env:SystemDrive\"
+    }
 }
 
 # ---------------------------------------------------------------------- steps
@@ -395,7 +643,7 @@ function Invoke-AudiModifyStepBody {
             & $Provider.SetApplication @{
                 ApplicationName = $Plan.ApplicationName; Publisher = $Plan.Parts.Publisher; Version = $Plan.Parts.Version
                 LocalizedName = $Plan.LocalizedName; LocalizedDescription = $Plan.LocalizedDescription
-                LocalizedNameDe = $Plan.LocalizedNameDe; LocalizedDescriptionDe = $Plan.LocalizedDescriptionDe }
+                LocalizedNameDe = $Plan.LocalizedNameDe; LocalizedDescriptionDe = $Plan.LocalizedDescriptionDe; Owner = $Plan.Executor }
             $Changed.Add('application details updated') | Out-Null
             return "Application '$($Plan.ApplicationName)' updated."
         }
@@ -404,9 +652,18 @@ function Invoke-AudiModifyStepBody {
             & $Provider.SetDeploymentType @{
                 ApplicationName = $Plan.ApplicationName; DeploymentTypeName = $Plan.DeploymentType
                 ContentPath = $Plan.ContentPath; InstallCommand = $Plan.InstallCommand; UninstallCommand = $Plan.UninstallCommand
-                DetectionClause = $Plan.DetectionKey; InstallationBehaviorType = $Plan.InstallationBehaviorType
+                DetectionRules = $Plan.DetectionRules
+                DetectionKey = $Plan.DetectionKey; DetectionValue = $Plan.DetectionValue
+                DetectionData = $Plan.DetectionData; DetectionIs64Bit = $Plan.DetectionIs64Bit
+                InstallationBehaviorType = $Plan.InstallationBehaviorType
                 LogonRequirementType = $Plan.LogonRequirementType; MaxRuntimeMinutes = $Plan.MaxRuntimeMinutes
-                EstimatedInstallMinutes = $Plan.EstimatedInstallMinutes }
+                EstimatedInstallMinutes = $Plan.EstimatedInstallMinutes
+                ProgramVisibility = $Plan.ProgramVisibility
+                OnSlowNetworkMode = $Plan.OnSlowNetworkMode
+                AllowClientToShareContent = $Plan.AllowClientToShareContent
+                AllowClientToUseFallback  = $Plan.AllowClientToUseFallback
+                Run32BitOn64Bit           = $Plan.Run32BitOn64Bit
+                OperatingSystems          = $Plan.OperatingSystems }
             $Changed.Add('deployment type updated') | Out-Null
             return "Deployment type '$($Plan.DeploymentType)' updated - content path and detection rule refreshed."
         }
@@ -468,10 +725,12 @@ function Invoke-AudiModifyStepBody {
 
         'MoveObjects' {
             $app = & $Provider.GetApplicationObject @{ ApplicationName = $Plan.ApplicationName }
-            & $Provider.MoveObject @{ FolderPath = $Plan.ApplicationFolder; InputObject = $app; Label = $Plan.ApplicationName }
+            & $Provider.MoveObject @{ FolderPath = $Plan.ApplicationFolder; InputObject = $app; Label = $Plan.ApplicationName
+                                      SiteCode = $Plan.SiteCode; ObjectType = 'Application' }
             foreach ($collection in $Plan.Collections) {
                 $obj = & $Provider.GetCollectionObject @{ Name = $collection.Name }
-                & $Provider.MoveObject @{ FolderPath = $collection.Folder; InputObject = $obj; Label = $collection.Name }
+                & $Provider.MoveObject @{ FolderPath = $collection.Folder; InputObject = $obj; Label = $collection.Name
+                                          SiteCode = $Plan.SiteCode; ObjectType = 'DeviceCollection' }
             }
             return "Application and $(@($Plan.Collections).Count) collections filed."
         }
@@ -493,15 +752,25 @@ function Invoke-AudiStepBody {
             }
             & $Provider.NewApplication @{
                 ApplicationName = $Plan.ApplicationName; Publisher = $Plan.Parts.Publisher; Version = $Plan.Parts.Version
-                LocalizedName = $Plan.LocalizedName; LocalizedDescription = $Plan.LocalizedDescription }
+                LocalizedName = $Plan.LocalizedName; LocalizedDescription = $Plan.LocalizedDescription
+                LocalizedNameDe = $Plan.LocalizedNameDe; LocalizedDescriptionDe = $Plan.LocalizedDescriptionDe; Owner = $Plan.Executor }
             $Created.Add([pscustomobject]@{ Kind = 'Application'; Name = $Plan.ApplicationName }) | Out-Null
 
             & $Provider.AddDeploymentType @{
                 ApplicationName = $Plan.ApplicationName; DeploymentTypeName = $Plan.DeploymentType
                 ContentPath = $Plan.ContentPath; InstallCommand = $Plan.InstallCommand; UninstallCommand = $Plan.UninstallCommand
-                DetectionClause = $Plan.DetectionKey; InstallationBehaviorType = $Plan.InstallationBehaviorType
+                DetectionRules = $Plan.DetectionRules
+                DetectionKey = $Plan.DetectionKey; DetectionValue = $Plan.DetectionValue
+                DetectionData = $Plan.DetectionData; DetectionIs64Bit = $Plan.DetectionIs64Bit
+                InstallationBehaviorType = $Plan.InstallationBehaviorType
                 LogonRequirementType = $Plan.LogonRequirementType; MaxRuntimeMinutes = $Plan.MaxRuntimeMinutes
-                EstimatedInstallMinutes = $Plan.EstimatedInstallMinutes }
+                EstimatedInstallMinutes = $Plan.EstimatedInstallMinutes
+                ProgramVisibility = $Plan.ProgramVisibility
+                OnSlowNetworkMode = $Plan.OnSlowNetworkMode
+                AllowClientToShareContent = $Plan.AllowClientToShareContent
+                AllowClientToUseFallback  = $Plan.AllowClientToUseFallback
+                Run32BitOn64Bit           = $Plan.Run32BitOn64Bit
+                OperatingSystems          = $Plan.OperatingSystems }
             return "Application and deployment type '$($Plan.DeploymentType)' created."
         }
 
@@ -538,10 +807,12 @@ function Invoke-AudiStepBody {
 
         'MoveObjects' {
             $app = & $Provider.GetApplicationObject @{ ApplicationName = $Plan.ApplicationName }
-            & $Provider.MoveObject @{ FolderPath = $Plan.ApplicationFolder; InputObject = $app; Label = $Plan.ApplicationName }
+            & $Provider.MoveObject @{ FolderPath = $Plan.ApplicationFolder; InputObject = $app; Label = $Plan.ApplicationName
+                                      SiteCode = $Plan.SiteCode; ObjectType = 'Application' }
             foreach ($collection in $Plan.Collections) {
                 $obj = & $Provider.GetCollectionObject @{ Name = $collection.Name }
-                & $Provider.MoveObject @{ FolderPath = $collection.Folder; InputObject = $obj; Label = $collection.Name }
+                & $Provider.MoveObject @{ FolderPath = $collection.Folder; InputObject = $obj; Label = $collection.Name
+                                          SiteCode = $Plan.SiteCode; ObjectType = 'DeviceCollection' }
             }
             return "Application and $(@($Plan.Collections).Count) collections filed."
         }
@@ -607,7 +878,7 @@ function Undo-AudiCreatedObject {
             }
             $undone.Add("$($item.Kind) $($item.Name)")
         }
-        catch { $undone.Add("$($item.Kind) $($item.Name) COULD NOT BE REMOVED: $($_.Exception.Message)") }
+        catch { $undone.Add("$($item.Kind) $($item.Name) COULD NOT BE REMOVED: $(Get-AudiErrorText -ErrorRecord $_)") }
     }
     # .ToArray(), not @() - wrapping a generic List in PowerShell 5.1 throws
     # "Argument types do not match"
@@ -627,17 +898,68 @@ function Test-AudiSwPrerequisite {
         Returns @{ Ok; Findings; Blocking }. A finding with Severity 'Error'
         blocks the run; 'Warning' is reported and allowed.  #>
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)]$Plan, [Parameter(Mandatory = $true)]$Provider, [string]$Root)
+    param(
+        [Parameter(Mandatory = $true)]$Plan,
+        [Parameter(Mandatory = $true)]$Provider,
+        [string]$Root,
+        # A preview creates nothing, so a finding that only a real site would
+        # object to is reported rather than blocking.
+        [switch]$DryRun
+    )
 
     $findings = New-Object System.Collections.Generic.List[object]
     $add = { param($check, $ok, $severity, $message)
         $findings.Add([pscustomobject]@{ Check = $check; Ok = $ok; Severity = $severity; Message = $message }) | Out-Null
     }
 
-    # 1. the package source must be on the content share
+    # 1. the package source must be on the content share.
+    #
+    #    "Not found" has two completely different causes and two completely
+    #    different fixes: the folder really is missing, or this account cannot
+    #    reach the share at all. Test-Path answers false for both, so the share
+    #    is checked separately - a cross-domain share that the collector's
+    #    account has no rights on looks exactly like a missing folder otherwise.
     $hasContent = & $Provider.TestContentPath @{ Path = $Plan.ContentPath }
-    & $add 'ContentPath' $hasContent 'Error' $(if ($hasContent) { "Source found: $($Plan.ContentPath)" }
-        else { "The package source was not found at $($Plan.ContentPath). Copy the package to the content share first." })
+    if ($hasContent) {
+        & $add 'ContentPath' $true 'Error' "Source found: $($Plan.ContentPath)"
+    }
+    else {
+        $shareRoot  = Split-Path -Parent $Plan.ContentPath
+        $shareThere = & $Provider.TestContentShare @{ Path = $shareRoot }
+        $who        = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+        if (-not $shareThere) {
+            & $add 'ContentPath' $false 'Error' ("The content share itself cannot be reached: $shareRoot. " +
+                "This runs as $who - check that account can open the share from THIS machine, and that the path in " +
+                "Config\Environments\$($Plan.Environment).xml is right. A share in another domain usually means the " +
+                "account has no rights on it.")
+        }
+        else {
+            $names = @(& $Provider.GetContentShareNames @{ Path = $shareRoot })
+            $near  = if ($names.Count -gt 0) { " The share does contain: $($names -join ', ')." } else { ' The share is reachable but empty.' }
+            & $add 'ContentPath' $false 'Error' ("The share is reachable but there is no folder named " +
+                "'$($Plan.PackageName)' in it. Copy the package FOLDER - not its contents - to $shareRoot.$near " +
+                "Browsing the package from C:\temp only fills in the window; SCCM fetches the content from the share.")
+        }
+    }
+
+    # 1a. ...and it must be a UNC path. SCCM stores the content location for
+    #     distribution points to fetch, so a local path is meaningless to it and
+    #     is refused outright:
+    #
+    #       "Directory path 'C:\temp\...' does not appear to be a valid UNC path.
+    #        Must be in the format of \\myserver\share"
+    #
+    #     That refusal comes from Add-CMScriptDeploymentType, which runs AFTER
+    #     the application has been created - so without this check the run gets
+    #     as far as creating an application and then rolls it straight back out.
+    #     Cheaper to say so here, before anything exists.
+    #     A preview creates nothing and never reaches that cmdlet, so there it is
+    #     reported as a warning: the plan is still worth reviewing.
+    $isUnc = ([string]$Plan.ContentPath).StartsWith('\\')
+    & $add 'ContentPathIsUnc' $isUnc $(if ($DryRun) { 'Warning' } else { 'Error' }) `
+        $(if ($isUnc) { 'The content share is a UNC path, as SCCM requires.' }
+          else { "The content share is '$($Plan.ContentPath)', a local path. SCCM only accepts a UNC path here, because distribution points fetch the content over the network - a local path means nothing to them. Set Content/@share in Config\Environments\$($Plan.Environment).xml to a share such as \\server\share." })
 
     # 1b. the package name's own site prefix must match the environment it is
     #     being published into. INA_ADOBE_... published into ICZ would create
@@ -780,30 +1102,45 @@ function Invoke-AudiSwIntegration {
     # One package, one environment, one job at a time.
     if (-not $DryRun) {
         $lock = Enter-AudiPackageLock -Plan $Plan -Root $Root
-        if (-not $lock.Ok) { $lock = $null; return & $finish $false $lock.Message $null }
-    }
-
-    $connection = Connect-AudiSccm -Plan $Plan -DryRun:$DryRun
-    if (-not $connection.Ok) { return & $finish $false $connection.Message $null }
-    Write-AudiLog -Context $log -Message $connection.Message
-
-    # Fail before creating anything, rather than halfway through and rolling back.
-    $preflight = $null
-    if (-not $SkipPreflight) {
-        Write-AudiLog -Context $log -Step 'Preflight' -Message 'Checking prerequisites.'
-        $preflight = Test-AudiSwPrerequisite -Plan $Plan -Provider $Provider -Root $Root
-        foreach ($finding in $preflight.Findings) {
-            Write-AudiLog -Context $log -Step 'Preflight' -Level $(if ($finding.Ok) { 'Info' } elseif ($finding.Severity -eq 'Warning') { 'Warn' } else { 'Error' }) -Message "$($finding.Check): $($finding.Message)"
-        }
-        if (-not $preflight.Ok) {
-            $reasons = ($preflight.Blocking | ForEach-Object { $_.Message }) -join ' '
-            return & $finish $false "Prerequisites not met, so nothing was created. $reasons" $preflight
+        if (-not $lock.Ok) {
+            # Read the reason BEFORE clearing it. $finish releases whatever $lock
+            # holds and we never took one, but clearing it first leaves
+            # $null.Message, which throws under StrictMode - and then the real
+            # reason is replaced by "The property 'Message' cannot be found".
+            $reason = [string]$lock.Message
+            $lock = $null
+            return & $finish $false $reason $null
         }
     }
+
+    # From here on the lock is held, so everything runs inside a try/finally.
+    # Connecting and preflight both THROW on some failures rather than returning,
+    # and an exception escaping this function skips $finish entirely - which
+    # leaves the lock file behind. Every later run of that package then fails on
+    # a lock nobody holds, until it ages out.
+    try {
+        $connection = Connect-AudiSccm -Plan $Plan -DryRun:$DryRun
+        if (-not $connection.Ok) { return & $finish $false $connection.Message $null }
+        Write-AudiLog -Context $log -Message $connection.Message
+
+        # Fail before creating anything, rather than halfway through and rolling back.
+        $preflight = $null
+        if (-not $SkipPreflight) {
+            Write-AudiLog -Context $log -Step 'Preflight' -Message 'Checking prerequisites.'
+            $preflight = Test-AudiSwPrerequisite -Plan $Plan -Provider $Provider -Root $Root -DryRun:$DryRun
+            foreach ($finding in $preflight.Findings) {
+                Write-AudiLog -Context $log -Step 'Preflight' -Level $(if ($finding.Ok) { 'Info' } elseif ($finding.Severity -eq 'Warning') { 'Warn' } else { 'Error' }) -Message "$($finding.Check): $($finding.Message)"
+            }
+            if (-not $preflight.Ok) {
+                $reasons = ($preflight.Blocking | ForEach-Object { $_.Message }) -join ' '
+                return & $finish $false "Prerequisites not met, so nothing was created. $reasons" $preflight
+            }
+        }
 
     $succeeded = New-Object System.Collections.Generic.HashSet[string]
     $failed    = $false
 
+    $stepTotal = @(Get-AudiIntegrationStep).Count
     foreach ($step in (Get-AudiIntegrationStep)) {
 
         # order is enforced here, not trusted to the operator
@@ -816,7 +1153,10 @@ function Invoke-AudiSwIntegration {
             continue
         }
 
-        if ($OnProgress) { & $OnProgress $step.Name }
+        # Extra arguments so a caller that wants to report progress onward - the
+        # collector writing its heartbeat - can say how far through it is. A
+        # handler declaring only param($stepName) simply ignores the rest.
+        if ($OnProgress) { & $OnProgress $step.Name ($results.Count + 1) $stepTotal $results.ToArray() }
         Write-AudiLog -Context $log -Step $step.Key -Message $step.Name
 
         try {
@@ -839,23 +1179,50 @@ function Invoke-AudiSwIntegration {
         }
         catch {
             # a failure is reported as a failure - the old tool said "Done."
-            $results.Add([pscustomobject]@{ Step = $step.Key; Name = $step.Name; Ok = $false; Message = $_.Exception.Message }) | Out-Null
-            Write-AudiLog -Context $log -Step $step.Key -Level 'Error' -Message $_.Exception.Message
+            # never $_.Exception.Message straight through: an empty one fails the log
+            # call and replaces the real reason with a binding error
+            $reason = Get-AudiErrorText -ErrorRecord $_ -Context "$($step.Name) failed."
+            $results.Add([pscustomobject]@{ Step = $step.Key; Name = $step.Name; Ok = $false; Message = $reason }) | Out-Null
+            Write-AudiLog -Context $log -Step $step.Key -Level 'Error' -Message $reason
             $failed = $true
             break
         }
     }
 
-    if ($failed -and -not $NoRollback -and $created.Count -gt 0) {
-        Write-AudiLog -Context $log -Step 'Rollback' -Level 'Warn' -Message "Rolling back $($created.Count) created object(s)."
-        $rollback = Undo-AudiCreatedObject -Plan $Plan -Provider $Provider -Created $created
-        foreach ($undone in $rollback) { Write-AudiLog -Context $log -Step 'Rollback' -Message $undone }
-    }
+        if ($failed -and -not $NoRollback -and $created.Count -gt 0) {
+            Write-AudiLog -Context $log -Step 'Rollback' -Level 'Warn' -Message "Rolling back $($created.Count) created object(s)."
+            $rollback = Undo-AudiCreatedObject -Plan $Plan -Provider $Provider -Created $created
+            foreach ($undone in $rollback) { Write-AudiLog -Context $log -Step 'Rollback' -Message $undone }
+        }
 
-    $okCount = @($results | Where-Object { $_.Ok }).Count
-    $summary = if ($failed) { "Integration failed after $okCount of $(@(Get-AudiIntegrationStep).Count) steps." }
-               else { "Integration completed - $okCount steps." }
-    return & $finish (-not $failed) $summary $preflight
+        $okCount = @($results | Where-Object { $_.Ok }).Count
+
+        # Say plainly what is left on the site. "Failed after 0 of 8 steps" does
+        # not tell an operator whether an application is sitting there half-made,
+        # and that is the first thing they need to know.
+        $state = if (-not $failed) { '' }
+                 elseif (@($rollback).Count -gt 0) {
+                     $stuck = @($rollback | Where-Object { $_ -like '*COULD NOT BE REMOVED*' })
+                     if ($stuck.Count -gt 0) {
+                         " {0} object(s) were rolled back but {1} could NOT be removed and are still on the site: {2}." -f `
+                             (@($rollback).Count - $stuck.Count), $stuck.Count, ($stuck -join '; ')
+                     } else {
+                         " Everything it had created was rolled back, so nothing was left on the site: {0}." -f (@($rollback) -join '; ')
+                     }
+                 }
+                 elseif ($created.Count -gt 0) { " {0} object(s) were created and NOT rolled back: {1}." -f $created.Count, (@($created | ForEach-Object { "$($_.Kind) $($_.Name)" }) -join '; ') }
+                 else { ' Nothing had been created yet, so nothing was left on the site.' }
+
+        $summary = if ($failed) { "Integration failed after $okCount of $(@(Get-AudiIntegrationStep).Count) steps.$state" }
+                   else { "Integration completed - $okCount steps." }
+        return & $finish (-not $failed) $summary $preflight
+    }
+    finally {
+        # $finish releases the lock on every path that returns a result. This
+        # catches the paths that do not - an exception on the way out - so a
+        # crash can never leave the package locked against its next run.
+        Exit-AudiPackageLock -Lock $lock
+    }
 }
 
 function Invoke-AudiSwModification {
@@ -875,7 +1242,20 @@ function Invoke-AudiSwModification {
         [scriptblock]$OnProgress
     )
 
-    if (-not $Provider) { $Provider = if ($DryRun) { New-AudiSccmDryRunProvider } else { New-AudiSccmProvider } }
+    # A Modify rehearsal has to assume the application is already there. Modify
+    # exists only for applications that exist, so a dry-run provider that reports
+    # nothing on the site would fail every rehearsal at the first step with "use
+    # Integrate instead" - which is what a packager testing the flow hits, and it
+    # tells them nothing. Seeded with this package's own objects, the rehearsal
+    # shows the shape of a real Modify. A caller that wants to rehearse a
+    # different starting state passes its own provider.
+    if (-not $Provider) {
+        $Provider = if ($DryRun) {
+            New-AudiSccmDryRunProvider -ExistingApplications @($Plan.ApplicationName) `
+                                       -ExistingCollections  @($Plan.Collections | ForEach-Object { $_.Name }) `
+                                       -ExistingDeployments  @($Plan.Collections | ForEach-Object { $_.Name })
+        } else { New-AudiSccmProvider }
+    }
     $log = New-AudiLogContext -Plan $Plan -Root $null -DryRun:$DryRun
 
     if (-not $Plan.Verified -and -not $AllowUnverifiedEnvironment -and -not $DryRun) {
@@ -901,6 +1281,7 @@ function Invoke-AudiSwModification {
     $succeeded = New-Object System.Collections.Generic.HashSet[string]
     $failed    = $false
 
+    $stepTotal = @(Get-AudiModifyStep).Count
     foreach ($step in (Get-AudiModifyStep)) {
         $missing = @($step.DependsOn | Where-Object { -not $succeeded.Contains($_) })
         if ($missing.Count -gt 0) {
@@ -909,7 +1290,10 @@ function Invoke-AudiSwModification {
             $failed = $true
             continue
         }
-        if ($OnProgress) { & $OnProgress $step.Name }
+        # Extra arguments so a caller that wants to report progress onward - the
+        # collector writing its heartbeat - can say how far through it is. A
+        # handler declaring only param($stepName) simply ignores the rest.
+        if ($OnProgress) { & $OnProgress $step.Name ($results.Count + 1) $stepTotal $results.ToArray() }
         try {
             # $stepKey, not $step.Key: Invoke-AudiWithRetry has its own -Step
             # parameter, and PowerShell variable names are case-insensitive, so
@@ -923,8 +1307,11 @@ function Invoke-AudiSwModification {
             Write-AudiLog -Context $log -Step $step.Key -Message $message
         }
         catch {
-            $results.Add([pscustomobject]@{ Step = $step.Key; Name = $step.Name; Ok = $false; Message = $_.Exception.Message }) | Out-Null
-            Write-AudiLog -Context $log -Step $step.Key -Level 'Error' -Message $_.Exception.Message
+            # never $_.Exception.Message straight through: an empty one fails the log
+            # call and replaces the real reason with a binding error
+            $reason = Get-AudiErrorText -ErrorRecord $_ -Context "$($step.Name) failed."
+            $results.Add([pscustomobject]@{ Step = $step.Key; Name = $step.Name; Ok = $false; Message = $reason }) | Out-Null
+            Write-AudiLog -Context $log -Step $step.Key -Level 'Error' -Message $reason
             $failed = $true
             break
         }
@@ -972,6 +1359,7 @@ function Invoke-AudiSwRemoval {
     $succeeded = New-Object System.Collections.Generic.HashSet[string]
     $failed    = $false
 
+    $stepTotal = @(Get-AudiRemovalStep).Count
     foreach ($step in (Get-AudiRemovalStep)) {
         $missing = @($step.DependsOn | Where-Object { -not $succeeded.Contains($_) })
         if ($missing.Count -gt 0) {
@@ -980,14 +1368,20 @@ function Invoke-AudiSwRemoval {
             $failed = $true
             continue
         }
-        if ($OnProgress) { & $OnProgress $step.Name }
+        # Extra arguments so a caller that wants to report progress onward - the
+        # collector writing its heartbeat - can say how far through it is. A
+        # handler declaring only param($stepName) simply ignores the rest.
+        if ($OnProgress) { & $OnProgress $step.Name ($results.Count + 1) $stepTotal $results.ToArray() }
         try {
             $message = Invoke-AudiRemovalStepBody -Key $step.Key -Plan $Plan -Provider $Provider
             $null = $succeeded.Add($step.Key)
             $results.Add([pscustomobject]@{ Step = $step.Key; Name = $step.Name; Ok = $true; Message = $message }) | Out-Null
         }
         catch {
-            $results.Add([pscustomobject]@{ Step = $step.Key; Name = $step.Name; Ok = $false; Message = $_.Exception.Message }) | Out-Null
+            # never $_.Exception.Message straight through: an empty one fails the log
+            # call and replaces the real reason with a binding error
+            $reason = Get-AudiErrorText -ErrorRecord $_ -Context "$($step.Name) failed."
+            $results.Add([pscustomobject]@{ Step = $step.Key; Name = $step.Name; Ok = $false; Message = $reason }) | Out-Null
             $failed = $true
             # removal does not stop: independent steps are still attempted
         }

@@ -1,0 +1,3 @@
+<Components xmlns="http://schemas.microsoft.com/IDE/MEF">
+  <Assembly Name="Microsoft.Ide.Shell.ViewManager" />
+</Components>

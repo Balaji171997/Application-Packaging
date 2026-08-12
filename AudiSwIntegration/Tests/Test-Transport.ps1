@@ -112,6 +112,15 @@ try {
     Assert-Equal 'nothing stuck in Working' 0 (@(Get-ChildItem $paths.Working -Filter '*.xml').Count)
     Assert-True  'a result file was written' (Test-Path -LiteralPath $submission.ResultPath)
 
+    # The collector reports progress through a scriptblock. If that scriptblock
+    # cannot see the engine's own functions - which is what .GetNewClosure() does
+    # to it - every step fails with "the term ... is not recognized" and the job
+    # is lost. It is not enough that the run finished; check what it actually said.
+    $collected = New-Object System.Xml.XmlDocument; $collected.Load($submission.ResultPath)
+    $said = @($collected.SelectNodes('/JobResult/Steps/Step') | ForEach-Object { $_.message }) -join ' '
+    Assert-True 'no step failed on a name the handler could not resolve' `
+        ($said -notlike '*is not recognized*') $said
+
     # ----------------------------------------------------------- the result
     Write-Host ''
     Write-Host 'The result' -ForegroundColor Cyan
@@ -164,6 +173,95 @@ try {
     $timedOut = Wait-AudiSwJobResult -Submission $orphan -TimeoutMinutes 0 -PollSeconds 1
     Assert-True 'waiting reports not found rather than hanging' (-not $timedOut.Found)
     Assert-True 'the message explains what to check' ($timedOut.Message -like '*not running*')
+
+    # -------------------------------------------------- reading results back
+    # A packager who closed the window must still be able to see what happened.
+    Write-Host ''
+    Write-Host 'Looking up an earlier run' -ForegroundColor Cyan
+    $history = @(Get-AudiSwJobHistory -DropFolder $drop -PackageName $package)
+    Assert-Equal 'both finished runs are found again' 2 $history.Count
+    Assert-True  'the newest is first' ($history[0].Completed -ge $history[1].Completed)
+    Assert-True  'a failed run is found too, not only the successful one' `
+        (@($history | Where-Object { $_.Outcome -eq 'Failed' }).Count -eq 1)
+
+    $succeeded = @($history | Where-Object { $_.Outcome -eq 'Succeeded' })[0]
+    Assert-Equal 'the earlier run still reports its eight steps' 8 @($succeeded.Steps).Count
+    Assert-Equal 'the earlier run still carries its RFC' 'RFC0012345' $succeeded.Rfc
+    Assert-True  'the earlier run remembers it was a dry run' $succeeded.DryRun
+    Assert-True  'the result file it came from is named' (Test-Path -LiteralPath $succeeded.Path)
+
+    # a name that was never run, and a folder that is not there, must both stay quiet
+    Assert-Equal 'an unknown package has no history' 0 `
+        @(Get-AudiSwJobHistory -DropFolder $drop -PackageName 'INA_NOTHING_x64_1.0.0-0001_MUL').Count
+    Assert-Equal 'a drop folder that does not exist yet has no history' 0 `
+        @(Get-AudiSwJobHistory -DropFolder (Join-Path $drop 'nowhere') -PackageName $package).Count
+    Assert-Equal 'the caller can cap how many runs come back' 1 `
+        @(Get-AudiSwJobHistory -DropFolder $drop -PackageName $package -Newest 1).Count
+
+    # ---------------------------------------------- watching a job in progress
+    # The window holds no connection to the server. The heartbeat the collector
+    # writes after every step is the only thing that makes it look live, and the
+    # only reason a packager can close the window and pick the job back up.
+    Write-Host ''
+    Write-Host 'Following a job that is still running' -ForegroundColor Cyan
+
+    $liveJob = [pscustomobject]@{ JobId = 'live-0001'; Environment = 'INA'; PackageName = $package; Rfc = 'RFC0012345' }
+    $beat    = Join-Path $paths.Working "$($package)_live-0001.result.xml"
+    Write-AudiSwJobProgress -Path $beat -Job $liveJob -Executor $me -CurrentStep 'Collections' `
+                            -StepNumber 4 -StepCount 8 -DryRun `
+                            -Completed @(
+                                [pscustomobject]@{ Step = 'Application'; Ok = $true; Message = 'created' }
+                                [pscustomobject]@{ Step = 'Category';    Ok = $true; Message = 'set' }
+                                [pscustomobject]@{ Step = 'Content';     Ok = $true; Message = 'distributed' })
+
+    Assert-True 'a heartbeat is written while the job runs' (Test-Path -LiteralPath $beat)
+    Assert-True 'no half-written heartbeat is left behind'  (-not (Test-Path -LiteralPath "$beat.writing"))
+    $beatCheck = Test-AudiConfigFile -Path $beat -SchemaPath (Join-Path (Get-AudiConfigRoot) 'Environment.xsd')
+    Assert-True 'the heartbeat validates against the same schema as a result' $beatCheck.Ok ($beatCheck.Errors -join '; ')
+
+    $live = @(Get-AudiSwJobHistory -DropFolder $drop -PackageName $package)
+    Assert-Equal 'the running job comes back first'        'Running' $live[0].Outcome
+    Assert-Equal 'it reports the steps done so far'        3 @($live[0].Steps).Count
+    Assert-Equal 'and how many there are in total'         8 $live[0].StepCount
+    Assert-True  'it names the step being worked on'       ($live[0].Message -like '*Collections*') $live[0].Message
+    Assert-True  'the finished runs are still listed after it' (@($live | Where-Object { $_.Outcome -ne 'Running' }).Count -eq 2)
+
+    # a heartbeat names no more people than a result does
+    $beatRaw = (Get-Content -LiteralPath $beat -Raw).Replace($me, 'THE-SERVICE-ACCOUNT')
+    Assert-True 'the heartbeat names nobody but the executor' `
+        (-not ($beatRaw -like "*$($me.Split('\')[-1])*")) 'a person reached the heartbeat file'
+
+    Remove-Item -LiteralPath $beat -Force
+    Assert-Equal 'once it finishes the heartbeat is gone and only the result remains' 2 `
+        @(Get-AudiSwJobHistory -DropFolder $drop -PackageName $package).Count
+
+    # ------------------------------------------- a job in the wrong folder
+    # One drop folder serves one environment. A job for another environment has
+    # been put there by mistake, and running it would carry work out against a
+    # site the collector was never pointed at.
+    Write-Host ''
+    Write-Host 'A job in the wrong folder' -ForegroundColor Cyan
+
+    $inaDrop = (Get-AudiEnvironment -Code 'INA').Transport.DropFolder
+    $strayDoc = New-AudiSwJobFile -PackageName 'ICZ_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'ICZ' `
+                                  -Rfc 'RFC0012345' -NameEn 'x' -DryRun
+    $stray = Submit-AudiSwJob -DropFolder $inaDrop -Job $strayDoc
+    try {
+        & $watcher -DropFolder $inaDrop -DryRun -EngineRoot (Join-Path (Split-Path -Parent $PSScriptRoot) 'Server\Engine')
+        $strayResult = Wait-AudiSwJobResult -Submission $stray -TimeoutMinutes 1 -PollSeconds 1
+        Assert-True 'an ICZ job left in INA''s folder is refused' (-not $strayResult.Ok) $strayResult.Message
+        Assert-True 'and the refusal names both environments' `
+            ($strayResult.Message -like '*ICZ*INA*') $strayResult.Message
+        Assert-True 'nothing was done to either site' ($strayResult.Message -like '*Nothing has been done*')
+    }
+    finally {
+        # remove only what this check created - the folder is a real one
+        foreach ($leftover in @($stray.Path, $stray.ResultPath, $stray.FailedPath,
+                                (Join-Path (Join-Path $inaDrop 'Failed') (Split-Path -Leaf $stray.Path)),
+                                (Join-Path (Join-Path $inaDrop 'Done')   (Split-Path -Leaf $stray.Path)))) {
+            if ($leftover -and (Test-Path -LiteralPath $leftover)) { Remove-Item -LiteralPath $leftover -Force -ErrorAction SilentlyContinue }
+        }
+    }
 }
 finally {
     if (Test-Path -LiteralPath $drop) { Remove-Item -LiteralPath $drop -Recurse -Force -ErrorAction SilentlyContinue }

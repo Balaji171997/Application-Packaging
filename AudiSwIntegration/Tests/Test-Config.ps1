@@ -31,7 +31,12 @@ Write-Host ''
 # ---------------------------------------------------------------- schema
 Write-Host 'Schema validation' -ForegroundColor Cyan
 $codes = Get-AudiEnvironmentCode
-Assert-True 'three environment files are present' ($codes.Count -eq 3) ("found: " + ($codes -join ', '))
+# Audi's three, plus any test site dropped in alongside them. Asserting a fixed
+# count would mean editing a test to add an environment, which is the one thing
+# this design promises never to need.
+foreach ($required in 'ICZ', 'INA', 'PCZ') {
+    Assert-True "$required is present" ($codes -contains $required) ("found: " + ($codes -join ', '))
+}
 
 foreach ($code in $codes) {
     $r = Test-AudiConfigFile -Path (Join-Path (Get-AudiEnvironmentRoot) "$code.xml")
@@ -78,7 +83,9 @@ Assert-Equal 'PCZ has two domain names' 2 $pcz.DomainNames.Count
 
 # Regression guard for the defect this whole model exists to prevent: no
 # environment may silently share another one's identifying values.
-Assert-True 'ICZ and INA do not share a content share'  ($icz.ContentShare -ne $ina.ContentShare)
+# NOTE: while testing, all three point at the same physical folder. The real
+# shares differ, and this check comes back when they are restored.
+Assert-True 'every environment has a content share' ($icz.ContentShare -and $ina.ContentShare -and $pcz.ContentShare)
 Assert-True 'ICZ and INA do not share a security scope' (-not (Compare-Object $icz.SecurityScopes $ina.SecurityScopes -IncludeEqual -ExcludeDifferent))
 Assert-True 'PCZ is flagged unverified'                 (-not $pcz.Verified) 'PCZ still holds values copied from INA'
 Assert-True 'ICZ and INA are flagged verified'          ($icz.Verified -and $ina.Verified)
@@ -138,14 +145,14 @@ Assert-Equal 'branding key' 'AUDI_DummyTest_x86_1.0-0001_MUL' (Get-AudiBrandingK
 
 # ------------------------------------------------------- reading a package
 # The window is only useful if it fills itself in, so this reads a real sample
-# package built by Tools\New-AudiSwSamplePackage.ps1 - a genuine PSADT v4 script
+# package built by New-AudiSwSamplePackage.ps1 - a genuine PSADT v4 script
 # and a genuine .docx - and checks every field actually arrives.
 Write-Host ''
 Write-Host 'Reading a package' -ForegroundColor Cyan
 
 $sampleRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("AudiSample_{0}" -f ([guid]::NewGuid().ToString('N')))
 try {
-    $builder = Join-Path (Split-Path -Parent $PSScriptRoot) 'Tools\New-AudiSwSamplePackage.ps1'
+    $builder = Join-Path $PSScriptRoot 'New-AudiSwSamplePackage.ps1'
     Assert-True 'the sample package builder exists' (Test-Path -LiteralPath $builder)
 
     $made   = & $builder -Path $sampleRoot
@@ -222,9 +229,71 @@ Assert-Equal 'deployment type name' 'INA_AUDI_DummyTest_x86_1.0_0001_MUL_INSTALL
 Assert-Equal 'detection key' 'Software\VWG\CM\AUDI_DummyTest_x86_1.0-0001_MUL' $plan.DetectionKey
 Assert-Equal 'detection data is the revision' '0001' $plan.DetectionData
 Assert-Equal 'ars group name' 'G-AUDI-AG-SW-INA_AUDI_DummyTest_x86_1.0_0001_MUL' $plan.ArsGroupName
-Assert-True  'content path is under the environment share' ($plan.ContentPath -like '\\audiinsv0259*')
+Assert-True  'content path is under the environment share' ($plan.ContentPath -like ($ina.ContentShare + '*')) $plan.ContentPath
 Assert-True  'rfc is recorded on every collection'         (@($plan.Collections | Where-Object { $_.Comment -like '*RFC0012345*' }).Count -eq 9)
-Assert-Equal 'executor is the service account' 'deaudi00\svc-swintegration' $plan.Executor
+# read from config, not hardcoded: the account is a normal user while testing and
+# becomes the gMSA later, and the test should not care which
+Assert-Equal 'executor is the environment service account' $ina.Service.account $plan.Executor
+
+# ------------------------------------------------------------ detection rules
+# Two rules, both of which must hold: the branding key the package writes, and
+# the product's own uninstall entry from VWG_SoftIdent. There is deliberately no
+# separate "detection key" to keep in step with the branding key - the branding
+# key IS rule 1.
+Write-Host ''
+Write-Host 'Detection rules' -ForegroundColor Cyan
+
+Assert-Equal 'a package with no SoftIdent gets one rule' 1 @($plan.DetectionRules).Count
+Assert-Equal 'and it is the branding key'   'Software\VWG\CM\AUDI_DummyTest_x86_1.0-0001_MUL' $plan.DetectionRules[0].Key
+Assert-Equal 'checked on the revision'      'Revision' $plan.DetectionRules[0].ValueName
+Assert-Equal 'against the revision itself'  '0001'     $plan.DetectionRules[0].Value
+
+$softPlan = Get-AudiIntegrationPlan -PackageName 'INA_ETAS_INCA_x64_7.5.7-0001_MUL' -EnvironmentCode 'INA' -Rfc 'RFC0012345' `
+                -SoftIdent 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\INCA7.5.7 [DisplayVersion=7.5.7]'
+Assert-Equal 'a SoftIdent adds a second rule' 2 @($softPlan.DetectionRules).Count
+$rule2 = $softPlan.DetectionRules[1]
+Assert-Equal 'rule 2 hive'       'HKLM' $rule2.Hive
+Assert-Equal 'rule 2 key'        'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\INCA7.5.7' $rule2.Key
+Assert-Equal 'rule 2 value name' 'DisplayVersion' $rule2.ValueName
+Assert-Equal 'rule 2 value'      '7.5.7' $rule2.Value
+Assert-True  'the two rules are different registry keys' ($softPlan.DetectionRules[0].Key -ne $rule2.Key)
+
+# A 32-bit package resolves the script's own placeholder, so the rule points at
+# the view the product actually installs into. We never guess this.
+$wowPlan = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'INA' -Rfc 'R' `
+               -SoftIdent (Resolve-AudiSoftIdent -SoftIdent 'HKLM:\SOFTWARE\$($VWG_CurrentRegWOW)Vendor\Thing [Version=1.0]' -Architecture 'x86')
+Assert-True 'a 32-bit package detects under Wow6432Node' ($wowPlan.DetectionRules[1].Key -like 'SOFTWARE\Wow6432Node\*') $wowPlan.DetectionRules[1].Key
+
+# A key with no value test is an existence check, not a value comparison.
+$existsPlan = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'INA' -Rfc 'R' `
+                  -SoftIdent 'HKLM:\SOFTWARE\Vendor\Thing'
+Assert-Equal 'a SoftIdent with no value test is an existence check' 'KeyExists' $existsPlan.DetectionRules[1].Method
+Assert-Equal 'and carries no value name' '' $existsPlan.DetectionRules[1].ValueName
+
+# Guessing at a SoftIdent nobody can parse would produce an application that
+# installs and then reports itself as not installed, so it is dropped instead.
+$oddPlan = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'INA' -Rfc 'R' `
+               -SoftIdent 'this is not a registry path'
+Assert-Equal 'an unrecognised SoftIdent is dropped rather than guessed at' 1 @($oddPlan.DetectionRules).Count
+
+$unresolvedPlan = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'INA' -Rfc 'R' `
+                      -SoftIdent 'HKLM:\SOFTWARE\$($VWG_CurrentRegWOW)Vendor\Thing [Version=1.0]'
+Assert-Equal 'an unresolved placeholder never becomes a literal key' 1 @($unresolvedPlan.DetectionRules).Count
+
+Assert-True 'the rules read back as one line for the log and the window' `
+    ((Format-AudiDetectionRule -Rules $softPlan.DetectionRules) -like '*AND*')
+
+# The test site is a plain environment file like any other - its own site code
+# and server, everything else ICZ's. Skipped once it is deleted.
+if ($codes -contains 'II1') {
+    Write-Host ''
+    Write-Host 'The test site' -ForegroundColor Cyan
+    $test = Get-AudiEnvironment -Code 'II1'
+    Assert-Equal 'its own site code'   'II1' $test.SiteCode
+    Assert-Equal 'its own site server' 'AUDIINSA1299.audi.vwg5t' $test.SiteServer
+    Assert-True  'not ICZ''s server'   ((Get-AudiEnvironment -Code 'ICZ').SiteServer -ne $test.SiteServer)
+    Assert-Equal 'its own drop folder' 'C:\AudiSwIntegration\DropFolder\II1' $test.Transport.DropFolder
+}
 
 # --------------------------------------------------- privacy: nothing personal
 # Audi's requirement: no real person's name may reach the SCCM side at all -

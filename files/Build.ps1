@@ -1332,7 +1332,13 @@ function Merge-SnapshotDeltas {
             # EXPRESSION-based detection (a variable, double-quoted/interpolated, -and/-or, a Test-Path/Get-ItemProperty
             # cmdlet) is hand-crafted by the packager -> leave it intact (the predecessor's detection wins).
             $isExpr = $curRHS -match '(?i)(\$|`"|-and\b|-or\b|Test-Path|Get-ItemProperty)'
-            $simple = (-not $curSI) -or ($curSI -match '<[^>]*>') -or (@($curGuids).Count -le 1 -and -not $isExpr)
+            # A NAME-based Uninstall detection (a real ARP DisplayName subkey, e.g. ...\Uninstall\Mozilla Firefox 128.10.0)
+            # is an AUTHORED key on reuse - it must NOT be replaced by the snapshot's ProductCode {GUID}. Only replace an
+            # EMPTY / <placeholder> / single {GUID}-ProductCode detection. (Predecessor reuse: keep the predecessor's key;
+            # a GUID subkey is swapped old->new elsewhere, a name subkey keeps its name + version-swap.)
+            $curKey = if ($curSI -match '(?i)\\Uninstall\\([^\\\r\n]+?)\s*(?:\[|$)') { $Matches[1].Trim() } else { '' }
+            $curIsNameKey = $curKey -and ($curKey -notmatch '^\{[0-9A-Fa-f-]{36}\}$')
+            $simple = (-not $curSI) -or ($curSI -match '<[^>]*>') -or (@($curGuids).Count -le 1 -and -not $isExpr -and -not $curIsNameKey)
             if ($snapGuid -and -not $already -and $simple) {
                 $norm = Normalize-SoftIdent -Value $snapSI -Arch "$($NewPkg.Arch)"
                 $Text = Set-SessionValue -Text $Text -Field 'SoftIdent' -Value "'$norm'  # [snapshot-detection]"
@@ -1649,7 +1655,13 @@ function Build-PredecessorScript {
     }
     $out = Set-SessionField $out 'AppScriptDate' (Get-Date -Format 'MM/dd/yyyy')
     $out = [regex]::Replace($out, "(?m)(AppVersion\s*=\s*')[^']*(')", "`${1}$newVer`${2}")
-    if ($NewPkg.SoftIdent) {
+    # SoftIdent on REUSE: KEEP the predecessor's detection key. Only SEED it from the new source ($NewPkg.SoftIdent, e.g.
+    # an MSI ProductCode key) when the predecessor carried NO SoftIdent at all. When the predecessor HAS one, keep it -
+    # a GUID subkey gets its ProductCode swapped old->new (block below); a NAME subkey (e.g. "Mozilla Firefox 128.10.0")
+    # keeps its name and only its version is swapped (embedded [DisplayVersion=] bumped here + the global version pass).
+    # (Previously this ALWAYS overwrote the carried key with the new MSI's ProductCode - wrong for a name-based predecessor.)
+    $carriedSI = [regex]::Match($out, "(?m)^[ \t]*SoftIdent[ \t]*=[ \t]*'([^']*)'").Groups[1].Value.Trim()
+    if ($NewPkg.SoftIdent -and -not $carriedSI) {
         $out = [regex]::Replace($out, "(?m)(SoftIdent\s*=\s*')[^']*(')", "`${1}$($NewPkg.SoftIdent)`${2}")
     } elseif ($newVer) {
         # Predecessor-carried SoftIdent (no new-version snapshot): bump its embedded [DisplayVersion=...] to the NEW version
@@ -1752,7 +1764,9 @@ function Build-PredecessorScript {
     # bigger FreeSpace footprint, a fresher detection key, and any new app processes - de-duplicated so nothing the
     # predecessor already does is touched or duplicated. (Per-user config is still left to snippets in reuse mode.)
     $out = Merge-SnapshotDeltas -Text $out -NewPkg $NewPkg -Model $Model
-    $out = Set-ProcToBlockDefault -Text $out
+    # NB: no Set-ProcToBlockDefault on REUSE - the predecessor already decided ProcToBlock. If the predecessor left it
+    # EMPTY, it MUST stay empty (do NOT mirror ProcToClose into it); a non-empty predecessor list is carried as-is.
+    # (Set-ProcToBlockDefault still applies to FRESH packages, where mirroring ProcToClose is the sensible default.)
     # Carry the installation progress bar when the predecessor had it enabled (uncomment the template's
     # #Show-ADTInstallationProgress in the matching MAIN section). No-op when the predecessor had none.
     $pb = Set-PredecessorProgressBar -Text $out -Model $Model

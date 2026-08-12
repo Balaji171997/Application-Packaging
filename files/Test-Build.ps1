@@ -207,6 +207,53 @@ Assert "opt-out: pred-of-pred STILL dropped (1.1.0.0/{1111} absent)" ((-not ($ou
 Assert "opt-out adds NO generated block ({2222} absent)"             ($outNo -notmatch '22222222-2222')
 Assert "opt-out leaves ZERO uninstall-previous blocks"               ((([regex]::Matches($outNo,'Get-ADTApplication')).Count) -eq 0)
 
+# ---- REUSE fixes: name-based SoftIdent is KEPT (not replaced by the new MSI's ProductCode); empty ProcToBlock STAYS empty ----
+$fxPred = @'
+$adtSession = @{
+    AppName='Firefox'
+    AppVersion='128.10.0'
+    SoftIdent='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox 128.10.0 (x64 en-US) [DisplayVersion=128.10.0]'
+    ProcToClose=@('firefox')
+    ProcToBlock=@()
+}
+#*=== CUSTOM APPLICATION VARIABLES BEGIN ===
+#*=== CUSTOM APPLICATION VARIABLES END ===
+#*=== PRE-INSTALLATION BEGIN ===
+#*=== PRE-INSTALLATION END ===
+#*=== MAIN-INSTALLATION BEGIN ===
+Start-ADTMsiProcess -Action Install -FilePath 'Firefox_128.10.0.msi' -ProductCode '{55555555-5555-5555-5555-555555555555}'
+#*=== MAIN-INSTALLATION END ===
+#*=== POST-INSTALLATION BEGIN ===
+#*=== POST-INSTALLATION END ===
+#*=== PRE-UNINSTALLATION BEGIN ===
+#*=== PRE-UNINSTALLATION END ===
+#*=== MAIN-UNINSTALLATION BEGIN ===
+Start-ADTMsiProcess -Action Uninstall -ProductCode '{55555555-5555-5555-5555-555555555555}'
+#*=== MAIN-UNINSTALLATION END ===
+#*=== POST-UNINSTALLATION BEGIN ===
+#*=== POST-UNINSTALLATION END ===
+#*=== PRE-REPAIR BEGIN ===
+#*=== PRE-REPAIR END ===
+#*=== MAIN-REPAIR BEGIN ===
+#*=== MAIN-REPAIR END ===
+#*=== POST-REPAIR BEGIN ===
+#*=== POST-REPAIR END ===
+'@
+$fxModel = Read-PredecessorModel -PackageName 'Mozilla_Firefox_x64_128.10.0-0001_en-US' -Content $fxPred
+# current source is an MSI -> NewPkg.SoftIdent is a ProductCode key (this used to OVERWRITE the predecessor's name key)
+$fxNew = @{ Version='129.0.0'; MsiFileName='Firefox_129.0.0.msi'
+            ProductCode='{99999999-9999-9999-9999-999999999999}'; SoftIdent='{99999999-9999-9999-9999-999999999999} [DisplayVersion=129.0.0]'
+            # current source is an MSI, so the ProductCode auto-detect feeds SnapshotSoftIdent even with NO real snapshot.
+            # Merge-SnapshotDeltas used to treat the predecessor's NAME key as "simple" and overwrite it ('# [snapshot-detection]').
+            SnapshotSoftIdent='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{99999999-9999-9999-9999-999999999999} [DisplayVersion=129.0.0]'
+            Vendor='Mozilla'; AppName='Firefox'; Arch='x64'; Lang='en-US'; Revision='0001' }
+$fxOut = Build-PredecessorScript -Model $fxModel -NewPkg $fxNew -Template $tpl
+Assert "reuse: name SoftIdent KEPT (not replaced by MSI ProductCode)" (($fxOut -match 'Uninstall\\Mozilla Firefox') -and ($fxOut -notmatch "SoftIdent\s*=\s*'HKLM[^']*\{99999999"))
+Assert "reuse: SoftIdent name version-swapped 128.10.0 -> 129.0.0"    (($fxOut -match 'Mozilla Firefox 129\.0\.0') -and ($fxOut -notmatch 'Mozilla Firefox 128\.10\.0'))
+Assert "reuse: NO snapshot-detection overwrite of a name key"         ($fxOut -notmatch '# \[snapshot-detection\]')
+Assert "reuse: empty ProcToBlock STAYS empty (not mirrored)"          ($fxOut -match "(?m)^\s*ProcToBlock\s*=\s*@\(\)\s*$")
+Assert "reuse: ProcToClose carried from predecessor"                  ($fxOut -match "(?m)^\s*ProcToClose\s*=\s*@\('firefox'\)")
+
 # ---- Split-ExistingUninstallBlocks KEEP-checks: only a genuine predecessor-uninstall block is excised; dependency
 #      gates (negated), if/else logic, and DIFFERENT components (VC++ etc.) are KEPT. (DSA_PRODISAuthoring CodeMeter bug.)
 $sxId = @{ Vendor='DSA'; AppName='PRODISAuthoring'; FullName='DSA_PRODISAuthoring_x64_5.8.9-0001_en-US' }

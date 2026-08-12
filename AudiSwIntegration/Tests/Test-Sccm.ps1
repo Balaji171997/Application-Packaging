@@ -74,6 +74,17 @@ Assert-Equal 'nine deployments created'         9 (@($log | Where-Object Operati
 Assert-Equal 'ten objects filed (app + nine)'  10 (@($log | Where-Object Operation -eq 'MoveObject').Count)
 Assert-Equal 'one AD group created'             1 (@($log | Where-Object Operation -eq 'NewArsGroup').Count)
 
+# Move-CMObject wants a PROVIDER path rooted at the object type, not the folder
+# name the environment file holds. A bare name binds to the parameter and then
+# fails at the site, so the built path is checked here rather than on ICZ.
+$moves = @($log | Where-Object Operation -eq 'MoveObject' | ForEach-Object { $_.Detail })
+Assert-True 'the application is filed under the site drive, not a bare folder name' `
+    (@($moves | Where-Object { $_ -like '* -> INA:\Application\INA-Applications' }).Count -eq 1) ($moves -join ' | ')
+Assert-True 'collections are filed under DeviceCollection, keeping their sub-folders' `
+    (@($moves | Where-Object { $_ -like '* -> INA:\DeviceCollection\SCCM-Manager\Single-Removals' }).Count -eq 1) ($moves -join ' | ')
+Assert-Equal 'every filed object gets a rooted path' 10 `
+    (@($moves | Where-Object { $_ -match ' -> INA:\\(Application|DeviceCollection)\\' }).Count)
+
 # The application must exist before anything is deployed to it.
 $appIndex  = [array]::IndexOf(@($log | ForEach-Object { $_.Operation }), 'NewApplication')
 $deployIdx = [array]::IndexOf(@($log | ForEach-Object { $_.Operation }), 'NewDeployment')
@@ -129,9 +140,53 @@ Assert-Equal 'nothing was created when refused' 0 $provider4.Log.Count
 Write-Host ''
 Write-Host 'Preflight' -ForegroundColor Cyan
 
-$pf = Test-AudiSwPrerequisite -Plan (New-TestPlan) -Provider (New-AudiSccmDryRunProvider)
+# -DryRun, because the testing content share is a local path and SCCM only
+# accepts a UNC one. That is a warning for a preview - which creates nothing -
+# and a blocking error for a real run, checked separately below.
+$pf = Test-AudiSwPrerequisite -Plan (New-TestPlan) -Provider (New-AudiSccmDryRunProvider) -DryRun
 Assert-True  'preflight passes when everything is present' $pf.Ok
 Assert-Equal 'nothing is blocking' 0 $pf.Blocking.Count
+
+# SCCM refuses a local content path, and it refuses it INSIDE
+# Add-CMScriptDeploymentType - after the application has been created. Catching
+# it here is the difference between "nothing was created" and "an application was
+# created and then rolled straight back out".
+$localPath = Test-AudiSwPrerequisite -Plan (New-TestPlan) -Provider (New-AudiSccmDryRunProvider)
+$uncCheck  = @($localPath.Findings | Where-Object { $_.Check -eq 'ContentPathIsUnc' })
+Assert-Equal 'a local content share is checked'      1 $uncCheck.Count
+Assert-True  'and a real run is stopped by it'       (-not $uncCheck[0].Ok)
+Assert-True  'the run is refused before anything is created' (-not $localPath.Ok)
+Assert-True  'the message says what to set, and where' `
+    ($uncCheck[0].Message -like '*Content/@share*') $uncCheck[0].Message
+Assert-True  'a preview only warns, so a plan can still be reviewed' `
+    (@($pf.Findings | Where-Object { $_.Check -eq 'ContentPathIsUnc' })[0].Severity -eq 'Warning')
+
+# The content checks run while the current location is the SITE DRIVE, and a
+# path with no drive qualifier is resolved by the CURRENT provider. A UNC share
+# has no drive qualifier, so without naming the filesystem provider a share that
+# is sitting right there and perfectly readable comes back as "not found".
+$providerLines = @(Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'Server\Engine\Src\Sccm.ps1'))
+foreach ($probe in 'TestContentPath', 'TestContentShare', 'GetContentShareNames') {
+    # the assignment and the two lines after it - these probes span more than one line
+    $at = @(0..($providerLines.Count - 1) | Where-Object { $providerLines[$_] -match "^\s*$probe\s*=" })[0]
+    $block = ($providerLines[$at..([Math]::Min($at + 2, $providerLines.Count - 1))] -join ' ')
+    Assert-True "$probe pins itself to the filesystem provider" `
+        ($block -like '*FileSystem::*') "a UNC content share would read as missing from the site drive: $block"
+}
+
+# "not found" and "cannot be reached" need different fixes, so they must not
+# share one message.
+$noShare = Test-AudiSwPrerequisite -Plan (New-TestPlan) -Provider (New-AudiSccmDryRunProvider -Missing @('ContentPath', 'ContentShare'))
+$noShareFinding = @($noShare.Findings | Where-Object { $_.Check -eq 'ContentPath' })[0]
+Assert-True 'an unreachable share says so, and names the account' `
+    ($noShareFinding.Message -like '*cannot be reached*') $noShareFinding.Message
+
+$noFolder = Test-AudiSwPrerequisite -Plan (New-TestPlan) -Provider (New-AudiSccmDryRunProvider -Missing @('ContentPath'))
+$noFolderFinding = @($noFolder.Findings | Where-Object { $_.Check -eq 'ContentPath' })[0]
+Assert-True 'a reachable share with no package folder says THAT instead' `
+    ($noFolderFinding.Message -like '*no folder named*') $noFolderFinding.Message
+Assert-True 'and explains that browsing locally is not the same thing' `
+    ($noFolderFinding.Message -like '*fills in the window*') $noFolderFinding.Message
 
 # Each missing prerequisite must be caught, named, and must stop the run before
 # anything is created. The old tool only ever checked the source folder.
@@ -191,22 +246,33 @@ Assert-Equal 'a permanent fault is not retried' 1 $script:tries
 $run5 = Invoke-AudiSwIntegration -Plan (New-TestPlan) -Provider (New-AudiSccmDryRunProvider) -DryRun
 Assert-True 'the run reports where its log is' (-not [string]::IsNullOrWhiteSpace($run5.LogPath))
 if ($run5.LogPath -and (Test-Path -LiteralPath $run5.LogPath)) {
+    # The executor comes from config: a normal user while testing, the gMSA
+    # later. Blank it out before looking for a person, or the check would trip
+    # over the very account that is supposed to be there.
+    $executor = (Get-AudiEnvironment -Code 'INA').Service.account
     $text = Get-Content -LiteralPath $run5.LogPath -Raw
-    Assert-True 'the log names the executor'    ($text -like '*svc-swintegration*')
+    Assert-True 'the log names the executor'    ($text -like ('*' + $executor + '*'))
     Assert-True 'the log names the RFC'         ($text -like '*RFC0012345*')
     Assert-True 'the log marks it as a dry run' ($text -like '*DRY RUN*')
-    Assert-True 'the log names NO person'       (-not ($text -like "*$env:USERNAME*" -or $text -like '*tester*')) 'a user name reached the server log'
+
+    $textNoExec = $text.Replace($executor, 'THE-EXECUTOR')
+    Assert-True 'the log names nobody but the executor' `
+        (-not ($textNoExec -like "*$env:USERNAME*" -or $textNoExec -like '*tester*')) 'a user name reached the server log'
 
     $jobFile = Join-Path (Split-Path -Parent $run5.LogPath) 'job.json'
     Assert-True 'a job record is written' (Test-Path -LiteralPath $jobFile)
     if (Test-Path -LiteralPath $jobFile) {
         $raw = Get-Content -LiteralPath $jobFile -Raw
         $job = $raw | ConvertFrom-Json
-        Assert-Equal 'the job record keeps the executor'  'deaudi00\svc-swintegration' $job.Executor
-        Assert-Equal 'the job record keeps the RFC'       'RFC0012345'                 $job.Rfc
-        Assert-Equal 'the job record states the outcome'  'Succeeded'                  $job.Outcome
+        Assert-Equal 'the job record keeps the executor'  $executor    $job.Executor
+        Assert-Equal 'the job record keeps the RFC'       'RFC0012345' $job.Rfc
+        Assert-Equal 'the job record states the outcome'  'Succeeded'  $job.Outcome
         Assert-True  'the job record has no Requester field' (-not $job.PSObject.Properties['Requester'])
-        Assert-True  'the job record names NO person' (-not ($raw -like "*$env:USERNAME*" -or $raw -like '*tester*')) 'a user name reached job.json'
+        # JSON escapes the backslash, so DOMAIN\user is written DOMAIN\\user -
+        # blank out both spellings before looking for a person
+        $rawNoExec = $raw.Replace($executor.Replace('\', '\\'), 'THE-EXECUTOR').Replace($executor, 'THE-EXECUTOR')
+        Assert-True  'the job record names nobody but the executor' `
+            (-not ($rawNoExec -like "*$env:USERNAME*" -or $rawNoExec -like '*tester*')) 'a user name reached job.json'
     }
 } else {
     Assert-True 'the log file was created' $false "log not found at $($run5.LogPath)"
@@ -227,6 +293,35 @@ Assert-Equal 'no steps ran for the blocked environment' 0 $blocked.Steps.Count
 $pczPreview = Invoke-AudiSwIntegration -Plan $pczPlan -Provider (New-AudiSccmDryRunProvider) -DryRun
 Assert-True  'an unverified environment can still be previewed' $pczPreview.Ok
 Assert-Equal 'the PCZ preview covers ten collections' 10 (@($pczPreview.Provider.Log | Where-Object Operation -eq 'NewCollection').Count)
+
+# ---------------------------------------------------------- the package lock
+# Two jobs on the same package would half-create objects under both. The refusal
+# has to SAY that. It used to clear the lock before reading its message, so the
+# real reason was replaced by a StrictMode complaint - "The property 'Message'
+# cannot be found on this object" - which tells an operator nothing at all.
+# The lock is checked before the site is touched, so this needs no SCCM.
+Write-Host ''
+Write-Host 'The package lock' -ForegroundColor Cyan
+
+$lockPlan = New-TestPlan
+$held = Enter-AudiPackageLock -Plan $lockPlan -Root $null
+try {
+    Assert-True 'the first job takes the lock' $held.Ok $held.Message
+
+    $blocked = Invoke-AudiSwIntegration -Plan (New-TestPlan) -Provider (New-AudiSccmDryRunProvider)
+    Assert-True  'a second job on the same package is refused' (-not $blocked.Ok)
+    Assert-True  'and the refusal names the package and the job holding it' `
+        ($blocked.Message -like '*already being integrated*') $blocked.Message
+    Assert-True  'the reason is the lock, not a property error' `
+        ($blocked.Message -notlike '*cannot be found on this object*') $blocked.Message
+    Assert-Equal 'nothing ran while it was locked' 0 @($blocked.Steps).Count
+}
+finally { Exit-AudiPackageLock -Lock $held }
+
+# and the lock is free again once it is released
+$after = Enter-AudiPackageLock -Plan (New-TestPlan) -Root $null
+Assert-True 'the lock is released, so the next job can run' $after.Ok $after.Message
+Exit-AudiPackageLock -Lock $after
 
 # ---------------------------------------------------------------- modify
 # Modify reconciles an application that already exists: add what is missing,
@@ -306,7 +401,7 @@ Assert-True  'a matching prefix passes' (@($aligned.Findings | Where-Object { $_
 
 # One identity only: the shared account. A person must not survive into the result.
 Assert-True  'the result carries no requester' (-not $run.PSObject.Properties['Requester'])
-Assert-Equal 'the executor is the service account' 'deaudi00\svc-swintegration' $run.Executor
+Assert-Equal 'the executor is the environment service account' (Get-AudiEnvironment -Code 'INA').Service.account $run.Executor
 Assert-True  'the job id is carried through' ($run.JobId -eq $plan.JobId)
 
 # ---------------------------------------------------------------- removal

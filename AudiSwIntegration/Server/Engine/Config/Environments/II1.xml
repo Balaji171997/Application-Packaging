@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  II1 - the test site, for proving the tool against a real ConfigMgr.
+
+  ICZ's file with the two values that differ on the test machine:
+
+      Site code    II1                        (ICZ uses ICZ)
+      Site server  AUDIINSA1299.audi.vwg5t    (ICZ uses AUDIINSA1298)
+
+  Everything else is ICZ's.
+
+  Packages are named for the environment they go into, and preflight refuses a
+  mismatch, so a package tested here must be named II1_... - rename the folder
+  under the content share and type the new name in the window.
+
+  DELETE THIS FILE once testing moves to the real ICZ site.
+-->
+<Environment code="II1" description="Test site" schemaVersion="1.0" verified="true">
+
+  <Domain logonPrefix="deaudi005t\">
+    <Name>audi.vwg5t</Name>
+  </Domain>
+
+  <Site code="II1" server="AUDIINSA1299.audi.vwg5t"/>
+
+  <Runner host="AUDIINSA1299.audi.vwg5t"/>
+  <Service account="MN-MAN\AW140"
+           allowedGroup="MN-MAN\AW140"/>
+
+  <Transport mode="DropFolder"
+             dropFolder="C:\AudiSwIntegration\DropFolder\II1"
+             resultTimeoutMinutes="30"/>
+
+  <Content share="C:\temp"
+           distributionPointGroup="Test"/>
+
+  <ApplicationFolder>ICZ-Applications</ApplicationFolder>
+
+  <Collections>
+    <Collection prefix="II1-" limitingCollectionId="II10000C"
+                folder="II1-Site\II1-Software Management"        deploymentAction="Available"/>
+    <Collection prefix="SM1-" suffix="_InstallComputer" limitingCollectionId="SMS00001"
+                folder="SCCM-Manager\Single-Distributions"       deploymentAction="Available"/>
+    <Collection prefix="SM1-" suffix="_Query"           limitingCollectionId="SMS00001"
+                folder="SCCM-Manager\Global-Deployments"         deploymentAction="Available"/>
+    <Collection prefix="SM1-" suffix="_RemoveComputer"  limitingCollectionId="SMS00001"
+                folder="SCCM-Manager\Single-Removals"            deploymentAction="Uninstall"/>
+  </Collections>
+
+  <SecurityScopes>
+    <Scope>ICZ00001</Scope>
+    <Scope>ICZ00002</Scope>
+    <Scope>ICZ00005</Scope>
+    <Scope>ICZ00006</Scope>
+  </SecurityScopes>
+
+  <ActiveDirectory arsProviderUrl="http://audiinsa4030.audi.vwg5t/ARServerSPML/SPMLProvider.asmx?WDSL"
+                   groupOu="OU=Development_in_Progress,OU=Software-Groups,OU=Administration,OU=AUDI AG,DC=audi,DC=vwg5t"/>
+
+</Environment>

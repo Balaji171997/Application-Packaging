@@ -52,8 +52,8 @@
       <Setter Property="SelectionBrush" Value="{StaticResource TealDeep}"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="BorderBrush" Value="{StaticResource FieldBorder}"/>
-      <Setter Property="Padding" Value="11,5,11,5"/>
-      <Setter Property="Margin" Value="0,0,0,4"/>
+      <Setter Property="Padding" Value="12,7,12,7"/>
+      <Setter Property="Margin" Value="0,0,0,10"/>
       <Setter Property="VerticalContentAlignment" Value="Center"/>
       <Setter Property="Template">
         <Setter.Value>
@@ -61,8 +61,14 @@
             <Border x:Name="b" CornerRadius="6" Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
                     SnapsToDevicePixels="True">
+              <!-- PART_ContentHost must STRETCH. Binding its VerticalAlignment
+                   to VerticalContentAlignment centres it, which can leave the
+                   text area with no height to click into - the box then looks
+                   normal but will not take typing. Vertical centring comes from
+                   Padding instead. -->
               <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
-                            VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                            VerticalAlignment="Stretch" HorizontalAlignment="Stretch"
+                            Focusable="False"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
@@ -83,7 +89,7 @@
     </Style>
 
     <Style TargetType="ComboBox">
-      <Setter Property="Padding" Value="11,5,11,5"/>
+      <Setter Property="Padding" Value="12,7,12,7"/>
       <Setter Property="Margin" Value="0"/>
       <Setter Property="Height" Value="32"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
@@ -153,7 +159,7 @@
       <Setter Property="BorderBrush" Value="{StaticResource CardBorder}"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="CornerRadius" Value="8"/>
-      <Setter Property="Padding" Value="16"/>
+      <Setter Property="Padding" Value="20"/>
     </Style>
 
     <!-- ===================================================== results grid -->
@@ -169,7 +175,7 @@
       <Setter Property="CanUserAddRows" Value="False"/>
       <Setter Property="IsReadOnly" Value="True"/>
       <Setter Property="AutoGenerateColumns" Value="False"/>
-      <Setter Property="RowHeight" Value="22"/>
+      <Setter Property="RowHeight" Value="26"/>
       <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
       <Setter Property="VerticalScrollBarVisibility" Value="Visible"/>
     </Style>
@@ -207,12 +213,64 @@
       <Setter Property="Height" Value="6"/>
     </Style>
 
+    <!-- ===================================================== tabs -->
+    <Style TargetType="TabItem">
+      <Setter Property="Foreground" Value="{StaticResource InkMuted}"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TabItem">
+            <Border x:Name="tab" Background="Transparent" BorderBrush="Transparent"
+                    BorderThickness="0,0,0,2" Padding="20,10,20,10" Margin="0,0,4,0">
+              <ContentPresenter ContentSource="Header" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="tab" Property="BorderBrush" Value="{StaticResource Teal}"/>
+                <Setter TargetName="tab" Property="Background" Value="#FF042A33"/>
+                <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- The stock TabControl template paints a light panel behind the headers
+         and around the content, which shows up as a white band on a dark
+         window. This replaces it with just the header strip and the content. -->
+    <Style TargetType="TabControl">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TabControl">
+            <Grid Background="Transparent">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+              <Border Grid.Row="0" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,0,0,1">
+                <TabPanel IsItemsHost="True" Background="Transparent" Margin="0"/>
+              </Border>
+              <ContentPresenter Grid.Row="1" ContentSource="SelectedContent"/>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
   </Window.Resources>
 
-  <!--  -->
-  <!-- Everything is visible at once. Fields are paired two to a row so no      -->
-  <!-- section is pushed off the screen. The ScrollViewer is only a safety net  -->
-  <!-- for very small displays; at normal sizes nothing is hidden.              -->
+  <!-- ======================================================================= -->
+  <!-- The result lives on its own tab. Cramming it under the form left every  -->
+  <!-- field squeezed; giving it a tab lets the form breathe and the result    -->
+  <!-- have real height. The tab switches itself when a run finishes.          -->
   <Grid>
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
@@ -222,7 +280,7 @@
     </Grid.RowDefinitions>
 
     <!-- ================================================== HEADER -->
-    <Border Grid.Row="0" Background="#FF002733" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,0,0,1" Padding="20,8,20,8">
+    <Border Grid.Row="0" Background="#FF002733" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,0,0,1" Padding="24,14,24,14">
       <Grid>
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="Auto"/>
@@ -232,8 +290,8 @@
         </Grid.ColumnDefinitions>
 
         <StackPanel Grid.Column="0" VerticalAlignment="Center">
-          <TextBlock Text="SCCM Integration" FontSize="20" FontWeight="Light" Foreground="{StaticResource Ink}"/>
-          <TextBlock Text="Audi  &#183;  software packaging" FontSize="11" Foreground="{StaticResource InkMuted}" Margin="0,1,0,0"/>
+          <TextBlock Text="SCCM Integration" FontSize="22" FontWeight="Light" Foreground="{StaticResource Ink}"/>
+          <TextBlock Text="Audi  &#183;  software packaging" FontSize="11" Foreground="{StaticResource InkMuted}" Margin="0,2,0,0"/>
         </StackPanel>
 
         <Border Grid.Column="2" x:Name="brdMode" CornerRadius="3" Background="#FF4A2E00" BorderBrush="{StaticResource Amber}"
@@ -242,179 +300,223 @@
         </Border>
 
         <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
-          <TextBlock Text="Environment" Foreground="{StaticResource InkMuted}" Margin="0,0,10,0"/>
-          <ComboBox x:Name="cboEnvironment" Width="140"/>
+          <TextBlock Text="Environment" Foreground="{StaticResource InkMuted}" Margin="0,0,12,0"/>
+          <ComboBox x:Name="cboEnvironment" Width="150"/>
         </StackPanel>
       </Grid>
     </Border>
 
-    <!-- ================================================== CONTENT -->
-    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
-      <StackPanel Margin="20,6,20,6">
+    <!-- ================================================== TABS -->
+    <TabControl Grid.Row="1" x:Name="tabMain" Margin="24,14,24,0">
 
-        <Border x:Name="brdWarning" CornerRadius="4" Background="#FF3A2A00" BorderBrush="{StaticResource Amber}"
-                BorderThickness="1" Padding="14,9,14,9" Margin="0,0,0,12" Visibility="Collapsed">
-          <StackPanel Orientation="Horizontal">
-            <TextBlock Text="&#9888;" FontSize="15" Foreground="{StaticResource Amber}" Margin="0,0,10,0" VerticalAlignment="Top"/>
-            <TextBlock x:Name="txtWarning" TextWrapping="Wrap" Foreground="#FFFFE8B8"/>
+      <!-- ============================ PACKAGE ============================ -->
+      <TabItem Header="Package">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False" Margin="0,14,0,0">
+          <StackPanel>
+
+            <Border x:Name="brdWarning" CornerRadius="6" Background="#FF3A2A00" BorderBrush="{StaticResource Amber}"
+                    BorderThickness="1" Padding="16,12,16,12" Margin="0,0,0,16" Visibility="Collapsed">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Text="&#9888;" FontSize="16" Foreground="{StaticResource Amber}" Margin="0,0,12,0" VerticalAlignment="Top"/>
+                <TextBlock x:Name="txtWarning" TextWrapping="Wrap" Foreground="#FFFFE8B8"/>
+              </StackPanel>
+            </Border>
+
+            <!-- 1  the package -->
+            <Border Style="{StaticResource CardStyle}">
+              <Grid>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="120"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.ColumnSpan="4" Style="{StaticResource SectionTitle}" Text="1 &#183; THE PACKAGE" Margin="0,0,0,14"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource Label}" Text="Package folder"/>
+                <TextBox   Grid.Row="1" Grid.Column="1" x:Name="txtPackagePath" Margin="0,0,12,10"/>
+                <Button    Grid.Row="1" Grid.Column="2" x:Name="btnBrowse" Style="{StaticResource BtnGhost}" Content="Browse&#8230;" MinWidth="110" Margin="0,0,10,10"/>
+                <Button    Grid.Row="1" Grid.Column="3" x:Name="btnRead"   Style="{StaticResource BtnPrimary}" Content="Read details" MinWidth="130" Margin="0,0,0,10"
+                           ToolTip="Reads the deployment script and the request document, and fills in what it finds."/>
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource Label}" Text="Package name"/>
+                <TextBox   Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" x:Name="txtPackage" FontFamily="Consolas" Margin="0"
+                           ToolTip="Site_Publisher_Product_Architecture_Version-Revision_Language"/>
+              </Grid>
+            </Border>
+
+            <!-- 2 and 3 -->
+            <Grid Margin="0,16,0,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="16"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+
+              <!-- 2  from the package -->
+              <Border Grid.Column="0" Style="{StaticResource CardStyle}" VerticalAlignment="Top">
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="100"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="18"/>
+                    <ColumnDefinition Width="100"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                  </Grid.RowDefinitions>
+
+                  <TextBlock Grid.Row="0" Grid.ColumnSpan="5" Style="{StaticResource SectionTitle}" Text="2 &#183; FROM THE PACKAGE" Margin="0,0,0,4"/>
+                  <TextBlock Grid.Row="1" Grid.ColumnSpan="5" Text="Read from the deployment script. Correct anything that is wrong - what you leave here is what the server uses."
+                             FontSize="11" Foreground="{StaticResource InkMuted}" TextWrapping="Wrap" Margin="0,0,0,14"/>
+
+                  <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource Label}" Text="Publisher"/>
+                  <TextBox   Grid.Row="2" Grid.Column="1" x:Name="txtPublisher"/>
+                  <TextBlock Grid.Row="2" Grid.Column="3" Style="{StaticResource Label}" Text="Version"/>
+                  <TextBox   Grid.Row="2" Grid.Column="4" x:Name="txtVersion"/>
+
+                  <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource Label}" Text="Product"/>
+                  <TextBox   Grid.Row="3" Grid.Column="1" x:Name="txtProduct"/>
+                  <TextBlock Grid.Row="3" Grid.Column="3" Style="{StaticResource Label}" Text="Architecture"/>
+                  <TextBox   Grid.Row="3" Grid.Column="4" x:Name="txtArchitecture"/>
+
+                  <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource Label}" Text="Revision"/>
+                  <TextBox   Grid.Row="4" Grid.Column="1" x:Name="txtRevision"/>
+                  <TextBlock Grid.Row="4" Grid.Column="3" Style="{StaticResource Label}" Text="Language"/>
+                  <TextBox   Grid.Row="4" Grid.Column="4" x:Name="txtLanguage"/>
+
+                  <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource Label}" Text="Branding key"/>
+                  <TextBox   Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="4" x:Name="txtBranding" FontFamily="Consolas" FontSize="12"/>
+
+                  <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource Label}" Text="SoftIdent" VerticalAlignment="Top" Margin="0,8,12,0"/>
+                  <TextBox   Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="4" x:Name="txtSoftIdent" FontFamily="Consolas" FontSize="12"
+                             TextWrapping="Wrap" MinHeight="42" VerticalContentAlignment="Top" Margin="0"
+                             ToolTip="The uninstall key the package checks for, from VWG_SoftIdent in the CUSTOM APPLICATION VARIABLES block, with Wow6432Node filled in for a 32-bit package. This is detection rule 2."/>
+
+                </Grid>
+              </Border>
+
+              <!-- 3  published in SCCM -->
+              <Border Grid.Column="2" Style="{StaticResource CardStyle}" VerticalAlignment="Top">
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="120"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                  </Grid.RowDefinitions>
+
+                  <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Style="{StaticResource SectionTitle}" Text="3 &#183; PUBLISHED IN SCCM" Margin="0,0,0,4"/>
+                  <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="What a user will see in Software Center. The RFC number is required."
+                             FontSize="11" Foreground="{StaticResource InkMuted}" TextWrapping="Wrap" Margin="0,0,0,14"/>
+
+                  <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource Label}" Text="Name (EN)"/>
+                  <TextBox   Grid.Row="2" Grid.Column="1" x:Name="txtNameEN"/>
+                  <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource Label}" Text="Name (DE)"/>
+                  <TextBox   Grid.Row="3" Grid.Column="1" x:Name="txtNameDE"/>
+
+                  <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource Label}" Text="Description (EN)" TextWrapping="Wrap" VerticalAlignment="Top" Margin="0,8,12,0"/>
+                  <TextBox   Grid.Row="4" Grid.Column="1" x:Name="txtDescEN" MinHeight="54" TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top"/>
+                  <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource Label}" Text="Description (DE)" TextWrapping="Wrap" VerticalAlignment="Top" Margin="0,8,12,0"/>
+                  <TextBox   Grid.Row="5" Grid.Column="1" x:Name="txtDescDE" MinHeight="54" TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top"/>
+
+                  <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource Label}" Text="RFC number"/>
+                  <TextBox   Grid.Row="6" Grid.Column="1" x:Name="txtRfc" HorizontalAlignment="Left" Width="260" FontFamily="Consolas"
+                             ToolTip="Required. Read from VWG_OrderNumber in the deployment script. With no personal name kept on the server, this is the only record of who asked."/>
+
+                </Grid>
+              </Border>
+            </Grid>
+
+            <!-- 4  what SCCM will be asked to look for.
+                 Not a field to fill in: these are built from the branding key
+                 and the SoftIdent above and update as those are edited, so a
+                 typo shows here rather than on a client three days later.
+                 Full width, under both cards, because it belongs to the whole
+                 package and reads as one line rather than a wrapped column. -->
+            <Border Style="{StaticResource CardStyle}" Margin="0,16,0,0" Padding="20,14">
+              <StackPanel>
+                <TextBlock Style="{StaticResource SectionTitle}" Margin="0,0,0,8"
+                           Text="4 &#183; HOW SCCM WILL DETECT IT &#8212; BOTH RULES MUST BE TRUE"
+                           ToolTip="Rule 1 is the branding key the package writes. Rule 2 is the product's own uninstall entry, from the SoftIdent. Neither is typed in: both follow the fields above."/>
+                <TextBlock x:Name="txtRule1" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"
+                           Foreground="{StaticResource Mint}"/>
+                <TextBlock x:Name="txtRule2" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"
+                           Foreground="{StaticResource Mint}" Margin="0,4,0,0"/>
+              </StackPanel>
+            </Border>
+
           </StackPanel>
-        </Border>
+        </ScrollViewer>
+      </TabItem>
 
-        <!-- 1  THE PACKAGE -->
-        <Border Style="{StaticResource CardStyle}">
+      <!-- ============================ RESULT ============================ -->
+      <TabItem Header="Result" x:Name="tabResult">
+        <Border Style="{StaticResource CardStyle}" Margin="0,14,0,0">
           <Grid>
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="Auto"/>
-              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="104"/>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="Auto"/>
-              <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-
-            <TextBlock Grid.Row="0" Grid.ColumnSpan="4" Style="{StaticResource SectionTitle}" Text="1 &#183; THE PACKAGE" Margin="0,0,0,7"/>
-
-            <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource Label}" Text="Package folder"/>
-            <TextBox   Grid.Row="1" Grid.Column="1" x:Name="txtPackagePath" Margin="0,0,10,6"/>
-            <Button    Grid.Row="1" Grid.Column="2" x:Name="btnBrowse" Style="{StaticResource BtnGhost}" Content="Browse&#8230;" MinWidth="104" Height="31" Margin="0,0,8,6"/>
-            <Button    Grid.Row="1" Grid.Column="3" x:Name="btnRead"   Style="{StaticResource BtnPrimary}" Content="Read details" MinWidth="124" Height="31" Margin="0,0,0,6"
-                       ToolTip="Reads the PSADT script and the install instruction document, and fills in what it finds."/>
-
-            <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource Label}" Text="Package name"/>
-            <TextBox   Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" x:Name="txtPackage" FontFamily="Consolas" Margin="0"
-                       ToolTip="Site_Publisher_Product_Architecture_Version_Revision_Language"/>
-          </Grid>
-        </Border>
-
-        <!-- 2 and 3 -->
-        <Grid Margin="0,6,0,0">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="12"/>
-            <ColumnDefinition Width="*"/>
-          </Grid.ColumnDefinitions>
-
-          <!-- 2  read from the package -->
-          <Border Grid.Column="0" Style="{StaticResource CardStyle}" VerticalAlignment="Stretch">
-            <Grid>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="90"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="14"/>
-                <ColumnDefinition Width="90"/>
-                <ColumnDefinition Width="*"/>
-              </Grid.ColumnDefinitions>
-              <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-              </Grid.RowDefinitions>
-
-              <TextBlock Grid.Row="0" Grid.ColumnSpan="5" Style="{StaticResource SectionTitle}" Text="2 &#183; READ FROM THE PACKAGE" Margin="0,0,0,7" ToolTip="Derived from the package name and the package's own files. Not editable."/>
-              
-
-              <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource Label}" Text="Publisher"/>
-              <TextBox   Grid.Row="2" Grid.Column="1" x:Name="txtPublisher" IsReadOnly="True"/>
-              <TextBlock Grid.Row="2" Grid.Column="3" Style="{StaticResource Label}" Text="Version"/>
-              <TextBox   Grid.Row="2" Grid.Column="4" x:Name="txtVersion" IsReadOnly="True"/>
-
-              <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource Label}" Text="Product"/>
-              <TextBox   Grid.Row="3" Grid.Column="1" x:Name="txtProduct" IsReadOnly="True"/>
-              <TextBlock Grid.Row="3" Grid.Column="3" Style="{StaticResource Label}" Text="Architecture"/>
-              <TextBox   Grid.Row="3" Grid.Column="4" x:Name="txtArchitecture" IsReadOnly="True"/>
-
-              <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource Label}" Text="Revision"/>
-              <TextBox   Grid.Row="4" Grid.Column="1" x:Name="txtRevision" IsReadOnly="True"/>
-              <TextBlock Grid.Row="4" Grid.Column="3" Style="{StaticResource Label}" Text="Language"/>
-              <TextBox   Grid.Row="4" Grid.Column="4" x:Name="txtLanguage" IsReadOnly="True"/>
-
-              <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource Label}" Text="Branding key"/>
-              <TextBox   Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="4" x:Name="txtBranding" IsReadOnly="True" FontFamily="Consolas" FontSize="11" Padding="11,3,11,3"/>
-
-              <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource Label}" Text="Detection key"/>
-              <TextBox   Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="4" x:Name="txtDetection" IsReadOnly="True" FontFamily="Consolas" FontSize="11" Padding="11,3,11,3" Margin="0"/>
-
-              <TextBlock Grid.Row="7" Grid.Column="0" Style="{StaticResource Label}" Text="SoftIdent" Margin="0,6,12,0"/>
-              <TextBox   Grid.Row="7" Grid.Column="1" Grid.ColumnSpan="4" x:Name="txtSoftIdent" IsReadOnly="True"
-                         FontFamily="Consolas" FontSize="11" Padding="11,3,11,3" Margin="0,6,0,0"
-                         ToolTip="The uninstall key the package checks for. Read from VWG_SoftIdent in the deployment script - the one in the CUSTOM APPLICATION VARIABLES block - with Wow6432Node filled in for a 32-bit package."/>
-            </Grid>
-          </Border>
-
-          <!-- 3  published in SCCM -->
-          <Border Grid.Column="2" Style="{StaticResource CardStyle}" VerticalAlignment="Stretch">
-            <Grid>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="104"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="14"/>
-                <ColumnDefinition Width="104"/>
-                <ColumnDefinition Width="*"/>
-              </Grid.ColumnDefinitions>
-              <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-              </Grid.RowDefinitions>
-
-              <TextBlock Grid.Row="0" Grid.ColumnSpan="5" Style="{StaticResource SectionTitle}" Text="3 &#183; PUBLISHED IN SCCM" Margin="0,0,0,7" ToolTip="Check these before you submit. The RFC number is required."/>
-              
-
-              <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource Label}" Text="Name (EN)"/>
-              <TextBox   Grid.Row="2" Grid.Column="1" x:Name="txtNameEN"/>
-              <TextBlock Grid.Row="2" Grid.Column="3" Style="{StaticResource Label}" Text="Name (DE)"/>
-              <TextBox   Grid.Row="2" Grid.Column="4" x:Name="txtNameDE"/>
-
-              <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource Label}" Text="Description (EN)" TextWrapping="Wrap" VerticalAlignment="Top" Margin="0,7,12,0"/>
-              <TextBox   Grid.Row="3" Grid.Column="1" x:Name="txtDescEN" MinHeight="44" TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top"/>
-              <TextBlock Grid.Row="3" Grid.Column="3" Style="{StaticResource Label}" Text="Description (DE)" TextWrapping="Wrap" VerticalAlignment="Top" Margin="0,7,12,0"/>
-              <TextBox   Grid.Row="3" Grid.Column="4" x:Name="txtDescDE" MinHeight="44" TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top"/>
-
-              <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource Label}" Text="RFC number"/>
-              <TextBox   Grid.Row="4" Grid.Column="1" x:Name="txtRfc" FontFamily="Consolas"
-                         ToolTip="Required. With no personal name kept on the server, the RFC is the only record of who asked for this change."/>
-
-              <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource Label}" Text="Operating systems" VerticalAlignment="Top" Margin="0,4,12,0" TextWrapping="Wrap"/>
-              <WrapPanel Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="4" x:Name="pnlOperatingSystems" Orientation="Horizontal" Margin="0,2,0,0"/>
-            </Grid>
-          </Border>
-        </Grid>
-
-        <!-- 4  RESULT -->
-        <Border Style="{StaticResource CardStyle}" Margin="0,6,0,0" Padding="12,10,12,10">
-          <Grid>
-            <Grid.RowDefinitions>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-            <Grid Grid.Row="0" Margin="0,0,0,9">
+            <Grid Grid.Row="0" Margin="0,0,0,12">
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
               </Grid.ColumnDefinitions>
-              <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}" Text="4 &#183; RESULT" VerticalAlignment="Center"/>
+              <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}" Text="4 &#183; WHAT HAPPENED" VerticalAlignment="Center"/>
               <TextBlock Grid.Column="2" x:Name="txtStep" Text="" FontWeight="SemiBold" Foreground="{StaticResource Mint}" FontSize="12"/>
             </Grid>
-            <DataGrid Grid.Row="1" x:Name="lstResults" Style="{StaticResource GridStyle}" Height="100">
+            <!-- The last run of this package, read back from the drop folder, so a
+                 result is still there after the window has been closed and reopened. -->
+            <Border Grid.Row="1" Background="#14008C82" BorderBrush="{StaticResource CardBorder}"
+                    BorderThickness="1" CornerRadius="3" Padding="12,8" Margin="0,0,0,12">
+              <StackPanel>
+                <TextBlock Text="EARLIER RUN" FontSize="10" FontWeight="SemiBold" Opacity="0.6"
+                           Foreground="{StaticResource Ink}" Margin="0,0,0,3"/>
+                <TextBlock x:Name="txtHistory" Text="No earlier run of this package in this environment."
+                           Foreground="{StaticResource Ink}" FontSize="12" TextWrapping="Wrap"/>
+              </StackPanel>
+            </Border>
+
+            <DataGrid Grid.Row="2" x:Name="lstResults" Style="{StaticResource GridStyle}">
               <DataGrid.Columns>
-                <DataGridTextColumn Header="Step"   Width="160" Binding="{Binding Step}"/>
-                <DataGridTextColumn Header="Result" Width="80"  Binding="{Binding Result}"/>
+                <DataGridTextColumn Header="Step"   Width="170" Binding="{Binding Step}"/>
+                <!-- a failed step has to be findable at a glance in a list of eight -->
+                <DataGridTextColumn Header="Result" Width="90"  Binding="{Binding Result}">
+                  <DataGridTextColumn.ElementStyle>
+                    <Style TargetType="TextBlock">
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding Result}" Value="FAILED">
+                          <Setter Property="Foreground" Value="{StaticResource Danger}"/>
+                          <Setter Property="FontWeight" Value="SemiBold"/>
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
                 <DataGridTextColumn Header="Detail" Width="*"   Binding="{Binding Message}"/>
               </DataGrid.Columns>
             </DataGrid>
           </Grid>
         </Border>
-
-      </StackPanel>
-    </ScrollViewer>
+      </TabItem>
+    </TabControl>
 
     <!-- ================================================== ACTIONS -->
     <Border Grid.Row="2" Background="#FF002733" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,1,0,0"
-            Padding="20,7,20,2">
+            Padding="24,14,24,6" Margin="0,14,0,0">
       <Grid>
         <Grid.RowDefinitions>
           <RowDefinition Height="Auto"/>
@@ -429,23 +531,23 @@
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
 
-        <Button   Grid.Row="0" Grid.Column="0" x:Name="btnPreview"   Style="{StaticResource BtnGhost}"   Content="Preview on this PC" MinWidth="168"
+        <Button   Grid.Row="0" Grid.Column="0" x:Name="btnPreview"   Style="{StaticResource BtnGhost}"   Content="Preview on this PC" MinWidth="172"
                   ToolTip="Rehearses the whole job locally. Nothing is sent anywhere."/>
         <Button   Grid.Row="0" Grid.Column="1" x:Name="btnIntegrate" Style="{StaticResource BtnPrimary}" Content="Integrate"
                   ToolTip="Creates the application. Writes the job into the drop folder; the Script Runner picks it up."/>
         <Button   Grid.Row="0" Grid.Column="2" x:Name="btnModify"    Style="{StaticResource BtnGhost}"   Content="Modify"
-                  ToolTip="Updates an application that already exists: new revision, new content path, added or retired collections and deployments."/>
+                  ToolTip="Updates an application that already exists: new revision, new content path, added or retired collections."/>
         <Button   Grid.Row="0" Grid.Column="3" x:Name="btnRemove"    Style="{StaticResource BtnDanger}"  Content="Remove"
                   ToolTip="Removes the application, its collections, its deployments and the AD group. Needs only the package name and the RFC."/>
         <CheckBox Grid.Row="0" Grid.Column="5" x:Name="chkDryRun" IsChecked="True" FontWeight="SemiBold"
                   Content="Dry run &#8212; rehearse only, change nothing"/>
 
-        <ProgressBar Grid.Row="1" Grid.ColumnSpan="6" x:Name="prgRun" Minimum="0" Maximum="8" Value="0" Margin="0,6,0,0"/>
+        <ProgressBar Grid.Row="1" Grid.ColumnSpan="6" x:Name="prgRun" Minimum="0" Maximum="8" Value="0" Margin="0,12,0,0"/>
       </Grid>
     </Border>
 
     <!-- ================================================== STATUS BAR -->
-    <Border Grid.Row="3" Background="#FF001A20" Padding="20,7,20,8">
+    <Border Grid.Row="3" Background="#FF001A20" Padding="24,12,24,14">
       <Grid>
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*"/>
@@ -453,7 +555,7 @@
         </Grid.ColumnDefinitions>
         <TextBlock Grid.Column="0" x:Name="txtStatus" Text="Ready." TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,16,0"/>
         <Button    Grid.Column="1" x:Name="btnOpenLog" Style="{StaticResource BtnGhost}" Content="Open log folder"
-                   MinWidth="146" IsEnabled="False" Margin="0"/>
+                   MinWidth="150" IsEnabled="False" Margin="0"/>
       </Grid>
     </Border>
   </Grid>

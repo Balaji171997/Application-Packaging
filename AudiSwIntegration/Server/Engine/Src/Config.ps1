@@ -148,6 +148,7 @@ function Get-AudiDefaults {
         Naming           = $d.Naming
         Application      = $d.Application
         Detection        = $d.Detection
+        SoftIdentDetection = $d.SoftIdentDetection
         DeploymentType   = $d.DeploymentType
         Comments         = $d.Comments
         Audit            = [pscustomobject]@{ RequireRfc = [bool]::Parse($d.Audit.requireRfc) }
@@ -221,6 +222,7 @@ function Get-AudiEnvironment {
         Description       = $e.description
         SchemaVersion     = $e.schemaVersion
         Verified          = [bool]::Parse($e.verified)
+
         DomainNames       = @($result.Document.SelectNodes('/Environment/Domain/Name') | ForEach-Object { $_.InnerText })
         LogonPrefix       = $e.Domain.logonPrefix
         SiteCode          = $e.Site.code
@@ -382,6 +384,64 @@ function Resolve-AudiSoftIdent {
     $out = $SoftIdent -replace '\$\(\s*\$?VWG_CurrentRegWOW\s*\)', $wow
     $out = $out -replace '\$VWG_CurrentRegWOW', $wow
     return $out
+}
+
+function Split-AudiSoftIdent {
+    <#  Turns a resolved SoftIdent into the parts of a registry detection rule.
+
+        The deployment script writes it as a path plus an optional value test:
+
+            HKLM:\SOFTWARE\...\Uninstall\INCA7.5.7 [DisplayVersion=7.5.7]
+
+        which becomes hive HKLM, key SOFTWARE\...\INCA7.5.7, value name
+        DisplayVersion, value 7.5.7. Without the bracket it is a key-exists
+        test and ValueName comes back empty.
+
+        Returns $null when there is nothing to parse or the shape is not
+        recognised - the caller then simply has one detection rule. Guessing at
+        a half-understood SoftIdent would produce an application that installs
+        and then immediately reports itself as not installed.  #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$SoftIdent,
+        [string]$Root
+    )
+
+    if ([string]::IsNullOrWhiteSpace($SoftIdent)) { return $null }
+
+    $spec = (Get-AudiDefaults -Root $Root).SoftIdentDetection
+    if (-not $spec) { return $null }
+
+    $match = [regex]::Match($SoftIdent, $spec.pattern)
+    if (-not $match.Success) { return $null }
+
+    $key = $match.Groups['Key'].Value.Trim().TrimEnd('\')
+    if ([string]::IsNullOrWhiteSpace($key)) { return $null }
+
+    # a placeholder that was never resolved would silently become a literal key
+    if ($key -match '\$') { return $null }
+
+    return [pscustomobject]@{
+        Hive      = $match.Groups['Hive'].Value.ToUpperInvariant()
+        Key       = $key
+        ValueName = $match.Groups['ValueName'].Value.Trim()
+        Value     = $match.Groups['Value'].Value.Trim()
+    }
+}
+
+function Format-AudiDetectionRule {
+    <#  The detection rules as one readable line, for the window, the log and the
+        preview - so what SCCM will be asked for is visible before it is asked. #>
+    [CmdletBinding()]
+    param($Rules)
+
+    $list = @($Rules)
+    if ($list.Count -eq 0) { return 'no detection rule' }
+
+    return (@($list | ForEach-Object {
+        if ([string]::IsNullOrWhiteSpace($_.ValueName)) { "{0}\{1} exists" -f $_.Hive, $_.Key }
+        else { "{0}\{1}\{2}={3}" -f $_.Hive, $_.Key, $_.ValueName, $_.Value }
+    }) -join '  AND  ')
 }
 
 function Get-AudiDocumentText {
@@ -550,7 +610,18 @@ function Get-AudiIntegrationPlan {
         [string]$LocalizedName,
         [string]$LocalizedDescription,
         [string]$LocalizedNameDe,
-        [string]$LocalizedDescriptionDe
+        [string]$LocalizedDescriptionDe,
+
+        # What the packager corrected in the window. The package name and the
+        # deployment script give the starting values, but the packager has the
+        # last word - so whatever is passed here wins over what was derived.
+        # Anything left empty keeps the derived value.
+        [hashtable]$PartOverride,
+        # The branding key IS the first detection rule, and the SoftIdent IS the
+        # second - so there is no separate detection field to pass or to keep in
+        # step with them.
+        [string]$BrandingKey,
+        [string]$SoftIdent
     )
 
     if ([string]::IsNullOrWhiteSpace($JobId)) { $JobId = [guid]::NewGuid().ToString() }
@@ -558,7 +629,57 @@ function Get-AudiIntegrationPlan {
     $defaults = Get-AudiDefaults -Root $Root
     $env      = Get-AudiEnvironment -Code $EnvironmentCode -Root $Root
     $parts    = Split-AudiPackageName -PackageName $PackageName -Root $Root
-    $branding = Get-AudiBrandingKey -PackageName $PackageName -Root $Root
+
+    # The packager's corrections win over what was parsed out of the name.
+    # Split-AudiPackageName hands back a PSCustomObject, which cannot be indexed
+    # like a hashtable - so the parts are rebuilt as one rather than poked at.
+    if ($PartOverride -and $PartOverride.Count -gt 0) {
+        $merged = [ordered]@{}
+        foreach ($property in $parts.PSObject.Properties) { $merged[$property.Name] = $property.Value }
+        foreach ($key in @($PartOverride.Keys)) {
+            $value = [string]$PartOverride[$key]
+            if (-not [string]::IsNullOrWhiteSpace($value) -and $merged.Contains($key)) { $merged[$key] = $value }
+        }
+        $parts = [pscustomobject]$merged
+    }
+
+    $branding = if ([string]::IsNullOrWhiteSpace($BrandingKey)) {
+        Expand-AudiTemplate -Template $defaults.PackageName.BrandingKeyFormat -Values $parts
+    } else { $BrandingKey }
+
+    # ---- the detection rules -------------------------------------------------
+    # Rule 1 is the branding key the package writes. Rule 2 is the product's own
+    # uninstall entry, taken from the deployment script's VWG_SoftIdent, which
+    # already says whether it lives under Wow6432Node. Both must be true.
+    # A package whose SoftIdent is missing or written in an unrecognised shape
+    # gets rule 1 only - a guessed rule would detect the wrong thing.
+    $detection = "$($defaults.Naming.brandingRegistryRoot)$branding"
+
+    $detectionRules = New-Object System.Collections.Generic.List[object]
+    $detectionRules.Add([pscustomobject]@{
+        Source    = 'Branding key'
+        Hive      = 'HKLM'
+        Key       = $detection
+        ValueName = $defaults.Detection.valueName
+        Value     = $parts.Revision
+        DataType  = $defaults.Detection.dataType
+        Is64Bit   = [bool]::Parse($defaults.Detection.is64Bit)
+        Method    = $defaults.Detection.method
+    }) | Out-Null
+
+    $softIdentParts = Split-AudiSoftIdent -SoftIdent $SoftIdent -Root $Root
+    if ($softIdentParts) {
+        $detectionRules.Add([pscustomobject]@{
+            Source    = 'SoftIdent'
+            Hive      = $softIdentParts.Hive
+            Key       = $softIdentParts.Key
+            ValueName = $softIdentParts.ValueName
+            Value     = $softIdentParts.Value
+            DataType  = $defaults.SoftIdentDetection.dataType
+            Is64Bit   = [bool]::Parse($defaults.SoftIdentDetection.is64Bit)
+            Method    = $(if ($softIdentParts.ValueName) { $defaults.SoftIdentDetection.method } else { 'KeyExists' })
+        }) | Out-Null
+    }
 
     # Tokens available to text the tool writes.
     #
@@ -618,9 +739,27 @@ function Get-AudiIntegrationPlan {
         EstimatedInstallMinutes  = [int]$defaults.Application.estimatedInstallMinutes
         DeploymentType  = "$PackageName$($defaults.Naming.deploymentTypeSuffix)"
         BrandingKey     = $branding
-        DetectionKey    = "$($defaults.Naming.brandingRegistryRoot)$branding"
+        # Rule 1, kept flat because messages and the log quote it. The full set
+        # is DetectionRules - .ToArray(), because @() on a List[object] of
+        # PSObjects throws under PowerShell 5.1.
+        DetectionKey    = $detection
         DetectionValue  = $defaults.Detection.valueName
         DetectionData   = $parts.Revision
+        DetectionIs64Bit = [bool]::Parse($defaults.Detection.is64Bit)
+        DetectionRules  = $detectionRules.ToArray()
+
+        # Everything the old tool declared on its <DeploymentType>, so the
+        # application it creates is identical in every respect.
+        ProgramVisibility         = $defaults.DeploymentType.programVisibility
+        OnSlowNetworkMode         = $defaults.DeploymentType.slowNetworkDeploymentMode
+        AllowClientToShareContent = [bool]::Parse($defaults.DeploymentType.allowClientToShareContent)
+        AllowClientToUseFallback  = [bool]::Parse($defaults.DeploymentType.allowClientToUseFallback)
+        PersistContentInCache     = [bool]::Parse($defaults.DeploymentType.persistContentInClientCache)
+        Run32BitOn64Bit           = [bool]::Parse($defaults.DeploymentType.run32BitOn64Bit)
+        # the platform strings for the OS requirement rule
+        OperatingSystems          = @($defaults.OperatingSystems | ForEach-Object { $_.Value })
+        # read from VWG_SoftIdent in the deployment script, Wow6432Node resolved
+        SoftIdent       = $SoftIdent
         ContentPath     = (Join-Path $env.ContentShare $PackageName)
         DistributionPointGroup = $env.DistributionPointGroup
         Category        = $defaults.Application.category

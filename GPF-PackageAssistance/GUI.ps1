@@ -2447,7 +2447,7 @@ function Show-MsiPropertiesDialog {
             </DataGrid.RowStyle>
             <DataGrid.Columns>
               <DataGridCheckBoxColumn Header="Apply" Binding="{Binding Apply, UpdateSourceTrigger=PropertyChanged}" Width="46"/>
-              <DataGridTextColumn Header="Property" Binding="{Binding Property}" Width="180" IsReadOnly="True"/>
+              <DataGridTextColumn Header="Property" Binding="{Binding Property}" Width="180" EditingElementStyle="{StaticResource EditBox}"/>
               <DataGridTextColumn Header="Current MSI (ref)" Binding="{Binding BaseValue}" Width="150" IsReadOnly="True" ElementStyle="{StaticResource Dim}"/>
               <DataGridTextColumn Header="Predecessor MST (ref)" Binding="{Binding PredValue}" Width="150" IsReadOnly="True" ElementStyle="{StaticResource Dim}"/>
               <DataGridTextColumn Header="Your value -> MST" Binding="{Binding YourValue}" Width="170" EditingElementStyle="{StaticResource EditBox}"/>

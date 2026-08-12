@@ -1,0 +1,118 @@
+﻿{
+  "_README": [
+    "Everything site-specific, tenant-specific and format-specific lives HERE, not in the .ps1.",
+    "Resolution order: built-in defaults  <-  Common  <-  the selected profile.",
+    "",
+    "ANOTHER SITE OR ANOTHER TEAM: add a block under Profiles with that team's values and pick it",
+    "in the Profile dropdown (or run with -ProfileName <name>). Anything a team does differently -",
+    "the registry key their packages brand themselves with, how their package names are built, the",
+    "UAT group naming, and WHICH DEPLOYMENT TOOLKIT they use - is a value in their profile.",
+    "",
+    "Launchers = which file marks a toolkit package and how to install it. If NONE of these is",
+    "  found, the package is treated as a plain installer: the .intunewin is built from the folder",
+    "  holding the file SCCM's own install command runs, ServiceUI.exe is copied in beside it, and",
+    "  SCCM's command lines are reused wrapped in ServiceUI. The tool has no toolkit knowledge of",
+    "  its own: it looks for Marker in the content, then uses SetupFile / InstallCmd / UninstallCmd.",
+    "  The shallowest match wins; ties go to whichever is listed first. StageUtilities copies",
+    "  UtilitiesPath into the package copy (that is how PSADT v3 gets ServiceUI.exe).",
+    "  A team on a different toolkit adds their own entry - no code change.",
+    "UatGroupNamePattern tokens: {Vendor} {AppName} {Arch} {Version} {Revision} {Lang} {FullName}",
+    "  Every token is reduced to letters and digits, so the name never contains a space or a",
+    "  special character. The tool NEVER creates the group - the name goes in the report.",
+    "PackageNameRegex: optional. Named groups Vendor / AppName / Arch / Version / Revision / Lang.",
+    "  Leave it empty to use the <Vendor>_<AppName>_<Arch>_<Version>-<Revision>_<Lang> split.",
+    "To change the fallback icon, replace Assets\\DefaultAppIcon.png - nothing else."
+  ],
+
+  "ActiveProfile": "Live",
+
+  "Common": {
+    "ReportRoot": "C:\\ProgramData\\SCCM2IntuneMigrator",
+    "GraphBase": "https://graph.microsoft.com/beta",
+    "ModulePath": "Lib\\PowerShell Module",
+    "KeepStagedContent": true,
+    "WorkSpaceFactor": 2.5,
+    "WarnContentSizeGB": 30,
+    "MaxContentSizeGB": 0,
+    "BlockSizeMB": 10,
+    "SasRenewMinutes": 40,
+    "MinWindowsRelease": "1607",
+    "ApplicableArchitectures": "x64,x86",
+    "RunAsAccount": "system",
+    "RestartBehavior": "basedOnReturnCode",
+    "AllowAvailableUninstall": true,
+    "DefaultMaxRuntimeMinutes": 60,
+    "MinMaxRuntimeMinutes": 10,
+    "UtilitiesPath": "Lib\\PSADTv3Utilities",
+    "Launchers": [
+      {
+        "Marker": "Invoke-AppDeployToolkit.exe",
+        "Name": "PSADT v4",
+        "SetupFile": "Invoke-AppDeployToolkit.exe",
+        "InstallCmd": "Invoke-AppDeployToolkit.exe Install",
+        "UninstallCmd": "Invoke-AppDeployToolkit.exe Uninstall",
+        "StageUtilities": false
+      },
+      {
+        "Marker": "Invoke-AppDeployToolkit.ps1",
+        "Name": "PSADT v4",
+        "SetupFile": "Invoke-AppDeployToolkit.exe",
+        "InstallCmd": "Invoke-AppDeployToolkit.exe Install",
+        "UninstallCmd": "Invoke-AppDeployToolkit.exe Uninstall",
+        "StageUtilities": false
+      },
+      {
+        "Marker": "Deploy-Application.exe",
+        "Name": "PSADT v3",
+        "SetupFile": "Deploy-Application.exe",
+        "InstallCmd": "\"Deploy-Application.exe\" Install",
+        "UninstallCmd": "\"Deploy-Application.exe\" Uninstall",
+        "StageUtilities": true,
+        "WrapServiceUI": true
+      },
+      {
+        "Marker": "Deploy-Application.ps1",
+        "Name": "PSADT v3",
+        "SetupFile": "Deploy-Application.exe",
+        "InstallCmd": "\"Deploy-Application.exe\" Install",
+        "UninstallCmd": "\"Deploy-Application.exe\" Uninstall",
+        "StageUtilities": true,
+        "WrapServiceUI": true
+      }
+    ],
+    "SynthesizeBrandingWhenMissing": true,
+    "DefaultIconPath": "Assets\\DefaultAppIcon.png",
+    "NormalizeIconTo256": true,
+    "DescriptionDocxMaxScanMB": 25,
+    "IconSearchUpLevels": 2,
+    "DocSearchUpLevels": 2,
+    "IntunePortalUrl": "https://intune.microsoft.com/#view/Microsoft_Intune_Apps/SettingsMenu/~/0/appId/{AppId}",
+    "NotesText": "Created by SCCM2IntuneMigrator",
+    "UninstallSignatureShield": true,
+    "SkipIfAlreadyInIntune": true,
+    "RollbackScope": "FailedAppOnly"
+  },
+
+  "Profiles": {
+
+    "Live": {
+      "DisplayName": "Live site",
+      "SiteCode": "G1K",
+      "SiteServer": "MNDEMUCSM157.mn-man.biz",
+      "TenantId": "m365.man",
+      "BrandingKeyRoot": "Software\\VWG\\CM",
+      "PackageNameRegex": "",
+      "UatGroupNamePattern": "MDM_MN_SWW_{Vendor}_{AppName}_UAT"
+    },
+
+    "PreLive": {
+      "DisplayName": "Pre-live site",
+      "SiteCode": "G08",
+      "SiteServer": "MBDCASWVTB29843.mn-man.biz",
+      "TenantId": "m365.man",
+      "BrandingKeyRoot": "Software\\VWG\\CM",
+      "PackageNameRegex": "",
+      "UatGroupNamePattern": "MDM_MN_SWW_{Vendor}_{AppName}_UAT"
+    }
+  }
+}
