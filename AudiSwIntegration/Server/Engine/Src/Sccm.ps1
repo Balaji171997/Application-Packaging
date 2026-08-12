@@ -113,7 +113,24 @@ function New-AudiSccmProvider {
             }
         }
 
-        SetCategory = { param($c) Set-CMApplication -Name $c.ApplicationName -AddAppCategory $c.Category -ErrorAction Stop | Out-Null }
+        # -AddAppCategory wants a CATEGORY OBJECT, not the name:
+        #
+        #   "Cannot convert the "Development" value of type System.String to type
+        #    Microsoft.ConfigurationManagement.ManagementProvider.IResultObject"
+        #
+        # Older builds took a string, so the string is tried as a fallback rather
+        # than pinning the tool to one console version. The category is created
+        # if the site does not have it - a new site has no categories at all, and
+        # failing there would roll back a perfectly good application.
+        SetCategory = { param($c)
+            $category = Get-CMCategory -Name $c.Category -CategoryType AppCategories -ErrorAction SilentlyContinue |
+                        Select-Object -First 1
+            if (-not $category) {
+                $category = New-CMCategory -Name $c.Category -CategoryType AppCategories -ErrorAction Stop
+            }
+            try   { Set-CMApplication -Name $c.ApplicationName -AddAppCategory $category -ErrorAction Stop | Out-Null }
+            catch { Set-CMApplication -Name $c.ApplicationName -AddAppCategory $c.Category -ErrorAction Stop | Out-Null }
+        }
 
         StartContentDistribution = { param($c)
             Start-CMContentDistribution -ApplicationName $c.ApplicationName -DistributionPointGroupName $c.DistributionPointGroup -ErrorAction Stop | Out-Null
@@ -124,14 +141,29 @@ function New-AudiSccmProvider {
         }
 
         NewDeployment = { param($c)
+            # An UNINSTALL deployment cannot be Available - SCCM refuses it.
+            # Nobody opts in to having software taken away, so it is Required.
+            # The install deployments stay Available, which is what puts them in
+            # Software Center for a user to choose.
+            $purpose = if ($c.DeploymentAction -eq 'Uninstall') { 'Required' } else { 'Available' }
             New-CMApplicationDeployment -Name $c.ApplicationName -CollectionName $c.CollectionName `
-                                        -DeployAction $c.DeploymentAction -DeployPurpose Available -ErrorAction Stop | Out-Null
+                                        -DeployAction $c.DeploymentAction -DeployPurpose $purpose -ErrorAction Stop | Out-Null
         }
 
-        # the environment files hold scope IDs (INA00003), so bind by -Id
+        # The environment files hold scope IDs (INA00003). Current consoles want
+        # the scope OBJECT, the same as -AddAppCategory; older ones took the id.
+        # Try the object, fall back to the id, rather than pinning the tool to
+        # one console version.
         AddSecurityScope = { param($c)
             $app = Get-CMApplication -Name $c.ApplicationName -Fast -ErrorAction Stop
-            foreach ($scope in $c.SecurityScopes) { Add-CMObjectSecurityScope -InputObject $app -Id $scope -ErrorAction Stop | Out-Null }
+            foreach ($scope in $c.SecurityScopes) {
+                $scopeObject = Get-CMSecurityScope -Id $scope -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($scopeObject) {
+                    try   { Add-CMObjectSecurityScope -InputObject $app -Scope $scopeObject -ErrorAction Stop | Out-Null }
+                    catch { Add-CMObjectSecurityScope -InputObject $app -Id $scope -ErrorAction Stop | Out-Null }
+                }
+                else { Add-CMObjectSecurityScope -InputObject $app -Id $scope -ErrorAction Stop | Out-Null }
+            }
         }
 
         # ---- used by Modify, to bring an existing application back into line
@@ -200,6 +232,18 @@ function New-AudiSccmProvider {
         }
         TestCollectionId   = { param($c) [bool](Get-CMCollection -Id $c.Id -ErrorAction SilentlyContinue) }
         TestDpGroup        = { param($c) [bool](Get-CMDistributionPointGroup -Name $c.Name -ErrorAction SilentlyContinue) }
+
+        # How many distribution points are IN that group. A group that exists but
+        # is empty passes the check above and then fails the moment content is
+        # distributed to it - there is nowhere for the content to go. Returns -1
+        # when the count cannot be read, which is reported rather than treated
+        # as empty.
+        GetDpGroupMemberCount = { param($c)
+            $group = Get-CMDistributionPointGroup -Name $c.Name -ErrorAction SilentlyContinue
+            if (-not $group) { return 0 }
+            try   { return [int]$group.MemberCount }
+            catch { return -1 }
+        }
         TestSecurityScope  = { param($c) [bool](Get-CMSecurityScope -Id $c.Id -ErrorAction SilentlyContinue) }
         TestCollectionName = { param($c) [bool](Get-CMCollection -Name $c.Name -ErrorAction SilentlyContinue) }
 
@@ -471,6 +515,7 @@ function New-AudiSccmDryRunProvider {
     $provider.GetContentShareNames = { param($c) @() }.GetNewClosure()
     $provider.TestCollectionId   = { param($c) -not ($Missing -contains "Collection:$($c.Id)") }.GetNewClosure()
     $provider.TestDpGroup        = { param($c) -not ($Missing -contains "DpGroup:$($c.Name)") }.GetNewClosure()
+    $provider.GetDpGroupMemberCount = { param($c) $(if ($Missing -contains 'DpGroupEmpty') { 0 } else { 2 }) }.GetNewClosure()
     $provider.TestSecurityScope  = { param($c) -not ($Missing -contains "Scope:$($c.Id)") }.GetNewClosure()
     $provider.TestCollectionName = { param($c) $ExistingCollections -contains $c.Name }.GetNewClosure()
     $provider.GetDistributionState = { param($c) @{ Total = 2; Success = 2; Failed = 0; InProgress = 0 } }.GetNewClosure()
@@ -989,10 +1034,31 @@ function Test-AudiSwPrerequisite {
         if ($taken) { & $add "Collection:$($collection.Name)" $false 'Error' "A collection named '$($collection.Name)' already exists." }
     }
 
-    # 5. the distribution point group must exist
+    # 5. the distribution point group must exist...
     $hasDp = & $Provider.TestDpGroup @{ Name = $Plan.DistributionPointGroup }
     & $add 'DistributionPointGroup' $hasDp 'Error' $(if ($hasDp) { "Distribution point group '$($Plan.DistributionPointGroup)' found." }
         else { "Distribution point group '$($Plan.DistributionPointGroup)' does not exist in $($Plan.Environment)." })
+
+    # 5a. ...and it must have distribution points in it. An empty group exists,
+    #     so the check above passes, and then content distribution fails with
+    #     nowhere to send the content - by which point the application and its
+    #     deployment type have been created and have to be rolled back.
+    #     A warning, not an error: the count is read from a property that is not
+    #     on every console build, and being unable to count is not proof of an
+    #     empty group.
+    if ($hasDp) {
+        $members = [int](& $Provider.GetDpGroupMemberCount @{ Name = $Plan.DistributionPointGroup })
+        if ($members -eq 0) {
+            & $add 'DistributionPointGroupMembers' $false 'Warning' `
+                ("Distribution point group '$($Plan.DistributionPointGroup)' has no distribution points in it. " +
+                 "Distributing content to an empty group fails, and it fails after the application has been created. " +
+                 "Add a distribution point to the group, or point Content/@distributionPointGroup in " +
+                 "Config\Environments\$($Plan.Environment).xml at a group that has one.")
+        }
+        elseif ($members -gt 0) {
+            & $add 'DistributionPointGroupMembers' $true 'Warning' "$members distribution point(s) in the group."
+        }
+    }
 
     # 6. every security scope must exist
     foreach ($scope in $Plan.SecurityScopes) {

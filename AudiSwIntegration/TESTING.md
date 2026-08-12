@@ -77,7 +77,7 @@ Then:
 ### Without opening the window
 
 ```powershell
-.\Tests\Invoke-AllTests.ps1                    # 323 checks, no SCCM, no rights
+.\Tests\Invoke-AllTests.ps1                    # 326 checks, no SCCM, no rights
 .\Client\Start-AudiSwClient.ps1 -SelfTest      # drives the window's own code, no screen
 ```
 

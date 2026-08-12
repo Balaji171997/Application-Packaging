@@ -199,7 +199,16 @@ try {
     Add-Step 'DeploymentType' $true "$dtName, $(if ($pkg.SoftIdent) { '2 detection rules' } else { '1 detection rule' })"
 
     # ==================================================== 4. SET THE CATEGORY
-    if ($real) { Set-CMApplication -Name $appName -AddAppCategory 'Development' -ErrorAction Stop | Out-Null }
+    # -AddAppCategory wants a category OBJECT, not the name. Passing the string
+    # gives "Cannot convert the "Development" value of type System.String to type
+    # ...IResultObject". Older builds took a string, so that is the fallback.
+    # The category is created if the site does not have it.
+    if ($real) {
+        $category = Get-CMCategory -Name 'Development' -CategoryType AppCategories -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $category) { $category = New-CMCategory -Name 'Development' -CategoryType AppCategories -ErrorAction Stop }
+        try   { Set-CMApplication -Name $appName -AddAppCategory $category -ErrorAction Stop | Out-Null }
+        catch { Set-CMApplication -Name $appName -AddAppCategory 'Development' -ErrorAction Stop | Out-Null }
+    }
     Add-Step 'Category' $true 'Development'
 
     # ================================================ 5. DISTRIBUTE THE CONTENT
@@ -221,8 +230,11 @@ try {
                 -Comment "Created by the SCCM Integration Tool | job $($job.JobId) | RFC $($job.Rfc)" -ErrorAction Stop | Out-Null
             $created.Add(@{ Kind = 'Collection'; Name = $collectionName }) | Out-Null
 
+            # An Uninstall deployment cannot be Available - SCCM refuses it.
+            # Nobody opts in to having software removed, so it is Required.
+            $purpose = if ($c.Action -eq 'Uninstall') { 'Required' } else { 'Available' }
             New-CMApplicationDeployment -Name $appName -CollectionName $collectionName `
-                -DeployAction $c.Action -DeployPurpose Available -ErrorAction Stop | Out-Null
+                -DeployAction $c.Action -DeployPurpose $purpose -ErrorAction Stop | Out-Null
 
             Move-AudiObject -Name $collectionName -ObjectType 'DeviceCollection' -Folder $c.Folder -SiteCode $config.SiteCode
         }
@@ -231,9 +243,16 @@ try {
 
     # ============================================== 7. ADD THE SECURITY SCOPES
     if ($real) {
+        # Current consoles want the scope OBJECT, the same as -AddAppCategory;
+        # older ones took the id. Try the object, fall back to the id.
         $application = Get-CMApplication -Name $appName -Fast -ErrorAction Stop
         foreach ($scope in $config.SecurityScopes) {
-            Add-CMObjectSecurityScope -InputObject $application -Id $scope -ErrorAction Stop | Out-Null
+            $scopeObject = Get-CMSecurityScope -Id $scope -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($scopeObject) {
+                try   { Add-CMObjectSecurityScope -InputObject $application -Scope $scopeObject -ErrorAction Stop | Out-Null }
+                catch { Add-CMObjectSecurityScope -InputObject $application -Id $scope -ErrorAction Stop | Out-Null }
+            }
+            else { Add-CMObjectSecurityScope -InputObject $application -Id $scope -ErrorAction Stop | Out-Null }
         }
     }
     Add-Step 'SecurityScopes' $true ($config.SecurityScopes -join ', ')

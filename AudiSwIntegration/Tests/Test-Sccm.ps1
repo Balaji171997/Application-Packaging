@@ -174,6 +174,43 @@ foreach ($probe in 'TestContentPath', 'TestContentShare', 'GetContentShareNames'
         ($block -like '*FileSystem::*') "a UNC content share would read as missing from the site drive: $block"
 }
 
+# -AddAppCategory wants a category OBJECT on a current console. Passing the name
+# gives "Cannot convert the "Development" value of type System.String to type
+# ...IResultObject" - which failed AFTER the application had been created, so a
+# good application was rolled straight back out over a category.
+$at = @(0..($providerLines.Count - 1) | Where-Object { $providerLines[$_] -match '^\s*SetCategory\s*=' })[0]
+$categoryBlock = ($providerLines[$at..([Math]::Min($at + 10, $providerLines.Count - 1))] -join ' ')
+Assert-True 'the category is looked up as an object, not passed as a name' `
+    ($categoryBlock -like '*Get-CMCategory*') $categoryBlock
+Assert-True 'and created when the site does not have it yet' `
+    ($categoryBlock -like '*New-CMCategory*') $categoryBlock
+
+# SCCM refuses an Available uninstall - nobody opts in to having software taken
+# away. It has to be Required, and it is the LAST collection in every
+# environment, so this fails at the very end of a run that has created everything.
+$at = @(0..($providerLines.Count - 1) | Where-Object { $providerLines[$_] -match '^\s*NewDeployment\s*=' })[0]
+$deployBlock = ($providerLines[$at..([Math]::Min($at + 10, $providerLines.Count - 1))] -join ' ')
+Assert-True 'an uninstall deployment is Required, not Available' `
+    ($deployBlock -like "*Uninstall*Required*") $deployBlock
+
+# Same object-versus-name trap as the category.
+$at = @(0..($providerLines.Count - 1) | Where-Object { $providerLines[$_] -match '^\s*AddSecurityScope\s*=' })[0]
+$scopeBlock = ($providerLines[$at..([Math]::Min($at + 12, $providerLines.Count - 1))] -join ' ')
+Assert-True 'the security scope is looked up as an object first' `
+    ($scopeBlock -like '*Get-CMSecurityScope*') $scopeBlock
+
+# A distribution point group that exists but is EMPTY passes the existence check
+# and then fails when content is distributed to it - after the application has
+# been created. Warn about it up front instead.
+# -DryRun so the local testing content share is a warning, not the thing that
+# blocks - this check is about the distribution point group, nothing else.
+$emptyDp = Test-AudiSwPrerequisite -Plan (New-TestPlan) -Provider (New-AudiSccmDryRunProvider -Missing @('DpGroupEmpty')) -DryRun
+$dpMembers = @($emptyDp.Findings | Where-Object { $_.Check -eq 'DistributionPointGroupMembers' })
+Assert-Equal 'an empty distribution point group is noticed' 1 $dpMembers.Count
+Assert-True  'and it says content distribution would fail'  ($dpMembers[0].Message -like '*fails*') $dpMembers[0].Message
+Assert-True  'but it does not block the run on its own' $emptyDp.Ok `
+    'the count comes from a property that is not on every console build, so it must not be the thing that stops a run'
+
 # "not found" and "cannot be reached" need different fixes, so they must not
 # share one message.
 $noShare = Test-AudiSwPrerequisite -Plan (New-TestPlan) -Provider (New-AudiSccmDryRunProvider -Missing @('ContentPath', 'ContentShare'))
