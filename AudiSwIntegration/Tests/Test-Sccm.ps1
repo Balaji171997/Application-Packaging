@@ -151,7 +151,12 @@ Assert-Equal 'nothing is blocking' 0 $pf.Blocking.Count
 # Add-CMScriptDeploymentType - after the application has been created. Catching
 # it here is the difference between "nothing was created" and "an application was
 # created and then rolled straight back out".
-$localPath = Test-AudiSwPrerequisite -Plan (New-TestPlan) -Provider (New-AudiSccmDryRunProvider)
+# A plan with a deliberately local content path. The environment files all carry
+# real UNC stores now, so this cannot borrow one of them - and it should not:
+# what is being tested is the check, not today's config.
+$localPlan = New-TestPlan
+$localPlan.ContentPath = 'C:\temp\INA_AUDI_DummyTest_x86_1.0_0001_MUL'
+$localPath = Test-AudiSwPrerequisite -Plan $localPlan -Provider (New-AudiSccmDryRunProvider)
 $uncCheck  = @($localPath.Findings | Where-Object { $_.Check -eq 'ContentPathIsUnc' })
 Assert-Equal 'a local content share is checked'      1 $uncCheck.Count
 Assert-True  'and a real run is stopped by it'       (-not $uncCheck[0].Ok)
@@ -189,9 +194,16 @@ Assert-True 'and created when the site does not have it yet' `
 # away. It has to be Required, and it is the LAST collection in every
 # environment, so this fails at the very end of a run that has created everything.
 $at = @(0..($providerLines.Count - 1) | Where-Object { $providerLines[$_] -match '^\s*NewDeployment\s*=' })[0]
-$deployBlock = ($providerLines[$at..([Math]::Min($at + 10, $providerLines.Count - 1))] -join ' ')
+$deployBlock = ($providerLines[$at..([Math]::Min($at + 24, $providerLines.Count - 1))] -join ' ')
 Assert-True 'an uninstall deployment is Required, not Available' `
     ($deployBlock -like "*Uninstall*Required*") $deployBlock
+# -DeployAction only takes Install or Uninstall. The environment file's word -
+# Available, Required, Uninstall - describes the PURPOSE, and passing it as the
+# action gives "Unable to match the identifier name Available".
+Assert-True 'the action is never taken straight from the environment file' `
+    ($deployBlock -notlike '*-DeployAction $c.DeploymentAction*') $deployBlock
+Assert-True 'Available becomes an Install with an Available purpose' `
+    ($deployBlock -like "*`$action = 'Install'*`$purpose = 'Available'*") $deployBlock
 
 # Same object-versus-name trap as the category.
 $at = @(0..($providerLines.Count - 1) | Where-Object { $providerLines[$_] -match '^\s*AddSecurityScope\s*=' })[0]
@@ -210,6 +222,18 @@ Assert-Equal 'an empty distribution point group is noticed' 1 $dpMembers.Count
 Assert-True  'and it says content distribution would fail'  ($dpMembers[0].Message -like '*fails*') $dpMembers[0].Message
 Assert-True  'but it does not block the run on its own' $emptyDp.Ok `
     'the count comes from a property that is not on every console build, so it must not be the thing that stops a run'
+
+# Reading distribution PROGRESS is a convenience - SCCM finishes the
+# distribution whether or not anyone is watching. A console that will not report
+# it must not fail a step whose real work already succeeded, and must not sit in
+# the wait loop for the whole timeout either.
+$noStatus = Invoke-AudiSwIntegration -Plan (New-TestPlan) -DryRun `
+                -Provider (New-AudiSccmDryRunProvider -Missing @('DistributionStatus'))
+Assert-True 'an unreadable distribution status does not fail the run' $noStatus.Ok $noStatus.Message
+$contentStep = @($noStatus.Steps | Where-Object { $_.Step -eq 'Content' })[0]
+Assert-True 'the content step still succeeds' $contentStep.Ok $contentStep.Message
+Assert-True 'and says the progress was not tracked' `
+    ($contentStep.Message -like '*could not be read*') $contentStep.Message
 
 # "not found" and "cannot be reached" need different fixes, so they must not
 # share one message.

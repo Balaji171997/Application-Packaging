@@ -141,13 +141,27 @@ function New-AudiSccmProvider {
         }
 
         NewDeployment = { param($c)
-            # An UNINSTALL deployment cannot be Available - SCCM refuses it.
-            # Nobody opts in to having software taken away, so it is Required.
-            # The install deployments stay Available, which is what puts them in
-            # Software Center for a user to choose.
-            $purpose = if ($c.DeploymentAction -eq 'Uninstall') { 'Required' } else { 'Available' }
+            # The environment file says what a deployment is FOR in one word, the
+            # way the old tool's XML did. SCCM splits that idea across two
+            # parameters, and they are not interchangeable:
+            #
+            #   -DeployAction    Install | Uninstall     what it does
+            #   -DeployPurpose   Available | Required    whether a user chooses
+            #
+            # Passing 'Available' as the ACTION gives:
+            #   "Unable to match the identifier name Available to a valid
+            #    enumerator name. Specify one of: Install, Uninstall"
+            #
+            # Uninstall is always Required - nobody opts in to having software
+            # taken away - and Available is what puts an install into Software
+            # Center for a user to pick.
+            switch ($c.DeploymentAction) {
+                'Uninstall' { $action = 'Uninstall'; $purpose = 'Required' }
+                'Required'  { $action = 'Install';   $purpose = 'Required' }
+                default     { $action = 'Install';   $purpose = 'Available' }
+            }
             New-CMApplicationDeployment -Name $c.ApplicationName -CollectionName $c.CollectionName `
-                                        -DeployAction $c.DeploymentAction -DeployPurpose $purpose -ErrorAction Stop | Out-Null
+                                        -DeployAction $action -DeployPurpose $purpose -ErrorAction Stop | Out-Null
         }
 
         # The environment files hold scope IDs (INA00003). Current consoles want
@@ -248,11 +262,33 @@ function New-AudiSccmProvider {
         TestCollectionName = { param($c) [bool](Get-CMCollection -Name $c.Name -ErrorAction SilentlyContinue) }
 
         # ---- distribution state, so the tool can wait for a real result
+        #
+        # Get-CMDistributionStatus has no -Name on a current console:
+        #
+        #     "A parameter cannot be found that matches parameter name 'Name'."
+        #
+        # AND A PARAMETER BINDING ERROR IS TERMINATING - -ErrorAction
+        # SilentlyContinue does not suppress it, because the binder fails before
+        # the cmdlet runs at all. So this threw and failed a step whose real
+        # work, starting the distribution, had already succeeded.
+        #
+        # It takes -InputObject, so the application is fetched and passed.
+        # Reading progress is a CONVENIENCE: distribution is asynchronous and
+        # SCCM finishes it whether or not anyone is watching. If the status
+        # cannot be read, say so rather than failing a distribution that is
+        # already under way - Readable carries that back to the caller.
         GetDistributionState = { param($c)
-            $status = Get-CMDistributionStatus -Name $c.ApplicationName -ErrorAction SilentlyContinue
-            if (-not $status) { return @{ Total = 0; Success = 0; Failed = 0; InProgress = 0 } }
-            return @{ Total = [int]$status.Targeted; Success = [int]$status.NumberSuccess
-                      Failed = [int]$status.NumberErrors; InProgress = [int]$status.NumberInProgress }
+            $unknown = @{ Total = 0; Success = 0; Failed = 0; InProgress = 0; Readable = $false }
+            try {
+                $app = Get-CMApplication -Name $c.ApplicationName -Fast -ErrorAction Stop
+                if (-not $app) { return $unknown }
+                $status = Get-CMDistributionStatus -InputObject $app -ErrorAction SilentlyContinue
+                if (-not $status) { return $unknown }
+                return @{ Total = [int]$status.Targeted; Success = [int]$status.NumberSuccess
+                          Failed = [int]$status.NumberErrors; InProgress = [int]$status.NumberInProgress
+                          Readable = $true }
+            }
+            catch { return $unknown }
         }
 
         # The environment file holds the folder as the console shows it -
@@ -518,7 +554,7 @@ function New-AudiSccmDryRunProvider {
     $provider.GetDpGroupMemberCount = { param($c) $(if ($Missing -contains 'DpGroupEmpty') { 0 } else { 2 }) }.GetNewClosure()
     $provider.TestSecurityScope  = { param($c) -not ($Missing -contains "Scope:$($c.Id)") }.GetNewClosure()
     $provider.TestCollectionName = { param($c) $ExistingCollections -contains $c.Name }.GetNewClosure()
-    $provider.GetDistributionState = { param($c) @{ Total = 2; Success = 2; Failed = 0; InProgress = 0 } }.GetNewClosure()
+    $provider.GetDistributionState = { param($c) $(if ($Missing -contains 'DistributionStatus') { @{ Total = 0; Success = 0; Failed = 0; InProgress = 0; Readable = $false } } else { @{ Total = 2; Success = 2; Failed = 0; InProgress = 0; Readable = $true } }) }.GetNewClosure()
 
     return $provider
 }
@@ -863,6 +899,22 @@ function Invoke-AudiStepBody {
         }
 
         'ArsGroup' {
+            # TURNED OFF for every environment, in Defaults.xml. The directory
+            # refuses the request the old tool's attributes produce:
+            #
+            #   malformedRequest - Some of the specified attributes for the
+            #   'group' object class are not defined in the schema.
+            #
+            # Everything in SCCM is already done and correct by this point, so
+            # failing here would roll a perfectly good application back out over
+            # a step nobody can use yet. It is skipped and SAID to be skipped -
+            # never quietly reported as done - so no one believes the group
+            # exists. Set Steps/@createArsGroup="true" once the attributes are
+            # settled with whoever owns the ARS schema.
+            if (-not $Plan.CreateArsGroup) {
+                return "SKIPPED - the AD group '$($Plan.ArsGroupName)' was NOT created. Turned off in Defaults.xml (Steps/@createArsGroup) until the ARS attributes are agreed. Create it by hand if it is needed."
+            }
+
             # description and order number are the two attributes the old tool set;
             # it left the order number as the literal 123456789 on every package,
             # because there was no field for it. Here it comes from the request.
@@ -899,6 +951,11 @@ function Invoke-AudiRemovalStepBody {
             return "Application '$($Plan.ApplicationName)' removed."
         }
         'ArsGroup' {
+            # Not created, so not removed. Removing a group this tool never made
+            # would be deleting somebody else's object.
+            if (-not $Plan.CreateArsGroup) {
+                return "SKIPPED - the AD group '$($Plan.ArsGroupName)' was NOT removed, because this tool does not create it. Turned off in Defaults.xml (Steps/@createArsGroup)."
+            }
             & $Provider.RemoveArsGroup @{ GroupName = $Plan.ArsGroupName; Ou = $Plan.ArsGroupOu; ProviderUrl = $Plan.ArsProviderUrl }
             return "AD group '$($Plan.ArsGroupName)' removed."
         }
@@ -1094,6 +1151,16 @@ function Wait-AudiContentDistribution {
     while ($true) {
         $state = & $Provider.GetDistributionState @{ ApplicationName = $Plan.ApplicationName }
         $done  = [int]$state.Success + [int]$state.Failed
+
+        # The status could not be read at all - a console that does not expose it,
+        # or no rights to the status class. Distribution has still been started
+        # and SCCM will carry on with it, so say that plainly and move on rather
+        # than sitting in this loop for the whole timeout waiting for a number
+        # that is never coming.
+        if ($state.ContainsKey('Readable') -and -not $state.Readable) {
+            return @{ Ok = $true; State = $state
+                Message = 'Content distribution started. Its progress could not be read from this console, so it was not waited on - check the Content Status node in the console.' }
+        }
 
         if ([int]$state.Failed -gt 0) {
             return @{ Ok = $false; State = $state

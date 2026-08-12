@@ -31,7 +31,17 @@
              dropFolder="C:\AudiSwIntegration\DropFolder\II1"
              resultTimeoutMinutes="30"/>
 
-  <Content share="C:\temp"
+  <!--
+    A UNC path, always. SCCM hands this to distribution points to fetch from, so
+    a local path is meaningless to it - and it is refused inside
+    Add-CMScriptDeploymentType, AFTER the application has been created.
+
+    This one is a working folder that the tester proved reachable from the test
+    machine. The proper store for this domain is ICZ's,
+    \\audiinsv1059.in.audi.vwg5t\sccm-store\pkg\prod - switch to it once II1's
+    distribution points can read it.
+  -->
+  <Content share="\\isnasv117.in.audi.vwg\GPF-Package-Documentation\GPF_Working\GPF Team\Balaji"
            distributionPointGroup="Test"/>
 
   <ApplicationFolder>ICZ-Applications</ApplicationFolder>

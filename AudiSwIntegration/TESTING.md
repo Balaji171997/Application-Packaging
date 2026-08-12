@@ -7,7 +7,7 @@ plain config:
 | | While testing | Later |
 |---|---|---|
 | Drop folder | `C:\AudiSwIntegration\DropFolder\<ENV>` | the share on the Script Runner |
-| Content share | `C:\temp` for a dry run only - a REAL run needs a UNC path, `\\server\share` | the SCCM store |
+| Content share | the real SCCM store, already set in every environment file. It MUST be UNC - SCCM refuses a local path | unchanged |
 | Account | your own user | the gMSA |
 
 **SCCM is bypassed by the Dry run tick**, which is on by default. Every step runs
@@ -77,7 +77,7 @@ Then:
 ### Without opening the window
 
 ```powershell
-.\Tests\Invoke-AllTests.ps1                    # 326 checks, no SCCM, no rights
+.\Tests\Invoke-AllTests.ps1                    # 334 checks, no SCCM, no rights
 .\Client\Start-AudiSwClient.ps1 -SelfTest      # drives the window's own code, no screen
 ```
 

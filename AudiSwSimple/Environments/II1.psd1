@@ -14,7 +14,7 @@
     # MUST be a UNC path. SCCM hands this to distribution points to fetch from,
     # so a local path is refused - and refused only after the application has
     # been created, which is why it is checked before anything starts.
-    ContentShare           = '\\AUDIINSA1299\Packages$'
+    ContentShare           = '\\isnasv117.in.audi.vwg\GPF-Package-Documentation\GPF_Working\GPF Team\Balaji'
     DistributionPointGroup = 'Test'
 
     # Console folders, as the console shows them.

@@ -21,7 +21,7 @@
              dropFolder="C:\AudiSwIntegration\DropFolder\INA"
              resultTimeoutMinutes="30"/>
 
-  <Content share="C:\temp"
+  <Content share="\\audiinsv0259.in.audi.vwg\sccm-store\pkg\prod"
            distributionPointGroup="INA-DP-Group all"/>
 
   <ApplicationFolder>INA-Applications</ApplicationFolder>

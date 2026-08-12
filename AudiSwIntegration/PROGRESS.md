@@ -3,7 +3,7 @@
 Running record of what is built, what is pending, and every decision taken so
 far. Update this at the end of each working session.
 
-**Last updated: 10.08.2026** — flow 2 wired end to end; no person recorded anywhere on the SCCM side. Two detection rules (branding key + SoftIdent). The collector writes a heartbeat after every step, so the window follows a job live and picks it back up after being closed. 326 tests passing.
+**Last updated: 10.08.2026** — flow 2 wired end to end; no person recorded anywhere on the SCCM side. Two detection rules (branding key + SoftIdent). The collector writes a heartbeat after every step, so the window follows a job live and picks it back up after being closed. 334 tests passing.
 
 ---
 
@@ -23,7 +23,7 @@ far. Update this at the end of each working session.
 | 8. ICZ proving run | **Blocked** — needs the account, the rights and the drop folder |
 | 9. INA and PCZ rollout | Not started |
 
-**Tests: 326 passing** — 120 config, 139 engine, 67 transport. None need SCCM.
+**Tests: 334 passing** — 120 config, 147 engine, 67 transport. None need SCCM.
 
 ```powershell
 .\Tests\Invoke-AllTests.ps1

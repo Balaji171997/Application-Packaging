@@ -26,7 +26,7 @@
              dropFolder="C:\AudiSwIntegration\DropFolder\ICZ"
              resultTimeoutMinutes="30"/>
 
-  <Content share="C:\temp"
+  <Content share="\\audiinsv1059.in.audi.vwg5t\sccm-store\pkg\prod"
            distributionPointGroup="Test"/>
 
   <ApplicationFolder>ICZ-Applications</ApplicationFolder>

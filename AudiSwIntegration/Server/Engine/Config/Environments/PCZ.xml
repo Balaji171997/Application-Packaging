@@ -4,14 +4,18 @@
 
   verified="false" ON PURPOSE.
 
-  In the tool being replaced, four PCZ values are copies of INA's rather than
-  PCZ's own, and a fifth was never set at all:
+  In the tool being replaced, several PCZ values are copies of INA's rather than
+  PCZ's own, and one was never set at all:
 
     SecurityScopes      PCZ\VWG-SCCM-AddSecurityScopeToObject...xml holds INA00003
     ApplicationFolder   PCZ\VWG-SCCM-MoveItem...xml holds INA-Applications
-    Content/@share      the PCZ branch of the old script has no share of its own
+    dpGroup             still INA-DP-Group all - INA's, and almost certainly wrong
     ActiveDirectory     PCZ\Audi-ARSSPML-CreateGroup...xml holds DC=audi,DC=vwg
     arsProviderUrl      never assigned in the old script, so both AD steps stalled
+
+  Content/@share is NO LONGER a guess: the old script does define PCZ's own store
+  at line 153, \\audiinsc0027.audi.prod.vwg\SCCM-STORE\PKG\PROD. It was only its
+  XML that carried INA's. That one is now correct.
 
   The values below are carried over unchanged so nothing is invented. They are
   marked unverified so the tool warns before acting on them, and they are on the
@@ -37,7 +41,7 @@
              dropFolder="C:\AudiSwIntegration\DropFolder\PCZ"
              resultTimeoutMinutes="30"/>
 
-  <Content share="C:\temp"
+  <Content share="\\audiinsc0027.audi.prod.vwg\SCCM-STORE\PKG\PROD"
            distributionPointGroup="INA-DP-Group all"/>
 
   <!-- CONFIRM: reads INA-Applications in the old configuration. -->

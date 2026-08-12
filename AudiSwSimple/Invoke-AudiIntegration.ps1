@@ -230,11 +230,18 @@ try {
                 -Comment "Created by the SCCM Integration Tool | job $($job.JobId) | RFC $($job.Rfc)" -ErrorAction Stop | Out-Null
             $created.Add(@{ Kind = 'Collection'; Name = $collectionName }) | Out-Null
 
-            # An Uninstall deployment cannot be Available - SCCM refuses it.
-            # Nobody opts in to having software removed, so it is Required.
-            $purpose = if ($c.Action -eq 'Uninstall') { 'Required' } else { 'Available' }
+            # The environment file says what a deployment is FOR in one word.
+            # SCCM splits that across two parameters and they are NOT the same:
+            #   -DeployAction   Install | Uninstall     what it does
+            #   -DeployPurpose  Available | Required    whether a user chooses
+            # 'Available' is not a valid ACTION - only Install or Uninstall are.
+            switch ($c.Action) {
+                'Uninstall' { $action = 'Uninstall'; $purpose = 'Required' }
+                'Required'  { $action = 'Install';   $purpose = 'Required' }
+                default     { $action = 'Install';   $purpose = 'Available' }
+            }
             New-CMApplicationDeployment -Name $appName -CollectionName $collectionName `
-                -DeployAction $c.Action -DeployPurpose $purpose -ErrorAction Stop | Out-Null
+                -DeployAction $action -DeployPurpose $purpose -ErrorAction Stop | Out-Null
 
             Move-AudiObject -Name $collectionName -ObjectType 'DeviceCollection' -Folder $c.Folder -SiteCode $config.SiteCode
         }

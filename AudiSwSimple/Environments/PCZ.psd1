@@ -10,7 +10,7 @@
     SiteServer = 'AUDIINSC0003.audi.vwg'          # CONFIRM
     DropFolder = 'C:\AudiSwIntegration\DropFolder\PCZ'
 
-    ContentShare           = '\\CONFIRM-ME\PCZ-Content$'   # CONFIRM - was INA's
+    ContentShare           = '\\audiinsc0027.audi.prod.vwg\SCCM-STORE\PKG\PROD'   # CONFIRM - was INA's
     DistributionPointGroup = 'PCZ-DP-Group all'            # CONFIRM
 
     ApplicationFolder = 'PCZ-Applications'                 # CONFIRM - was INA's

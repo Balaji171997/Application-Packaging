@@ -4,7 +4,7 @@
     SiteServer = 'AUDIINSA1298.audi.vwg5t'
     DropFolder = 'C:\AudiSwIntegration\DropFolder\ICZ'
 
-    ContentShare           = '\\CONFIRM-ME\ICZ-Content$'   # CONFIRM: must be UNC
+    ContentShare           = '\\audiinsv1059.in.audi.vwg5t\sccm-store\pkg\prod'   # CONFIRM: must be UNC
     DistributionPointGroup = 'Test'
 
     ApplicationFolder = 'ICZ-Applications'
