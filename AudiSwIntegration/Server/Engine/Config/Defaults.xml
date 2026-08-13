@@ -222,7 +222,11 @@
 
          Anything that does not match is simply left blank for the packager to
          type. Adjusting a label is an edit here, not a code change. -->
-    <Document filter="*.docx">
+    <!-- *.doc* deliberately, not *.docx: an old binary .doc cannot be read, but
+         it can be reported. Matching only .docx makes a package that has a .doc
+         look like a package with no document at all, which sends the packager
+         hunting for a file that is sitting right there. -->
+    <Document filter="*.doc*">
       <!-- THE DESCRIPTION, AND NOTHING ELSE.
            Everything else comes from the deployment script, which is the
            reliable source. The document is only consulted for the wording a
@@ -274,5 +278,116 @@
       <Pattern>deadlock|timeout expired</Pattern>
     </TransientErrors>
   </Runtime>
+
+  <!-- ==================================================================
+       WHAT THE MODIFY TAB CAN EDIT
+
+       Every setting the tool itself sets when it creates an application is
+       listed here, with the values SCCM will accept for it. The window builds
+       its editor from this list, so adding a settable option is an edit to
+       this file - not a code change, which is the same rule the environment
+       files follow.
+
+       scope     Application     = a property of the application
+                 DeploymentType  = a property of its deployment type
+       editor    Text | Number | Choice
+       property  the name to read and write on the SCCM side
+
+       Only settings this tool actually sets are here. Editing something the
+       tool never set would be changing a value nobody chose, which is how a
+       package quietly stops matching its own documentation.
+       ================================================================== -->
+  <Settings>
+
+    <!-- the application -->
+    <!-- editable="false" means: show it, but do not offer to change it.
+
+         Publisher, version and language are part of the PACKAGE NAME. Changing
+         one of them in SCCM alone would leave the application disagreeing with
+         the folder its content was built from, and with its own branding key
+         and detection rule. That is a repackage, not a modification: remove
+         this application and integrate the new one. -->
+    <Setting key="Title"       scope="Application" property="LocalizedDisplayName"
+             label="Display name (EN)"  editor="Text" editable="false"
+             lockedReason="Built from the package name. Repackage and integrate again to change it."/>
+    <Setting key="Description" scope="Application" property="LocalizedDescription"
+             label="Description (EN)"   editor="Text"
+             writeParameter="LocalizedApplicationDescription"
+             hint="Shown under the name in Software Center."/>
+    <Setting key="Publisher"   scope="Application" property="Publisher"
+             label="Publisher"          editor="Text" editable="false"
+             lockedReason="Part of the package name. A different publisher is a different package - remove this one and integrate the new one."/>
+    <Setting key="Version"     scope="Application" property="SoftwareVersion"
+             label="Version"            editor="Text" editable="false"
+             lockedReason="Part of the package name. A new version is a new package - remove this one and integrate the new one."/>
+
+    <!-- the deployment type -->
+    <Setting key="InstallCommand"   scope="DeploymentType" property="InstallCommandLine"
+             label="Install command"   editor="Text" writeParameter="InstallCommand"/>
+    <Setting key="UninstallCommand" scope="DeploymentType" property="UninstallCommandLine"
+             label="Uninstall command" editor="Text" writeParameter="UninstallCommand"/>
+    <Setting key="RepairCommand"    scope="DeploymentType" property="RepairCommandLine"
+             label="Repair command"    editor="Text" writeParameter="RepairCommand"/>
+
+    <Setting key="EstimatedRuntime" scope="DeploymentType" property="EstimatedRuntimeMins"
+             label="Estimated install time" editor="Number" unit="minutes"
+             writeParameter="EstimatedRuntimeMins"
+             hint="Shown to the user in Software Center. Does not stop anything."/>
+    <Setting key="MaximumRuntime"   scope="DeploymentType" property="MaximumRuntimeMins"
+             label="Maximum run time"      editor="Number" unit="minutes"
+             writeParameter="MaximumRuntimeMins"
+             hint="SCCM gives up on the install after this."/>
+
+    <!-- writeValue differs from value here: SDMPackageXML reports the context
+         as System/User/Any, but Set-CMScriptDeploymentType wants the
+         InstallFor... names for the same three states. Reading and writing use
+         different vocabularies for one setting, so both are recorded. -->
+    <Setting key="ExecutionContext" scope="DeploymentType" property="ExecutionContext"
+             label="Install behaviour" editor="Choice" writeParameter="InstallationBehaviorType">
+      <Option value="System" writeValue="InstallForSystem">For system - no user has to be signed in</Option>
+      <Option value="User"   writeValue="InstallForUser">For the signed-in user</Option>
+      <Option value="Any"    writeValue="InstallForSystemIfResourceIsDeviceOtherwiseInstallForUser">For system if a device, otherwise for the user</Option>
+    </Setting>
+
+    <Setting key="LogonRequirement" scope="DeploymentType" property="RequiresLogOn"
+             label="Logon requirement" editor="Choice" writeParameter="LogonRequirementType">
+      <Option value=""      writeValue="WhetherOrNotUserLoggedOn">Whether or not a user is signed in</Option>
+      <Option value="True"  writeValue="OnlyWhenUserLoggedOn">Only when a user is signed in</Option>
+      <Option value="False" writeValue="OnlyWhenNoUserLoggedOn">Only when no user is signed in</Option>
+    </Setting>
+
+    <Setting key="RebootBehavior" scope="DeploymentType" property="PostInstallBehavior"
+             label="After installing" editor="Choice" writeParameter="RebootBehavior">
+      <Option value="BasedOnExitCode">Decide from the return code</Option>
+      <Option value="NoAction">No specific action</Option>
+      <Option value="ProgramReboot">The software forces a restart</Option>
+      <Option value="ForceReboot">SCCM forces a restart</Option>
+    </Setting>
+
+    <Setting key="UserInteraction" scope="DeploymentType" property="RequireUserInteraction"
+             label="User can see the install" editor="Choice" writeParameter="RequireUserInteraction">
+      <Option value="False">No - runs hidden</Option>
+      <Option value="True">Yes</Option>
+    </Setting>
+
+    <Setting key="SlowNetwork" scope="DeploymentType" property="SlowNetworkDeploymentMode"
+             label="On a slow network" editor="Choice" writeParameter="SlowNetworkDeploymentMode">
+      <Option value="DoNothing">Do not install</Option>
+      <Option value="Download">Download and install</Option>
+      <Option value="DownloadContentForStreaming">Install straight from the distribution point</Option>
+    </Setting>
+
+    <Setting key="PersistInCache" scope="DeploymentType" property="PersistContentInCache"
+             label="Keep content in the client cache" editor="Choice"
+             writeParameter="PersistContentInClientCache">
+      <Option value="True">Yes</Option>
+      <Option value="False">No</Option>
+    </Setting>
+
+    <Setting key="ContentLocation" scope="DeploymentType" property="ContentLocation"
+             label="Content location" editor="Text" writeParameter="ContentLocation"
+             hint="Must be a UNC path the distribution point can reach."/>
+
+  </Settings>
 
 </Defaults>

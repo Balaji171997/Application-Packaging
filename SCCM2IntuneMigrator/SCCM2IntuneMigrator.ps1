@@ -112,6 +112,9 @@ $script:DefaultSettings = [ordered]@{
     # the SCCM clause and can synthesise it when SCCM has no detection at all. Profile-specific.
     BrandingKeyRoot             = ''
     SynthesizeBrandingWhenMissing = $true    # was the whole point of the separate _NoDetection script
+    # The value under the branding key that proves the package is installed. The rule is always
+    # "this value EXISTS" - the value is never compared, so nothing here depends on the revision.
+    BrandingValueName           = 'Revision'
     # --- Icon --------------------------------------------------------------------------------------
     DefaultIconPath             = 'Assets\DefaultAppIcon.png'
     NormalizeIconTo256          = $true      # scale/pad whatever we end up with to a square 256x256 PNG
@@ -844,13 +847,22 @@ function Get-MigDetectionRules {
                 $rule['operator']      = 'notConfigured'
                 $rule['detectionValue'] = $null
                 $summary.Add("registry key exists: $($rule.keyPath)")
+            } elseif ($isBranding) {
+                # THE BRANDING KEY IS ALWAYS "value exists" - never a value comparison, whatever
+                # SCCM happened to hold. The key is written per package, so its mere presence
+                # proves this exact package is installed; comparing the Revision on top only adds
+                # a way for detection to go wrong (a re-branded or hand-edited value would then
+                # read as "not installed").
+                $rule['detectionType']  = 'exists'
+                $rule['operator']       = 'notConfigured'
+                $rule['detectionValue'] = $null
+                $summary.Add("branding: $($rule.keyPath) [$valueName] exists")
             } else {
                 $expected = "$($clause.Constant.Value)".Trim()
-                if (-not $expected -and $isBranding) { $expected = "$($Name.Revision)" }
                 $rule['detectionType']  = (ConvertTo-MigDetectionType "$($clause.DataType.TypeName)")
                 $rule['operator']       = (ConvertTo-MigGraphOperator "$($clause.Operator)")
                 $rule['detectionValue'] = $expected
-                $summary.Add("$(if($isBranding){'branding'}else{'registry'}): $($rule.keyPath) [$valueName] $($rule.operator) '$expected'")
+                $summary.Add("registry: $($rule.keyPath) [$valueName] $($rule.operator) '$expected'")
             }
             $rules.Add($rule)
             Write-MigLog "Detection: $($summary[$summary.Count-1])$(if($check32){' (32-bit hive)'})"
@@ -910,22 +922,24 @@ function Get-MigDetectionRules {
     $synth = $false
     if ($rules.Count -eq 0) {
         # This is what MAN_SCCM2IntuneMgrationTool_Icon_NoDetection.ps1 did as a separate file.
-        if ($script:Cfg.SynthesizeBrandingWhenMissing -and $Name.Revision) {
+        if ($script:Cfg.SynthesizeBrandingWhenMissing -and $Name.FullName) {
+            # Same rule as above: the branding value EXISTING is the detection. The key path is
+            # per package, so nothing needs comparing.
             $key = "HKEY_LOCAL_MACHINE\$($script:Cfg.BrandingKeyRoot)\$($Name.FullName)"
             $rules.Add(@{
                 '@odata.type'        = '#microsoft.graph.win32LobAppRegistryDetection'
                 keyPath              = $key
-                valueName            = 'Revision'
-                detectionType        = 'string'
-                operator             = 'equal'
-                detectionValue       = "$($Name.Revision)"
+                valueName            = "$($script:Cfg.BrandingValueName)"
+                detectionType        = 'exists'
+                operator             = 'notConfigured'
+                detectionValue       = $null
                 check32BitOn64System = $false
             })
-            $summary.Add("SYNTHESISED branding: $key [Revision] equal '$($Name.Revision)'")
+            $summary.Add("SYNTHESISED branding: $key [$($script:Cfg.BrandingValueName)] exists")
             $synth = $true
-            Write-MigLog "Detection: SCCM has no detection clause - the branding key $key [Revision = $($Name.Revision)] was synthesised." Warning
+            Write-MigLog "Detection: SCCM has no detection clause - the branding key $key [$($script:Cfg.BrandingValueName)] exists was synthesised." Warning
         } else {
-            Write-MigLog "Detection: SCCM has no detection clause and no revision is available to synthesise the branding key." Error
+            Write-MigLog "Detection: SCCM has no detection clause and no branding key could be built for this package." Error
         }
     }
     # Return a plain array. A SINGLE rule must still serialise as a JSON ARRAY - a bare object makes

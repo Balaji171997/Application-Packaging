@@ -226,8 +226,8 @@ Assert-Equal 'plan collection count' 9 $plan.Collections.Count
 Assert-Equal 'first collection name' 'GY1-INA_AUDI_DummyTest_x86_1.0_0001_MUL' $plan.Collections[0].Name
 Assert-Equal 'remove collection name' 'SM1-INA_AUDI_DummyTest_x86_1.0_0001_MUL_RemoveComputer' (@($plan.Collections | Where-Object { $_.DeploymentAction -eq 'Uninstall' })[0].Name)
 Assert-Equal 'deployment type name' 'INA_AUDI_DummyTest_x86_1.0_0001_MUL_INSTALLCOMPUTER' $plan.DeploymentType
-Assert-Equal 'detection key' 'Software\VWG\CM\AUDI_DummyTest_x86_1.0-0001_MUL' $plan.DetectionKey
-Assert-Equal 'detection data is the revision' '0001' $plan.DetectionData
+Assert-Equal 'detection key' 'Software\VWG\CM\AUDI_DummyTest_x86_1.0-0001_MUL' $plan.DetectionRules[0].Key
+Assert-Equal 'detection data is the revision' '0001' $plan.DetectionRules[0].Value
 Assert-Equal 'ars group name' 'G-AUDI-AG-SW-INA_AUDI_DummyTest_x86_1.0_0001_MUL' $plan.ArsGroupName
 Assert-True  'content path is under the environment share' ($plan.ContentPath -like ($ina.ContentShare + '*')) $plan.ContentPath
 Assert-True  'rfc is recorded on every collection'         (@($plan.Collections | Where-Object { $_.Comment -like '*RFC0012345*' }).Count -eq 9)
@@ -371,7 +371,7 @@ Assert-True  'every collection comment carries the job id' `
 # every string the engine writes into SCCM or AD, checked in one place. The
 # signed-in account is the one name guaranteed to be available to leak.
 $sccmBound = @($plan.ApplicationName, $plan.LocalizedName, $plan.LocalizedDescription,
-               $plan.DeploymentType, $plan.DetectionKey, $plan.Category,
+               $plan.DeploymentType, $plan.DetectionRules[0].Key, $plan.Category,
                $plan.ArsGroupName, $plan.ArsDescription) +
              @($plan.Collections | ForEach-Object { $_.Name; $_.Comment })
 $leaked = @($sccmBound | Where-Object { $_ -like "*$env:USERNAME*" -or $_ -like '*tester*' })

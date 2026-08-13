@@ -123,9 +123,34 @@ foreach ($file in $jobs) {
         }
 
         $result = switch ($job.Action) {
-            'Remove' { Invoke-AudiSwRemoval      -Plan $plan -DryRun:$wantsDryRun -OnProgress $onProgress }
-            'Modify' { Invoke-AudiSwModification -Plan $plan -DryRun:$wantsDryRun -OnProgress $onProgress }
-            default  { Invoke-AudiSwIntegration  -Plan $plan -DryRun:$wantsDryRun -OnProgress $onProgress }
+            'Remove'  { Invoke-AudiSwRemoval      -Plan $plan -DryRun:$wantsDryRun -OnProgress $onProgress }
+            'Modify'  { Invoke-AudiSwModification -Plan $plan -DryRun:$wantsDryRun -OnProgress $onProgress }
+
+            # Read the site and report what is there. Creates nothing, so it is
+            # never a dry run - there is nothing to rehearse. This is what fills
+            # the window's Modify tab.
+            'Inspect' {
+                # -DryRun matters here even though Inspect creates nothing: it
+                # decides whether the SITE is read or the dry-run provider stands
+                # in. In production the collector runs without it and this reads
+                # the real site; under -DryRun the whole road can be exercised on
+                # a machine with no console at all.
+                $state = Get-AudiSwPackageState -Plan $plan -DryRun:$wantsDryRun
+                [pscustomobject]@{
+                    Ok = $state.Ok; DryRun = $false; Message = $state.Message
+                    Steps = @([pscustomobject]@{ Step = 'Inspect'; Ok = $state.Ok; Message = $state.Message })
+                    State = $state
+                }
+            }
+
+            # Apply exactly the collections the packager ticked.
+            'Change'  {
+                Invoke-AudiSwChange -Plan $plan -DryRun:$wantsDryRun -OnProgress $onProgress `
+                                    -Add $job.AddCollections -Remove $job.RemoveCollections `
+                                    -SettingChanges $job.SettingChanges
+            }
+
+            default   { Invoke-AudiSwIntegration  -Plan $plan -DryRun:$wantsDryRun -OnProgress $onProgress }
         }
         $outcome = if ($result.Ok) { 'Succeeded' } else { 'Failed' }
     }

@@ -459,6 +459,52 @@ T 'the message says where to point ReportRoot' {
 }
 
 
+Write-Host "`n=== the branding key is ALWAYS 'value exists' ===" -ForegroundColor Cyan
+$bnm = ConvertFrom-MigPackageName -FullName 'Contoso_App_x64_1.0-0007_MUL'
+function Use-SccmLocation {}
+function Get-CMDeploymentType { param($ApplicationName) @([pscustomobject]@{ n = 1 }) }
+# SCCM stores the branding clause as a STRING COMPARE - the tool must NOT carry that over
+function Get-CMDeploymentTypeDetectionClause { param($InputObject)
+  @(
+    [pscustomobject]@{ Setting=[pscustomobject]@{ SourceType='Registry'; Location="$($script:Cfg.BrandingKeyRoot)\Contoso_App_x64_1.0-0007_MUL"; ValueName='Revision'; Is64Bit=$true }
+                       Constant=[pscustomobject]@{ Value='0007' }; DataType=[pscustomobject]@{ TypeName='String' }; Operator='IsEquals' }
+    [pscustomobject]@{ Setting=[pscustomobject]@{ SourceType='Registry'; Location='SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{X}'; ValueName='DisplayVersion'; Is64Bit=$true }
+                       Constant=[pscustomobject]@{ Value='1.0' }; DataType=[pscustomobject]@{ TypeName='Version' }; Operator='GreaterEquals' }
+  ) }
+$bdet  = Get-MigDetectionRules -SiteCode 'X' -ApplicationName 'Contoso_App_x64_1.0-0007_MUL' -Name $bnm
+$bBrand = @($bdet.Rules | Where-Object { "$($_.keyPath)" -match [regex]::Escape($script:Cfg.BrandingKeyRoot) })[0]
+$bOther = @($bdet.Rules | Where-Object { "$($_.keyPath)" -match 'CurrentVersion' })[0]
+
+T 'branding uses detectionType exists'   { $bBrand.detectionType -eq 'exists' }
+T 'branding operator is notConfigured'   { $bBrand.operator -eq 'notConfigured' }
+T 'branding compares NO value'           { [string]::IsNullOrEmpty("$($bBrand.detectionValue)") }
+T 'branding still names the value'       { $bBrand.valueName -eq 'Revision' }
+T 'the SCCM string compare is dropped'   { $bBrand.detectionType -ne 'string' -and $bBrand.operator -ne 'equal' }
+T 'the revision is NOT baked in'         { "$($bBrand.detectionValue)" -notmatch '0007' }
+T 'ONLY branding changed - others compare as SCCM had them' {
+    $bOther.detectionType -eq 'version' -and $bOther.operator -eq 'greaterThanOrEqual' -and "$($bOther.detectionValue)" -eq '1.0'
+}
+T 'the summary says exists'              { $bdet.Summary -match 'branding: .*\[Revision\] exists' }
+
+# and the synthesised one (SCCM had no detection at all) must match
+function Get-CMDeploymentTypeDetectionClause { param($InputObject) @() }
+$bsyn = Get-MigDetectionRules -SiteCode 'X' -ApplicationName 'Contoso_App_x64_1.0-0007_MUL' -Name $bnm
+$bs = @($bsyn.Rules)[0]
+T 'synthesised branding also uses exists' { $bs.detectionType -eq 'exists' -and $bs.operator -eq 'notConfigured' }
+T 'synthesised compares no value'         { [string]::IsNullOrEmpty("$($bs.detectionValue)") }
+T 'synthesised is flagged as synthesised' { $bsyn.Synthesised -eq $true }
+T 'the branding value name is configurable' { $bs.valueName -eq "$($script:Cfg.BrandingValueName)" }
+T 'a package with no revision still gets one' {
+    # the old code needed a revision to synthesise; "exists" does not care
+    $noRev = ConvertFrom-MigPackageName -FullName 'Contoso_App_x64_1.0_MUL'
+    $r = Get-MigDetectionRules -SiteCode 'X' -ApplicationName 'x' -Name $noRev
+    @($r.Rules).Count -eq 1 -and @($r.Rules)[0].detectionType -eq 'exists'
+}
+T 'it serialises as exists for Graph' {
+    (@{ detectionRules = @($bs) } | ConvertTo-Json -Depth 5 -Compress) -match '"detectionType":"exists"'
+}
+
+
 Write-Host "`n=== safe names ===" -ForegroundColor Cyan
 T 'illegal characters removed'    { (Get-MigSafeName 'App: v1/2 <x86>?') -notmatch '[\\/:*?"<>|]' }
 T 'spaces become underscores'     { (Get-MigSafeName 'My App Name') -eq 'My_App_Name' }

@@ -94,7 +94,7 @@ $state = [hashtable]::Synchronized(@{
 $defaults = Get-AudiDefaults
 
 # ---------------------------------------------------------------- small helpers
-function Set-Status { param([string]$Text, [string]$Colour = '#FFE5E9EB')
+function Set-Status { param([string]$Text, [string]$Colour = '#FF16242A')
     $ui.txtStatus.Text = $Text
     $ui.txtStatus.Foreground = $Colour
 }
@@ -263,7 +263,10 @@ function Show-PreviousRuns {
         '{0}  {1,-9}  {2}  job {3}' -f $_.Completed.ToString('dd.MM.yyyy HH:mm'), $_.Outcome, $_.Message, $_.JobId
     }) -join "`r`n"
 
-    if ($running -and $ui.tabMain.SelectedIndex -ne 1) { $ui.tabMain.SelectedIndex = 1 }
+    # Tabs are selected BY NAME, never by position. Inserting the Modify tab in
+    # the middle shifted every index by one and quietly sent runs to the wrong
+    # tab - which is exactly what happened.
+    if ($running -and -not $ui.tabResult.IsSelected) { $ui.tabResult.IsSelected = $true }
 }
 
 function Test-EnvironmentMatch {
@@ -317,7 +320,7 @@ function Update-DerivedFields {
         $ui.txtBranding.Text     = Get-AudiBrandingKey -PackageName $package
         Set-Status 'Package name understood.'
     }
-    catch { Set-Status $_.Exception.Message '#FFFFC107' }
+    catch { Set-Status $_.Exception.Message '#FF8A5300' }
     Show-DetectionRules
 }
 
@@ -352,7 +355,7 @@ function Show-DetectionRules {
 # ------------------------------------------------------------- read the package
 function Read-PackageFolder { param([string]$Path)
     if (-not $Path) { return }
-    $ui.tabMain.SelectedIndex = 0
+    $ui.tabPackage.IsSelected = $true
     Set-Status "Reading $Path ..."
     try {
         $detail = Read-AudiPackageDetail -PackagePath $Path
@@ -398,9 +401,22 @@ function Read-PackageFolder { param([string]$Path)
         foreach ($n in @($detail.Notes)) { $lines.Add(''); $lines.Add($n) }
         $ui.txtStatus.ToolTip = ($lines -join "`r`n")
 
-        Set-Status ("Read {0} value(s) from {1} and the request document. Hover this line to see where each one came from." -f $detail.Fields.Count, $script)
+        # Anything the reader could not find is said out loud on the status line,
+        # not left in a tooltip nobody hovers. A blank form with a cheerful
+        # "read 0 values" is exactly the sort of thing that gets noticed only
+        # after the package is in SCCM.
+        $problems = @($detail.Notes)
+        if ($problems.Count -gt 0) {
+            Set-Status ($problems -join '  ') '#FF8A5300'
+        }
+        elseif ($detail.Fields.Count -eq 0) {
+            Set-Status 'Nothing could be read from this folder - fill the fields in by hand.' '#FF8A5300'
+        }
+        else {
+            Set-Status ("Read {0} value(s) from {1} and the request document. Hover this line to see where each one came from." -f $detail.Fields.Count, $script)
+        }
     }
-    catch { Set-Status "Could not read the package: $($_.Exception.Message)" '#FFFF6B6B' }
+    catch { Set-Status "Could not read the package: $($_.Exception.Message)" '#FFB3261E' }
 }
 
 # ------------------------------------------------------------------- build plan
@@ -451,18 +467,21 @@ function Show-RunOutcome { param($Result, [string]$Note = '')
     }
 
     $prefix = if ((Test-HasValue $Result 'DryRun') -and $Result.DryRun) { '[Dry run] ' } else { '' }
-    Set-Status "$prefix$($Result.Message)$Note" $(if ($Result.Ok) { '#FF99D1CD' } else { '#FFFF6B6B' })
+    Set-Status "$prefix$($Result.Message)$Note" $(if ($Result.Ok) { '#FF00707D' } else { '#FFB3261E' })
 }
 
 # --------------------------------------------------------------- run in the bg
 # One background worker for both buttons. The window only ever polls $state, so
 # it stays responsive however long the server takes.
-function Start-Worker { param([scriptblock]$Body, [hashtable]$Arguments, [int]$Steps)
+function Start-Worker { param([scriptblock]$Body, [hashtable]$Arguments, [int]$Steps, [switch]$StayOnTab)
 
     # Show the Result tab AS THE RUN STARTS, not when it finishes. A packager who
     # presses Integrate wants to watch it happen, and anyone looking over their
     # shoulder should see the same thing without being told which tab to open.
-    $ui.tabMain.SelectedIndex = 1
+    #
+    # -StayOnTab is for Inspect, which is not a run: its answer belongs on the
+    # Modify tab, and switching away and back would just make the window flicker.
+    if (-not $StayOnTab) { $ui.tabResult.IsSelected = $true }
     $ui.txtHistory.Text = 'Running now - the steps below are this run.'
     $ui.txtHistory.ToolTip = $null
 
@@ -511,7 +530,19 @@ function Start-Worker { param([scriptblock]$Body, [hashtable]$Arguments, [int]$S
         $ui.txtStep.Text = ''
         $ui.prgRun.IsIndeterminate = $false
 
-        if ($state.Error) { Set-Status "Failed: $($state.Error)" '#FFFF6B6B'; $ui.prgRun.Value = 0; return }
+        if ($state.Error) { Set-Status "Failed: $($state.Error)" '#FFB3261E'; $ui.prgRun.Value = 0; return }
+
+        # An Inspect answer fills the Modify tab rather than the Result grid -
+        # it is a picture of the site, not a run.
+        if ((Test-HasValue $state.Result 'State') -and @($state.Result.State).Count -gt 0) {
+            Show-PackageState $state.Result.State
+            if (Test-HasValue $state.Result 'Settings') { Show-PackageSettings $state.Result.Settings }
+            $ui.txtModifyState.Text = $state.Result.Message
+            $ui.tabModify.IsSelected = $true
+            Set-Status $state.Result.Message '#FF00707D'
+            return
+        }
+
         Show-RunOutcome $state.Result $state.Note
     })
     $state.Timer.Start()
@@ -523,7 +554,7 @@ function Start-Worker { param([scriptblock]$Body, [hashtable]$Arguments, [int]$S
 # package before queuing anything.
 function Start-Preview {
     try   { $plan = New-PlanFromForm }
-    catch { Set-Status $_.Exception.Message '#FFFFC107'; return }
+    catch { Set-Status $_.Exception.Message '#FF8A5300'; return }
 
     $state.Note = '  |  preview only - nothing was queued'
     Set-Status 'Preview running on this machine...'
@@ -550,25 +581,25 @@ function Start-Run { param([string]$Mode)   # Integrate | Modify | Remove
     $mismatch = Test-EnvironmentMatch
     if ($mismatch) {
         Show-Warning $mismatch
-        Set-Status $mismatch '#FFFF6B6B'
+        Set-Status $mismatch '#FFB3261E'
         [void][System.Windows.MessageBox]::Show($mismatch, 'Wrong environment', 'OK', 'Error')
         return
     }
 
     try   { $plan = New-PlanFromForm }      # validates the form before queuing
-    catch { Set-Status $_.Exception.Message '#FFFFC107'; return }
+    catch { Set-Status $_.Exception.Message '#FF8A5300'; return }
 
     $code = [string]$ui.cboEnvironment.SelectedItem
     try   { $env = Get-AudiEnvironment -Code $code }
-    catch { Set-Status $_.Exception.Message '#FFFF6B6B'; return }
+    catch { Set-Status $_.Exception.Message '#FFB3261E'; return }
 
     if ($env.Transport.Mode -ne 'DropFolder' -and -not $DropFolder) {
-        Set-Status "Environment $code is set to transport '$($env.Transport.Mode)', which this window does not use." '#FFFF6B6B'
+        Set-Status "Environment $code is set to transport '$($env.Transport.Mode)', which this window does not use." '#FFB3261E'
         return
     }
     $drop = Get-ActiveDropFolder -Environment $env
     if ([string]::IsNullOrWhiteSpace($drop)) {
-        Set-Status "Environment $code has no drop folder set. Fill in Transport/@dropFolder in $($env.Path)." '#FFFF6B6B'
+        Set-Status "Environment $code has no drop folder set. Fill in Transport/@dropFolder in $($env.Path)." '#FFB3261E'
         return
     }
 
@@ -576,7 +607,7 @@ function Start-Run { param([string]$Mode)   # Integrate | Modify | Remove
     # who asked - so stop here rather than queue an untraceable change.
     $rfc = $ui.txtRfc.Text.Trim()
     if ((Get-AudiDefaults).Audit.RequireRfc -and -not $rfc) {
-        Set-Status 'Enter the RFC number first. It is the only record of who requested this change, so the server refuses a job without one.' '#FFFFC107'
+        Set-Status 'Enter the RFC number first. It is the only record of who requested this change, so the server refuses a job without one.' '#FF8A5300'
         $ui.txtRfc.Focus() | Out-Null
         return
     }
@@ -673,6 +704,239 @@ $ui.btnRead.Add_Click({
 
 # typing a path and pressing Enter reads it, same as the button
 $ui.txtPackagePath.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $ui.btnRead.RaiseEvent((New-Object System.Windows.RoutedEventArgs ([System.Windows.Controls.Button]::ClickEvent))) } })
+
+# ------------------------------------------------------------- the Modify tab
+#
+# The window cannot read SCCM - it has no connection and no rights, by design.
+# So "Read from SCCM" submits an Inspect job and the answer comes back through
+# the drop folder, exactly like an integration result. Ticking rows and pressing
+# Apply submits a Change job carrying only the ticked names.
+#
+# This is what replaces editing an environment XML to add or retire a collection.
+
+function Submit-AudiAction {
+    <#  Submits an Inspect or Change job and waits for the answer.
+
+        The same road as Integrate: a file into the drop folder, the server does
+        the work, the result comes back. The window still touches no site.  #>
+    param([string]$Action, $Plan, [string[]]$Add = @(), [string[]]$Remove = @(),
+          [object[]]$SettingChanges = @(), [string]$Description)
+
+    $code = [string]$ui.cboEnvironment.SelectedItem
+    try   { $environment = Get-AudiEnvironment -Code $code }
+    catch { Set-Status $_.Exception.Message '#FFB3261E'; return }
+
+    $drop = Get-ActiveDropFolder -Environment $environment
+    if ([string]::IsNullOrWhiteSpace($drop)) {
+        Set-Status "Environment $code has no drop folder set." '#FFB3261E'; return
+    }
+
+    $state.Note = ''
+    Set-Status "$Description in $code ..."
+    # Inspect is not a run - its answer belongs on the Modify tab, so the window
+    # stays where it is instead of jumping to Result and back.
+    Start-Worker -Steps 1 -StayOnTab:($Action -eq 'Inspect') -Arguments @{
+        Action      = $Action
+        DropFolder  = $drop
+        Timeout     = $environment.Transport.ResultTimeoutMinutes
+        PackageName = $Plan.PackageName
+        Environment = $code
+        Rfc         = $ui.txtRfc.Text.Trim()
+        Detail      = Get-PackageDetail
+        Add         = $Add
+        Remove      = $Remove
+        SettingChanges = $SettingChanges
+    } -Body {
+        try {
+            . (Join-Path $toolRoot 'AudiSwIntegration.ps1')
+            $state.Step = 'Writing the job file...'
+            $doc = New-AudiSwJobFile -PackageName $jobArgs.PackageName -EnvironmentCode $jobArgs.Environment `
+                                     -Action $jobArgs.Action -Rfc $jobArgs.Rfc -Detail $jobArgs.Detail `
+                                     -AddCollections $jobArgs.Add -RemoveCollections $jobArgs.Remove `
+                                     -SettingChanges $jobArgs.SettingChanges
+
+            $submission = Submit-AudiSwJob -DropFolder $jobArgs.DropFolder -Job $doc
+            $state.JobId = $submission.JobId
+            $state.Waiting = $true
+            $state.Step = "Queued in $(Split-Path -Parent $submission.Path). Waiting for the server..."
+
+            $state.Result = Wait-AudiSwJobResult -Submission $submission `
+                                -TimeoutMinutes $jobArgs.Timeout -PollSeconds 5
+            $state.Note = "  |  job $($submission.JobId)"
+        }
+        catch { $state.Error = $_.Exception.Message }
+        finally { $state.Waiting = $false; $state.Done = $true; $state.Running = $false }
+    }
+}
+
+function Show-PackageState { param($State)
+    <#  Turns what the server found into rows a person can act on.
+
+        Three cases, and the row says which:
+          wanted, not there   -> Add     (tickable)
+          there, not wanted   -> Remove  (tickable)
+          wanted and there    -> shown, nothing to do  #>
+    $rows = New-Object System.Collections.Generic.List[object]
+
+    foreach ($collection in @($State)) {
+        if ($collection.Wanted -and -not $collection.Exists) {
+            $rows.Add([pscustomobject]@{
+                Selected = $false; Actionable = $true; Action = 'Add'; Name = $collection.Name
+                OnSite = 'no'; Deployment = '-'
+                Why = 'The environment file asks for it and it is not there.' }) | Out-Null
+        }
+        elseif (-not $collection.Wanted -and $collection.Exists) {
+            $rows.Add([pscustomobject]@{
+                Selected = $false; Actionable = $true; Action = 'Remove'; Name = $collection.Name
+                OnSite = 'yes'; Deployment = $(if ($collection.HasDeployment) { 'yes' } else { 'no' })
+                Why = 'Named for this package, but the environment file does not ask for it.' }) | Out-Null
+        }
+        else {
+            $rows.Add([pscustomobject]@{
+                Selected = $false; Actionable = $false; Action = '-'; Name = $collection.Name
+                OnSite = 'yes'; Deployment = $(if ($collection.HasDeployment) { 'yes' } else { 'no' })
+                Why = 'In place, nothing to do.' }) | Out-Null
+        }
+    }
+
+    $ui.lstModify.ItemsSource = $rows.ToArray()
+    $actionable = @($rows | Where-Object { $_.Action -ne '-' }).Count
+    $ui.btnApplyChanges.IsEnabled = ($actionable -gt 0)
+    $ui.txtModifyHint.Text = if ($actionable -eq 0) {
+        'Nothing to change - the site matches the environment file.'
+    } else {
+        "$actionable row(s) can be acted on. Tick the ones you want, then Apply. Only ticked rows are touched."
+    }
+}
+
+function Show-PackageSettings { param($Settings)
+    <#  The settings the application and its deployment type carry right now,
+        each with the values SCCM would accept instead.
+
+        The rows are handed to the grid as-is: NewValue starts equal to the
+        current value, so a row that nobody touches produces no change. What
+        gets sent later is the difference, not the whole set - see
+        Get-ChangedSettings.
+
+        A locked row (publisher, version, display name) shows its reason where
+        the control would be. Those come out of the package name, so changing
+        one in SCCM alone would leave the application disagreeing with the
+        folder its content was built from.  #>
+
+    # ToArray, not @(): wrapping a List[object] of PSObjects throws
+    # "Argument types do not match" on PowerShell 5.1.
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($s in @($Settings)) { $rows.Add($s) | Out-Null }
+    $ui.lstSettings.ItemsSource = $rows.ToArray()
+
+    $script:SettingsBaseline = @{}
+    foreach ($s in @($Settings)) { $script:SettingsBaseline[$s.Key] = [string]$s.Current }
+
+    $editable = @($Settings | Where-Object { $_.Editable }).Count
+    $locked   = @($Settings | Where-Object { -not $_.Editable }).Count
+    Set-Status ("{0} setting(s) can be changed here, {1} are fixed by the package name." -f $editable, $locked)
+}
+
+function Get-ChangedSettings {
+    <#  Only what the operator actually altered.
+
+        Comparing against the baseline captured at read time - not against the
+        catalogue defaults - means an unchanged row is never sent. Writing back
+        a value identical to the one already there would still stamp the
+        application as modified, for no change at all.  #>
+    if (-not $ui.lstSettings.ItemsSource) { return @() }
+    $changed = New-Object System.Collections.Generic.List[object]
+    foreach ($row in @($ui.lstSettings.ItemsSource)) {
+        if (-not $row.Editable) { continue }
+        $was = [string]$script:SettingsBaseline[$row.Key]
+        $now = [string]$row.NewValue
+        if ($now -ne $was) {
+            $changed.Add([pscustomobject]@{
+                Key = $row.Key; Label = $row.Label; Scope = $row.Scope
+                Property = $row.Property; From = $was; To = $now }) | Out-Null
+        }
+    }
+    return $changed.ToArray()
+}
+
+function Start-Inspect {
+    $mismatch = Test-EnvironmentMatch
+    if ($mismatch) { Set-Status $mismatch '#FFB3261E'; return }
+    try   { $plan = New-PlanFromForm } catch { Set-Status $_.Exception.Message '#FF8A5300'; return }
+    Submit-AudiAction -Action 'Inspect' -Plan $plan -Description 'Reading the site'
+}
+
+function Start-ApplyChanges {
+    $rows     = @($ui.lstModify.ItemsSource | Where-Object { $_.Selected -and $_.Action -ne '-' })
+    $settings = @(Get-ChangedSettings)
+
+    if ($rows.Count -eq 0 -and $settings.Count -eq 0) {
+        Set-Status 'Nothing to apply. Change a setting, or tick a collection row.' '#FF8A5300'; return
+    }
+
+    $add    = @($rows | Where-Object { $_.Action -eq 'Add' }    | ForEach-Object { $_.Name })
+    $remove = @($rows | Where-Object { $_.Action -eq 'Remove' } | ForEach-Object { $_.Name })
+
+    # Settings are edited in place, so unlike a ticked row there is no separate
+    # confirming gesture. Show the before and after and ask once.
+    if ($settings.Count -gt 0) {
+        $lines = @($settings | ForEach-Object { "{0}:`r`n    was  {1}`r`n    now  {2}" -f $_.Label, $(if ($_.From) { $_.From } else { '(empty)' }), $(if ($_.To) { $_.To } else { '(empty)' }) })
+        $answer = [System.Windows.MessageBox]::Show(
+            ("This changes {0} setting(s) on {1} in {2}:`r`n`r`n{3}`r`n`r`nContinue?" -f `
+                $settings.Count, $ui.txtPackage.Text, [string]$ui.cboEnvironment.SelectedItem, ($lines -join "`r`n`r`n")),
+            'Change settings', 'YesNo', 'Question')
+        if ($answer -ne 'Yes') { Set-Status 'Nothing was submitted.'; return }
+    }
+
+    # Removing a collection takes its deployment with it. Say so before doing it,
+    # rather than after - this is the one action here that destroys something.
+    if ($remove.Count -gt 0) {
+        $answer = [System.Windows.MessageBox]::Show(
+            ("This removes {0} collection(s) and their deployments from {1}:`r`n`r`n{2}`r`n`r`nThe application itself is not touched. Continue?" -f `
+                $remove.Count, [string]$ui.cboEnvironment.SelectedItem, ($remove -join "`r`n")),
+            'Remove collections', 'YesNo', 'Warning')
+        if ($answer -ne 'Yes') { Set-Status 'Nothing was submitted.'; return }
+    }
+
+    try   { $plan = New-PlanFromForm } catch { Set-Status $_.Exception.Message '#FF8A5300'; return }
+    Submit-AudiAction -Action 'Change' -Plan $plan -Add $add -Remove $remove -SettingChanges $settings `
+                      -Description ("Applying {0} change(s)" -f ($add.Count + $remove.Count + $settings.Count))
+}
+
+# ------------------------------------------------------------------ copying
+#
+# Anything the tool says has to be pastable into a ticket or a mail. Clipboard
+# writes can fail if another process is holding the clipboard open, so each one
+# is guarded - a failed copy must not take the window down.
+function Copy-ToClipboard { param([string]$Text, [string]$What)
+    if ([string]::IsNullOrWhiteSpace($Text)) { Set-Status 'Nothing to copy.' '#FF8A5300'; return }
+    try {
+        [System.Windows.Clipboard]::SetText($Text)
+        Set-Status "$What copied to the clipboard."
+    }
+    catch { Set-Status "Could not copy: $($_.Exception.Message)" '#FF8A5300' }
+}
+
+function Format-ResultRows { param($Rows)
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($row in @($Rows)) { $lines.Add(("{0}`t{1}`t{2}" -f $row.Step, $row.Result, $row.Message)) | Out-Null }
+    return ($lines -join "`r`n")
+}
+
+$ui.mnuCopyStatus.Add_Click({ Copy-ToClipboard $ui.txtStatus.Text 'The message' })
+
+$ui.mnuCopyRows.Add_Click({
+    $rows = @($ui.lstResults.SelectedItems)
+    if ($rows.Count -eq 0) { $rows = @($ui.lstResults.ItemsSource) }
+    Copy-ToClipboard (Format-ResultRows $rows) "$($rows.Count) row(s)"
+})
+
+$ui.mnuCopyAll.Add_Click({
+    Copy-ToClipboard (Format-ResultRows @($ui.lstResults.ItemsSource)) 'Every row'
+})
+
+$ui.btnInspect.Add_Click({ Start-Inspect })
+$ui.btnApplyChanges.Add_Click({ Start-ApplyChanges })
 
 $ui.btnPreview.Add_Click({ Start-Preview })
 $ui.btnIntegrate.Add_Click({ Start-Run -Mode 'Integrate' })

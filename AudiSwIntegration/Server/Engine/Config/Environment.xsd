@@ -371,6 +371,74 @@
           </xs:complexType>
         </xs:element>
 
+        <!-- The settings the Modify tab may edit, and the values SCCM accepts
+             for each. Validated like everything else, so a typo in an editor
+             type or a Choice with no options is refused at load rather than
+             producing an empty dropdown in front of a packager. -->
+        <xs:element name="Settings">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Setting" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Option" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:simpleContent>
+                          <xs:extension base="NonEmptyString">
+                            <!-- value="" is legitimate: it is how "not set" is
+                                 expressed for a tri-state such as the logon
+                                 requirement. -->
+                            <xs:attribute name="value" type="xs:string" use="required"/>
+                            <!-- What the SET cmdlet wants, when that differs
+                                 from what the READ returns. SDMPackageXML says
+                                 ExecutionContext="System"; Set-CMScriptDeploymentType
+                                 wants InstallForSystem for the same thing.
+                                 Omitted means the two are identical. -->
+                            <xs:attribute name="writeValue" type="xs:string" use="optional"/>
+                          </xs:extension>
+                        </xs:simpleContent>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                  <xs:attribute name="key" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="scope" use="required">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="Application"/>
+                        <xs:enumeration value="DeploymentType"/>
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="property" type="NonEmptyString" use="required"/>
+                  <!-- The parameter name on Set-CMApplication or
+                       Set-CMScriptDeploymentType. Required for anything
+                       editable; a setting with no writeParameter can be read
+                       and shown but never written. -->
+                  <xs:attribute name="writeParameter" type="xs:string" use="optional"/>
+                  <xs:attribute name="label" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="editor" use="required">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="Text"/>
+                        <xs:enumeration value="Number"/>
+                        <xs:enumeration value="Choice"/>
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <!-- editable="false" shows the value but refuses to change
+                       it. Used for anything derived from the package name:
+                       editing it in SCCM alone would leave the application
+                       disagreeing with the folder its content came from. -->
+                  <xs:attribute name="editable" type="xs:boolean" use="optional"/>
+                  <xs:attribute name="lockedReason" type="xs:string" use="optional"/>
+                  <xs:attribute name="unit" type="xs:string" use="optional"/>
+                  <xs:attribute name="hint" type="xs:string" use="optional"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
       </xs:sequence>
       <xs:attribute name="schemaVersion" type="NonEmptyString" use="required"/>
     </xs:complexType>
@@ -402,6 +470,29 @@
         <!-- Exactly what the packager saw, including anything they corrected.
              Sent so the server uses the values that were on the screen rather
              than deriving them again. Empty attributes mean "as derived". -->
+        <!-- The collections a packager ticked in the Modify tab. Only ever used
+             by a Change job; every other action ignores them. -->
+        <xs:element name="Changes" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Add"    type="NonEmptyString" minOccurs="0" maxOccurs="unbounded"/>
+              <xs:element name="Remove" type="NonEmptyString" minOccurs="0" maxOccurs="unbounded"/>
+              <!-- A setting edit. 'key' names an entry in the Defaults.xml
+                   settings catalogue; the server looks up what that means and
+                   whether it may be written. 'from' is the value the operator
+                   saw, kept for the audit trail - the server does not trust it
+                   and re-reads the site itself. -->
+              <xs:element name="Setting" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="key"  type="NonEmptyString" use="required"/>
+                  <xs:attribute name="from" type="xs:string" use="optional" default=""/>
+                  <xs:attribute name="to"   type="xs:string" use="optional" default=""/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
         <xs:element name="Detail" minOccurs="0">
           <xs:complexType>
             <xs:attribute name="publisher"    type="xs:string" use="optional" default=""/>
@@ -438,6 +529,10 @@
         <xs:simpleType>
           <xs:restriction base="xs:string">
             <xs:enumeration value="Integrate"/>
+            <!-- Inspect: read the site and report what is there. Creates nothing. -->
+            <xs:enumeration value="Inspect"/>
+            <!-- Change: apply exactly the collections a packager ticked. -->
+            <xs:enumeration value="Change"/>
             <xs:enumeration value="Modify"/>
             <xs:enumeration value="Remove"/>
           </xs:restriction>
@@ -456,6 +551,56 @@
         <xs:element name="Message" type="xs:string"/>
         <!-- What a failed run undid before giving up. Empty on success, and on a
              failure that had created nothing yet. -->
+        <!-- What Inspect found on the site. Empty for every other action. -->
+        <xs:element name="State" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Collection" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="name"          type="NonEmptyString" use="required"/>
+                  <xs:attribute name="wanted"        type="xs:boolean"     use="required"/>
+                  <xs:attribute name="exists"        type="xs:boolean"     use="required"/>
+                  <xs:attribute name="hasDeployment" type="xs:boolean"     use="required"/>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="Scope" type="NonEmptyString" minOccurs="0" maxOccurs="unbounded"/>
+
+              <!-- A setting as the server found it, with everything the window
+                   needs to offer an editor for it. The options travel too: the
+                   client and the server are different machines, and a stale
+                   Defaults.xml on the client would otherwise offer choices the
+                   site will not accept. -->
+              <xs:element name="Setting" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Option" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:simpleContent>
+                          <xs:extension base="xs:string">
+                            <xs:attribute name="value" type="xs:string" use="required"/>
+                          </xs:extension>
+                        </xs:simpleContent>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                  <xs:attribute name="key"          type="NonEmptyString" use="required"/>
+                  <xs:attribute name="label"        type="NonEmptyString" use="required"/>
+                  <xs:attribute name="scope"        type="NonEmptyString" use="required"/>
+                  <xs:attribute name="editor"       type="NonEmptyString" use="required"/>
+                  <xs:attribute name="current"      type="xs:string"      use="optional" default=""/>
+                  <xs:attribute name="currentLabel" type="xs:string"      use="optional" default=""/>
+                  <xs:attribute name="editable"     type="xs:boolean"     use="required"/>
+                  <xs:attribute name="readable"     type="xs:boolean"     use="required"/>
+                  <xs:attribute name="lockedReason" type="xs:string"      use="optional" default=""/>
+                  <xs:attribute name="unit"         type="xs:string"      use="optional" default=""/>
+                  <xs:attribute name="hint"         type="xs:string"      use="optional" default=""/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="application" type="xs:boolean" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
         <xs:element name="RolledBack" minOccurs="0">
           <xs:complexType>
             <xs:sequence>

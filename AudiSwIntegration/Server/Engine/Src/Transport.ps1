@@ -63,7 +63,15 @@ function New-AudiSwJobFile {
     param(
         [Parameter(Mandatory = $true)][string]$PackageName,
         [Parameter(Mandatory = $true)][string]$EnvironmentCode,
-        [ValidateSet('Integrate', 'Modify', 'Remove')][string]$Action = 'Integrate',
+                # Inspect reads the site and reports; Change applies exactly the
+        # collections a packager ticked in the Modify tab.
+        [ValidateSet('Integrate', 'Modify', 'Remove', 'Inspect', 'Change')][string]$Action = 'Integrate',
+        [string[]]$AddCollections = @(),
+        [string[]]$RemoveCollections = @(),
+        # Setting edits, as objects carrying Key/From/To. From is recorded for
+        # the audit trail only - the server never trusts it, it re-reads the
+        # site itself.
+        [object[]]$SettingChanges = @(),
         [string]$Rfc = '',
         [string]$NameEn = '', [string]$NameDe = '',
         [string]$DescriptionEn = '', [string]$DescriptionDe = '',
@@ -100,6 +108,22 @@ function New-AudiSwJobFile {
     $localised.SetAttribute('descriptionEn', $DescriptionEn)
     $localised.SetAttribute('descriptionDe', $DescriptionDe)
     $null = $job.AppendChild($localised)
+
+    # The collections a packager ticked in the Modify tab. Written before Detail
+    # to match the order the schema declares.
+    if (@($AddCollections).Count -gt 0 -or @($RemoveCollections).Count -gt 0 -or @($SettingChanges).Count -gt 0) {
+        $changesNode = $doc.CreateElement('Changes')
+        foreach ($name in @($AddCollections))    { $e = $doc.CreateElement('Add');    $e.InnerText = $name; $null = $changesNode.AppendChild($e) }
+        foreach ($name in @($RemoveCollections)) { $e = $doc.CreateElement('Remove'); $e.InnerText = $name; $null = $changesNode.AppendChild($e) }
+        foreach ($change in @($SettingChanges)) {
+            $e = $doc.CreateElement('Setting')
+            $e.SetAttribute('key', [string]$change.Key)
+            $e.SetAttribute('from', [string]$change.From)
+            $e.SetAttribute('to',   [string]$change.To)
+            $null = $changesNode.AppendChild($e)
+        }
+        $null = $job.AppendChild($changesNode)
+    }
 
     $detailNode = $doc.CreateElement('Detail')
     foreach ($name in 'Publisher','Product','Version','Architecture','Revision','Language','BrandingKey','SoftIdent') {
@@ -174,6 +198,11 @@ function Read-AudiSwJobFile {
         JobId         = $j.jobId
         Environment   = $j.environment
         Action        = $j.action
+        # the collections a packager ticked in the Modify tab
+        AddCollections    = @($result.Document.SelectNodes('/Job/Changes/Add')    | ForEach-Object { $_.InnerText })
+        RemoveCollections = @($result.Document.SelectNodes('/Job/Changes/Remove') | ForEach-Object { $_.InnerText })
+        SettingChanges    = @($result.Document.SelectNodes('/Job/Changes/Setting') | ForEach-Object {
+                                [pscustomobject]@{ Key = $_.key; From = $_.from; To = $_.to } })
         Created       = $j.created
         DryRun        = [bool]::Parse($j.dryRun)
         PackageName   = $j.Package.name
@@ -242,6 +271,58 @@ function Write-AudiSwJobResult {
     $message = $doc.CreateElement('Message')
     $message.InnerText = [string]$Result.Message
     $null = $root.AppendChild($message)
+
+    # What Inspect found on the site. This is what the Modify tab draws its
+    # three lists from - in place, missing, not asked for.
+    if ((Test-AudiResultMember -Result $Result -Name 'State') -and $Result.State) {
+        $stateNode = $doc.CreateElement('State')
+        $stateNode.SetAttribute('application', $(if ($Result.State.Application) { 'true' } else { 'false' }))
+        foreach ($collection in @($Result.State.Collections) + @($Result.State.Extra)) {
+            $e = $doc.CreateElement('Collection')
+            $e.SetAttribute('name',          [string]$collection.Name)
+            $e.SetAttribute('wanted',        $(if ($collection.Wanted) { 'true' } else { 'false' }))
+            $e.SetAttribute('exists',        $(if ($collection.Exists) { 'true' } else { 'false' }))
+            $e.SetAttribute('hasDeployment', $(if ($collection.HasDeployment) { 'true' } else { 'false' }))
+            $null = $stateNode.AppendChild($e)
+        }
+        foreach ($scope in @($Result.State.SecurityScopes)) {
+            $e = $doc.CreateElement('Scope'); $e.InnerText = [string]$scope; $null = $stateNode.AppendChild($e)
+        }
+
+        # The settings, and everything the window needs to draw an editor for
+        # them: the current value, whether it may be changed, and the values
+        # SCCM would accept instead.
+        #
+        # All of it travels. The window could look the labels and options up in
+        # its own copy of Defaults.xml, but the client and the server are
+        # different machines in flow 2 - a stale copy on one of them would offer
+        # a packager choices the site will not accept. What is on screen is what
+        # the server actually read.
+        if ((Test-AudiResultMember -Result $Result.State -Name 'Settings')) {
+            foreach ($setting in @($Result.State.Settings)) {
+                $e = $doc.CreateElement('Setting')
+                $e.SetAttribute('key',          [string]$setting.Key)
+                $e.SetAttribute('label',        [string]$setting.Label)
+                $e.SetAttribute('scope',        [string]$setting.Scope)
+                $e.SetAttribute('editor',       [string]$setting.Editor)
+                $e.SetAttribute('current',      [string]$setting.Current)
+                $e.SetAttribute('currentLabel', [string]$setting.CurrentLabel)
+                $e.SetAttribute('editable',     $(if ($setting.Editable) { 'true' } else { 'false' }))
+                $e.SetAttribute('readable',     $(if ($setting.Readable) { 'true' } else { 'false' }))
+                $e.SetAttribute('lockedReason', [string]$setting.LockedReason)
+                $e.SetAttribute('unit',         [string]$setting.Unit)
+                $e.SetAttribute('hint',         [string]$setting.Hint)
+                foreach ($option in @($setting.Options)) {
+                    $o = $doc.CreateElement('Option')
+                    $o.SetAttribute('value', [string]$option.Value)
+                    $o.InnerText = [string]$option.Label
+                    $null = $e.AppendChild($o)
+                }
+                $null = $stateNode.AppendChild($e)
+            }
+        }
+        $null = $root.AppendChild($stateNode)
+    }
 
     # What a failed run undid. Without this the packager is told the run failed
     # and left to guess whether an application is sitting half-made on the site.
@@ -399,6 +480,34 @@ function Wait-AudiSwJobResult {
                         Steps     = @($doc.SelectNodes('/JobResult/Steps/Step') | ForEach-Object {
                                         [pscustomobject]@{ Step = $_.key; Ok = [bool]::Parse($_.ok); Message = $_.message } })
                         RolledBack = @($doc.SelectNodes('/JobResult/RolledBack/Item') | ForEach-Object { $_.InnerText })
+                        State      = @($doc.SelectNodes('/JobResult/State/Collection') | ForEach-Object {
+                                        [pscustomobject]@{
+                                            Name          = $_.name
+                                            Wanted        = [bool]::Parse($_.wanted)
+                                            Exists        = [bool]::Parse($_.exists)
+                                            HasDeployment = [bool]::Parse($_.hasDeployment)
+                                        } })
+                        Scopes     = @($doc.SelectNodes('/JobResult/State/Scope') | ForEach-Object { $_.InnerText })
+                        # NewValue starts at the current value, so a row nobody
+                        # touches produces no change when Apply is pressed.
+                        Settings   = @($doc.SelectNodes('/JobResult/State/Setting') | ForEach-Object {
+                                        $node = $_
+                                        [pscustomobject]@{
+                                            Key          = $node.key
+                                            Label        = $node.label
+                                            Scope        = $node.scope
+                                            Editor       = $node.editor
+                                            Current      = $node.current
+                                            CurrentLabel = $node.currentLabel
+                                            NewValue     = $node.current
+                                            Editable     = [bool]::Parse($node.editable)
+                                            Readable     = [bool]::Parse($node.readable)
+                                            LockedReason = $node.lockedReason
+                                            Unit         = $node.unit
+                                            Hint         = $node.hint
+                                            Options      = @($node.SelectNodes('Option') | ForEach-Object {
+                                                                [pscustomobject]@{ Value = $_.value; Label = $_.InnerText } })
+                                        } })
                         Path      = $candidate
                     }
                 }

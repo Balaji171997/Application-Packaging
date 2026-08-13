@@ -74,7 +74,8 @@ AudiSwIntegration\
 ├── Server\          →  ON the SCCM server, in the secure zone
 │   ├── Engine\                        the tool itself
 │   │   ├── AudiSwIntegration.ps1        entry point
-│   │   ├── Src\                         Config  Runtime  Transport  Sccm
+│   │   ├── Src\                         Config Runtime Transport Provider Steps
+│   │   │                                Inspect Preflight Orchestrator
 │   │   └── Config\                      THE ONLY FILES ANYONE EDITS
 │   │       ├── Environments\              ICZ.xml  INA.xml  PCZ.xml
 │   │       ├── Defaults.xml               what is the same everywhere
@@ -104,7 +105,7 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Client\Start-Audi
 ```
 
 ```powershell
-# all 378 checks - no SCCM, no network, no rights
+# all 419 checks - no SCCM, no network, no rights
 .\Tests\Invoke-AllTests.ps1
 ```
 
@@ -169,7 +170,7 @@ declared in `Defaults.xml`.
 
 ## Tests
 
-`.\Tests\Invoke-AllTests.ps1` - **378 checks, none needing SCCM.** Several exist
+`.\Tests\Invoke-AllTests.ps1` - **419 checks, none needing SCCM.** Several exist
 because the tool being replaced got them wrong:
 
 - `ADO_ADOBE_Reader_x64_...` must survive intact - the old text replacement turned

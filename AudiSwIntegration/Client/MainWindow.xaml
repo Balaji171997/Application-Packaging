@@ -1,26 +1,26 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Audi SCCM Integration Tool" MinHeight="700" MinWidth="1120"
-        WindowStartupLocation="CenterScreen" Background="#FF00191F"
-        FontFamily="Segoe UI" FontSize="13"
+        WindowStartupLocation="CenterScreen" Background="#FFEDEFF1"
+        FontFamily="Segoe UI" FontSize="12"
         SizeToContent="Manual" ResizeMode="CanResize" UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Display">
 
   <Window.Resources>
 
     <!-- ===================================================== palette -->
-    <SolidColorBrush x:Key="Bg"          Color="#FF00191F"/>
-    <SolidColorBrush x:Key="Card"        Color="#FF042A33"/>
-    <SolidColorBrush x:Key="CardBorder"  Color="#FF0E4552"/>
-    <SolidColorBrush x:Key="Field"       Color="#FF00232B"/>
-    <SolidColorBrush x:Key="FieldBorder" Color="#FF17434E"/>
-    <SolidColorBrush x:Key="Ink"         Color="#FFEDF2F3"/>
-    <SolidColorBrush x:Key="InkMuted"    Color="#FF8FA8AF"/>
-    <SolidColorBrush x:Key="Teal"        Color="#FF00A79A"/>
-    <SolidColorBrush x:Key="TealDeep"    Color="#FF00786F"/>
-    <SolidColorBrush x:Key="Mint"        Color="#FF99D1CD"/>
-    <SolidColorBrush x:Key="Danger"      Color="#FFE0574E"/>
-    <SolidColorBrush x:Key="Amber"       Color="#FFE8A33D"/>
+    <SolidColorBrush x:Key="Bg"          Color="#FFEDEFF1"/>
+    <SolidColorBrush x:Key="Card"        Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="CardBorder"  Color="#FFD0D7DB"/>
+    <SolidColorBrush x:Key="Field"       Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="FieldBorder" Color="#FFB6C0C6"/>
+    <SolidColorBrush x:Key="Ink"         Color="#FF16242A"/>
+    <SolidColorBrush x:Key="InkMuted"    Color="#FF5E6E76"/>
+    <SolidColorBrush x:Key="Teal"        Color="#FF00707D"/>
+    <SolidColorBrush x:Key="TealDeep"    Color="#FF005A66"/>
+    <SolidColorBrush x:Key="Mint"        Color="#FF00707D"/>
+    <SolidColorBrush x:Key="Danger"      Color="#FFB3261E"/>
+    <SolidColorBrush x:Key="Amber"       Color="#FF8A5300"/>
 
     <!-- ===================================================== text -->
     <Style TargetType="TextBlock">
@@ -52,13 +52,13 @@
       <Setter Property="SelectionBrush" Value="{StaticResource TealDeep}"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="BorderBrush" Value="{StaticResource FieldBorder}"/>
-      <Setter Property="Padding" Value="12,7,12,7"/>
-      <Setter Property="Margin" Value="0,0,0,10"/>
+      <Setter Property="Padding" Value="6,3,6,3"/>
+      <Setter Property="Margin" Value="0,0,0,5"/>
       <Setter Property="VerticalContentAlignment" Value="Center"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="TextBox">
-            <Border x:Name="b" CornerRadius="6" Background="{TemplateBinding Background}"
+            <Border x:Name="b" CornerRadius="3" Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
                     SnapsToDevicePixels="True">
               <!-- PART_ContentHost must STRETCH. Binding its VerticalAlignment
@@ -72,14 +72,14 @@
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="b" Property="BorderBrush" Value="#FF2C6D7A"/>
+                <Setter TargetName="b" Property="BorderBrush" Value="#FF8FA0A8"/>
               </Trigger>
               <Trigger Property="IsFocused" Value="True">
                 <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource Teal}"/>
-                <Setter TargetName="b" Property="Background" Value="#FF012B35"/>
+                <Setter TargetName="b" Property="Background" Value="#FFF7FBFC"/>
               </Trigger>
               <Trigger Property="IsReadOnly" Value="True">
-                <Setter TargetName="b" Property="Background" Value="#FF001A20"/>
+                <Setter TargetName="b" Property="Background" Value="#FFF2F4F5"/>
                 <Setter Property="Foreground" Value="{StaticResource Mint}"/>
               </Trigger>
             </ControlTemplate.Triggers>
@@ -89,9 +89,9 @@
     </Style>
 
     <Style TargetType="ComboBox">
-      <Setter Property="Padding" Value="12,7,12,7"/>
+      <Setter Property="Padding" Value="6,3,6,3"/>
       <Setter Property="Margin" Value="0"/>
-      <Setter Property="Height" Value="32"/>
+      <Setter Property="Height" Value="26"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
     </Style>
 
@@ -103,8 +103,8 @@
 
     <!-- ===================================================== buttons -->
     <Style x:Key="BtnBase" TargetType="Button">
-      <Setter Property="Height" Value="36"/>
-      <Setter Property="Padding" Value="18,0,18,0"/>
+      <Setter Property="Height" Value="28"/>
+      <Setter Property="Padding" Value="14,0,14,0"/>
       <Setter Property="Margin" Value="0,0,10,0"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Foreground" Value="{StaticResource Ink}"/>
@@ -112,7 +112,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="b" CornerRadius="6" Background="{TemplateBinding Background}"
+            <Border x:Name="b" CornerRadius="3" Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" SnapsToDevicePixels="True">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
                                 Margin="{TemplateBinding Padding}"/>
@@ -136,21 +136,24 @@
 
     <Style x:Key="BtnPrimary" TargetType="Button" BasedOn="{StaticResource BtnBase}">
       <Setter Property="Background" Value="{StaticResource TealDeep}"/>
-      <Setter Property="BorderBrush" Value="{StaticResource Teal}"/>
-      <Setter Property="MinWidth" Value="120"/>
+      <Setter Property="BorderBrush" Value="{StaticResource TealDeep}"/>
+      <!-- White label: BtnBase sets dark ink, which on the filled accent is
+           almost unreadable. -->
+      <Setter Property="Foreground" Value="#FFFFFFFF"/>
+      <Setter Property="MinWidth" Value="104"/>
     </Style>
 
     <Style x:Key="BtnGhost" TargetType="Button" BasedOn="{StaticResource BtnBase}">
-      <Setter Property="Background" Value="#FF03323C"/>
+      <Setter Property="Background" Value="#FFF7F9FA"/>
       <Setter Property="BorderBrush" Value="{StaticResource CardBorder}"/>
-      <Setter Property="MinWidth" Value="120"/>
+      <Setter Property="MinWidth" Value="104"/>
     </Style>
 
     <Style x:Key="BtnDanger" TargetType="Button" BasedOn="{StaticResource BtnBase}">
-      <Setter Property="Background" Value="#FF3D1512"/>
+      <Setter Property="Background" Value="#FFFDF3F2"/>
       <Setter Property="BorderBrush" Value="{StaticResource Danger}"/>
-      <Setter Property="Foreground" Value="#FFFFC9C4"/>
-      <Setter Property="MinWidth" Value="120"/>
+      <Setter Property="Foreground" Value="#FFB3261E"/>
+      <Setter Property="MinWidth" Value="104"/>
     </Style>
 
     <!-- ===================================================== card -->
@@ -168,20 +171,23 @@
       <Setter Property="Foreground" Value="{StaticResource Ink}"/>
       <Setter Property="BorderBrush" Value="{StaticResource CardBorder}"/>
       <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="RowBackground" Value="#FF00232B"/>
-      <Setter Property="AlternatingRowBackground" Value="#FF042E38"/>
+      <Setter Property="RowBackground" Value="#FFFFFFFF"/>
+      <Setter Property="AlternatingRowBackground" Value="#FFF7F9FA"/>
       <Setter Property="GridLinesVisibility" Value="None"/>
       <Setter Property="HeadersVisibility" Value="Column"/>
       <Setter Property="CanUserAddRows" Value="False"/>
       <Setter Property="IsReadOnly" Value="True"/>
       <Setter Property="AutoGenerateColumns" Value="False"/>
-      <Setter Property="RowHeight" Value="26"/>
+      <!-- MinRowHeight, not RowHeight: a fixed height would clip a wrapped
+           Detail cell back to a single line, which is the whole problem the
+           wrapping was meant to solve. -->
+      <Setter Property="MinRowHeight" Value="26"/>
       <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
       <Setter Property="VerticalScrollBarVisibility" Value="Visible"/>
     </Style>
 
     <Style TargetType="DataGridColumnHeader">
-      <Setter Property="Background" Value="#FF063845"/>
+      <Setter Property="Background" Value="#FFF0F3F4"/>
       <Setter Property="Foreground" Value="{StaticResource Mint}"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Padding" Value="10,7,10,7"/>
@@ -206,7 +212,7 @@
     </Style>
 
     <Style TargetType="ProgressBar">
-      <Setter Property="Background" Value="#FF00232B"/>
+      <Setter Property="Background" Value="#FFDCE2E5"/>
       <Setter Property="Foreground" Value="{StaticResource Teal}"/>
       <Setter Property="BorderBrush" Value="{StaticResource FieldBorder}"/>
       <Setter Property="BorderThickness" Value="1"/>
@@ -216,23 +222,27 @@
     <!-- ===================================================== tabs -->
     <Style TargetType="TabItem">
       <Setter Property="Foreground" Value="{StaticResource InkMuted}"/>
-      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="FontSize" Value="12"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="TabItem">
             <Border x:Name="tab" Background="Transparent" BorderBrush="Transparent"
-                    BorderThickness="0,0,0,2" Padding="20,10,20,10" Margin="0,0,4,0">
+                    BorderThickness="0,0,0,2" Padding="16,8,16,8" Margin="0,0,2,0">
               <ContentPresenter ContentSource="Header" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="tab" Property="Background" Value="#FFE3E7EA"/>
                 <Setter Property="Foreground" Value="{StaticResource Ink}"/>
               </Trigger>
+              <!-- Selected = white page tab with an accent underline. A filled
+                   dark block here swallowed the label, because the foreground
+                   stays dark ink. -->
               <Trigger Property="IsSelected" Value="True">
                 <Setter TargetName="tab" Property="BorderBrush" Value="{StaticResource Teal}"/>
-                <Setter TargetName="tab" Property="Background" Value="#FF042A33"/>
-                <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+                <Setter TargetName="tab" Property="Background" Value="{StaticResource Card}"/>
+                <Setter Property="Foreground" Value="{StaticResource Teal}"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -280,7 +290,7 @@
     </Grid.RowDefinitions>
 
     <!-- ================================================== HEADER -->
-    <Border Grid.Row="0" Background="#FF002733" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,0,0,1" Padding="24,14,24,14">
+    <Border Grid.Row="0" Background="#FFFFFFFF" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,0,0,1" Padding="24,14,24,14">
       <Grid>
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="Auto"/>
@@ -310,11 +320,11 @@
     <TabControl Grid.Row="1" x:Name="tabMain" Margin="24,14,24,0">
 
       <!-- ============================ PACKAGE ============================ -->
-      <TabItem Header="Package">
+      <TabItem Header="Package" x:Name="tabPackage">
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False" Margin="0,14,0,0">
           <StackPanel>
 
-            <Border x:Name="brdWarning" CornerRadius="6" Background="#FF3A2A00" BorderBrush="{StaticResource Amber}"
+            <Border x:Name="brdWarning" CornerRadius="3" Background="#FF3A2A00" BorderBrush="{StaticResource Amber}"
                     BorderThickness="1" Padding="16,12,16,12" Margin="0,0,0,16" Visibility="Collapsed">
               <StackPanel Orientation="Horizontal">
                 <TextBlock Text="&#9888;" FontSize="16" Foreground="{StaticResource Amber}" Margin="0,0,12,0" VerticalAlignment="Top"/>
@@ -397,7 +407,7 @@
 
                   <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource Label}" Text="SoftIdent" VerticalAlignment="Top" Margin="0,8,12,0"/>
                   <TextBox   Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="4" x:Name="txtSoftIdent" FontFamily="Consolas" FontSize="12"
-                             TextWrapping="Wrap" MinHeight="42" VerticalContentAlignment="Top" Margin="0"
+                             TextWrapping="Wrap" MinHeight="32" VerticalContentAlignment="Top" Margin="0"
                              ToolTip="The uninstall key the package checks for, from VWG_SoftIdent in the CUSTOM APPLICATION VARIABLES block, with Wow6432Node filled in for a 32-bit package. This is detection rule 2."/>
 
                 </Grid>
@@ -426,9 +436,9 @@
                   <TextBox   Grid.Row="3" Grid.Column="1" x:Name="txtNameDE"/>
 
                   <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource Label}" Text="Description (EN)" TextWrapping="Wrap" VerticalAlignment="Top" Margin="0,8,12,0"/>
-                  <TextBox   Grid.Row="4" Grid.Column="1" x:Name="txtDescEN" MinHeight="54" TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top"/>
+                  <TextBox   Grid.Row="4" Grid.Column="1" x:Name="txtDescEN" MinHeight="40" TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top"/>
                   <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource Label}" Text="Description (DE)" TextWrapping="Wrap" VerticalAlignment="Top" Margin="0,8,12,0"/>
-                  <TextBox   Grid.Row="5" Grid.Column="1" x:Name="txtDescDE" MinHeight="54" TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top"/>
+                  <TextBox   Grid.Row="5" Grid.Column="1" x:Name="txtDescDE" MinHeight="40" TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top"/>
 
                   <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource Label}" Text="RFC number"/>
                   <TextBox   Grid.Row="6" Grid.Column="1" x:Name="txtRfc" HorizontalAlignment="Left" Width="260" FontFamily="Consolas"
@@ -444,7 +454,7 @@
                  typo shows here rather than on a client three days later.
                  Full width, under both cards, because it belongs to the whole
                  package and reads as one line rather than a wrapped column. -->
-            <Border Style="{StaticResource CardStyle}" Margin="0,16,0,0" Padding="20,14">
+            <Border Style="{StaticResource CardStyle}" Margin="0,16,0,0" Padding="14,10">
               <StackPanel>
                 <TextBlock Style="{StaticResource SectionTitle}" Margin="0,0,0,8"
                            Text="4 &#183; HOW SCCM WILL DETECT IT &#8212; BOTH RULES MUST BE TRUE"
@@ -458,6 +468,197 @@
 
           </StackPanel>
         </ScrollViewer>
+      </TabItem>
+
+      <!-- ============================ MODIFY ============================ -->
+      <!--
+        What is on the site, and what to do about it.
+
+        The window holds no SCCM connection, so "Read from SCCM" does not read
+        anything itself - it submits an Inspect job, the Script Runner reads the
+        site, and the answer comes back through the drop folder like any other
+        result. Ticking rows and pressing Apply submits a Change job carrying
+        exactly those names.
+
+        This replaces editing an environment XML to add or retire a collection.
+      -->
+      <TabItem Header="Modify" x:Name="tabModify">
+        <Border Style="{StaticResource CardStyle}" Margin="0,14,0,0">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+              <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="0,0,0,4">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}" Text="5 &#183; WHAT IS ON THE SITE" VerticalAlignment="Center"/>
+              <Button   Grid.Column="2" x:Name="btnInspect" Style="{StaticResource BtnGhost}" Content="Read from SCCM"
+                        Margin="0" ToolTip="Asks the server what exists for this package right now. Creates and changes nothing."/>
+            </Grid>
+
+            <TextBlock Grid.Row="1" x:Name="txtModifyState"
+                       Text="Press Read from SCCM to see what this package has on the site."
+                       FontSize="11" Foreground="{StaticResource InkMuted}" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+            <Grid Grid.Row="2">
+              <Grid.RowDefinitions>
+                <!-- Settings first: changing what is already there is the common
+                     case. Adding and removing collections is the rarer one, so
+                     it sits underneath. -->
+                <RowDefinition Height="3*" MinHeight="150"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="2*" MinHeight="110"/>
+              </Grid.RowDefinitions>
+
+              <DataGrid Grid.Row="0" x:Name="lstSettings" Style="{StaticResource GridStyle}"
+                        CanUserAddRows="False" IsReadOnly="False">
+                <DataGrid.Columns>
+                  <DataGridTextColumn Header="Setting" Width="190" Binding="{Binding Label}" IsReadOnly="True"/>
+                  <DataGridTextColumn Header="Now"     Width="*"   Binding="{Binding CurrentLabel}" IsReadOnly="True">
+                    <DataGridTextColumn.ElementStyle>
+                      <Style TargetType="TextBlock">
+                        <Setter Property="TextWrapping" Value="Wrap"/>
+                        <Setter Property="Foreground" Value="{StaticResource InkMuted}"/>
+                        <Setter Property="Margin" Value="0,4,8,4"/>
+                        <Setter Property="VerticalAlignment" Value="Top"/>
+                      </Style>
+                    </DataGridTextColumn.ElementStyle>
+                  </DataGridTextColumn>
+
+                  <!--
+                    One column, three appearances, chosen by the row itself:
+
+                      Choice   a dropdown of the values SCCM accepts
+                      Text     a box
+                      Number   a box
+                      locked   the reason, in words, instead of a control
+
+                    The alternative is a template selector in code-behind, which
+                    this tool does not have - the window is loaded from XAML at
+                    runtime. Triggers keep the decision with the data.
+                  -->
+                  <DataGridTemplateColumn Header="Change to" Width="330" CanUserSort="False">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate>
+                        <Grid Margin="0,3,6,3">
+                          <TextBlock x:Name="locked" Text="{Binding LockedReason}" TextWrapping="Wrap"
+                                     FontSize="11" FontStyle="Italic" VerticalAlignment="Center"
+                                     Foreground="{StaticResource InkMuted}" Visibility="Collapsed"/>
+                          <ComboBox x:Name="choice" ItemsSource="{Binding Options}"
+                                    DisplayMemberPath="Label" SelectedValuePath="Value"
+                                    SelectedValue="{Binding NewValue, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    FontWeight="Normal" Visibility="Collapsed"/>
+                          <TextBox x:Name="freeText" Margin="0"
+                                   Text="{Binding NewValue, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                   Visibility="Collapsed"/>
+                        </Grid>
+                        <DataTemplate.Triggers>
+                          <DataTrigger Binding="{Binding Editable}" Value="False">
+                            <Setter TargetName="locked" Property="Visibility" Value="Visible"/>
+                          </DataTrigger>
+                          <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                              <Condition Binding="{Binding Editable}" Value="True"/>
+                              <Condition Binding="{Binding Editor}"   Value="Choice"/>
+                            </MultiDataTrigger.Conditions>
+                            <Setter TargetName="choice" Property="Visibility" Value="Visible"/>
+                          </MultiDataTrigger>
+                          <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                              <Condition Binding="{Binding Editable}" Value="True"/>
+                              <Condition Binding="{Binding Editor}"   Value="Text"/>
+                            </MultiDataTrigger.Conditions>
+                            <Setter TargetName="freeText" Property="Visibility" Value="Visible"/>
+                          </MultiDataTrigger>
+                          <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                              <Condition Binding="{Binding Editable}" Value="True"/>
+                              <Condition Binding="{Binding Editor}"   Value="Number"/>
+                            </MultiDataTrigger.Conditions>
+                            <Setter TargetName="freeText" Property="Visibility" Value="Visible"/>
+                          </MultiDataTrigger>
+                        </DataTemplate.Triggers>
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                  </DataGridTemplateColumn>
+
+                  <DataGridTextColumn Header="" Width="70" Binding="{Binding Unit}" IsReadOnly="True"/>
+                </DataGrid.Columns>
+              </DataGrid>
+
+              <TextBlock Grid.Row="1" Text="COLLECTIONS AND DEPLOYMENTS" FontSize="10" FontWeight="SemiBold"
+                         Foreground="{StaticResource InkMuted}" Margin="0,14,0,5"/>
+
+              <DataGrid Grid.Row="2" x:Name="lstModify" Style="{StaticResource GridStyle}"
+                        CanUserAddRows="False" IsReadOnly="False">
+                <DataGrid.Columns>
+                <!--
+                  A TEMPLATE column, not a DataGridCheckBoxColumn.
+
+                  A CheckBoxColumn is an EDITING control: the first click only
+                  puts the cell into edit mode and the second one ticks it. That
+                  reads as a broken tick box, and it is why this felt unusable.
+                  A CheckBox in a CellTemplate is a plain control - one click,
+                  every time - and IsHitTestVisible on the row keeps the click
+                  from being swallowed by row selection.
+                -->
+                <DataGridTemplateColumn Header="Do it" Width="55" CanUserSort="False">
+                  <DataGridTemplateColumn.CellTemplate>
+                    <DataTemplate>
+                      <CheckBox IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                IsEnabled="{Binding Actionable}"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </DataTemplate>
+                  </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="Action"     Width="80"  Binding="{Binding Action}" IsReadOnly="True">
+                  <DataGridTextColumn.ElementStyle>
+                    <Style TargetType="TextBlock">
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding Action}" Value="Remove">
+                          <Setter Property="Foreground" Value="{StaticResource Danger}"/>
+                          <Setter Property="FontWeight" Value="SemiBold"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Action}" Value="Add">
+                          <Setter Property="Foreground" Value="{StaticResource Teal}"/>
+                          <Setter Property="FontWeight" Value="SemiBold"/>
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="Collection" Width="*"   Binding="{Binding Name}"  IsReadOnly="True"/>
+                <DataGridTextColumn Header="On site"    Width="70"  Binding="{Binding OnSite}" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Deployment" Width="90"  Binding="{Binding Deployment}" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Why"        Width="230" Binding="{Binding Why}" IsReadOnly="True"/>
+                </DataGrid.Columns>
+              </DataGrid>
+            </Grid>
+
+            <Border Grid.Row="3" Background="#FFF4F7F8" BorderBrush="{StaticResource CardBorder}"
+                    BorderThickness="1" CornerRadius="3" Padding="12,10" Margin="0,12,0,0">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" x:Name="txtModifyHint" VerticalAlignment="Center" TextWrapping="Wrap"
+                           FontSize="11" Foreground="{StaticResource InkMuted}"
+                           Text="Tick the rows to act on, then Apply. Only ticked rows are touched; nothing else on the site is altered."/>
+                <Button Grid.Column="1" x:Name="btnApplyChanges" Style="{StaticResource BtnPrimary}" Margin="12,0,0,0"
+                        Content="Apply ticked changes" IsEnabled="False"
+                        ToolTip="Sends a job that creates the ticked missing collections and removes the ticked unwanted ones."/>
+              </Grid>
+            </Border>
+          </Grid>
+        </Border>
       </TabItem>
 
       <!-- ============================ RESULT ============================ -->
@@ -480,7 +681,7 @@
             </Grid>
             <!-- The last run of this package, read back from the drop folder, so a
                  result is still there after the window has been closed and reopened. -->
-            <Border Grid.Row="1" Background="#14008C82" BorderBrush="{StaticResource CardBorder}"
+            <Border Grid.Row="1" Background="#FFF4F7F8" BorderBrush="{StaticResource CardBorder}"
                     BorderThickness="1" CornerRadius="3" Padding="12,8" Margin="0,0,0,12">
               <StackPanel>
                 <TextBlock Text="EARLIER RUN" FontSize="10" FontWeight="SemiBold" Opacity="0.6"
@@ -490,7 +691,18 @@
               </StackPanel>
             </Border>
 
-            <DataGrid Grid.Row="2" x:Name="lstResults" Style="{StaticResource GridStyle}">
+            <!-- Ctrl+C copies whole rows, and the right-click menu is there for
+                 anyone who does not know that. An error you cannot paste into a
+                 ticket has to be retyped from a screenshot. -->
+            <DataGrid Grid.Row="2" x:Name="lstResults" Style="{StaticResource GridStyle}"
+                      SelectionMode="Extended" SelectionUnit="FullRow"
+                      ClipboardCopyMode="IncludeHeader">
+              <DataGrid.ContextMenu>
+                <ContextMenu>
+                  <MenuItem x:Name="mnuCopyRows" Header="Copy selected row(s)"/>
+                  <MenuItem x:Name="mnuCopyAll"  Header="Copy everything"/>
+                </ContextMenu>
+              </DataGrid.ContextMenu>
               <DataGrid.Columns>
                 <DataGridTextColumn Header="Step"   Width="170" Binding="{Binding Step}"/>
                 <!-- a failed step has to be findable at a glance in a list of eight -->
@@ -506,7 +718,19 @@
                     </Style>
                   </DataGridTextColumn.ElementStyle>
                 </DataGridTextColumn>
-                <DataGridTextColumn Header="Detail" Width="*"   Binding="{Binding Message}"/>
+                <!-- A text column clips at the cell edge, so "9 collections
+                     created: A | B | C ..." lost everything past the window.
+                     A template column with a wrapping TextBlock grows the row
+                     instead. No ToolTip: the text is fully visible already, so
+                     a tooltip repeating it just follows the mouse around. -->
+                <DataGridTemplateColumn Header="Detail" Width="*">
+                  <DataGridTemplateColumn.CellTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding Message}" TextWrapping="Wrap"
+                                 Margin="0,4,8,4" VerticalAlignment="Top"/>
+                    </DataTemplate>
+                  </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
               </DataGrid.Columns>
             </DataGrid>
           </Grid>
@@ -515,7 +739,7 @@
     </TabControl>
 
     <!-- ================================================== ACTIONS -->
-    <Border Grid.Row="2" Background="#FF002733" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,1,0,0"
+    <Border Grid.Row="2" Background="#FFFFFFFF" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,1,0,0"
             Padding="24,14,24,6" Margin="0,14,0,0">
       <Grid>
         <Grid.RowDefinitions>
@@ -547,13 +771,33 @@
     </Border>
 
     <!-- ================================================== STATUS BAR -->
-    <Border Grid.Row="3" Background="#FF001A20" Padding="24,12,24,14">
+    <Border Grid.Row="3" Background="#FFF2F4F5" Padding="24,12,24,14">
       <Grid>
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*"/>
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
-        <TextBlock Grid.Column="0" x:Name="txtStatus" Text="Ready." TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,16,0"/>
+        <!-- Selectable, because this is where errors land and an error that
+             cannot be copied gets retyped from a screenshot into a ticket.
+             A read-only TextBox styled flat rather than a TextBlock: TextBlock
+             cannot be selected at all. IsReadOnly keeps it from being edited,
+             and the borderless look means it still reads as a status line. -->
+        <!-- Style="{x:Null}" opts out of the implicit TextBox style. That style
+             has an IsReadOnly trigger which paints a grey field and forces the
+             foreground to the accent colour - it would repaint the status line
+             as an input box and override the red an error is shown in. -->
+        <TextBox Grid.Column="0" x:Name="txtStatus" Style="{x:Null}"
+                 Text="Ready." TextWrapping="Wrap"
+                 VerticalAlignment="Center" Margin="0,0,16,0" Padding="0"
+                 IsReadOnly="True" IsReadOnlyCaretVisible="False"
+                 Background="Transparent" BorderThickness="0"
+                 Foreground="{StaticResource Ink}" Cursor="IBeam">
+          <TextBox.ContextMenu>
+            <ContextMenu>
+              <MenuItem x:Name="mnuCopyStatus" Header="Copy this message"/>
+            </ContextMenu>
+          </TextBox.ContextMenu>
+        </TextBox>
         <Button    Grid.Column="1" x:Name="btnOpenLog" Style="{StaticResource BtnGhost}" Content="Open log folder"
                    MinWidth="150" IsEnabled="False" Margin="0"/>
       </Grid>

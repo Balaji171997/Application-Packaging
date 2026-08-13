@@ -81,6 +81,7 @@
       }
     ],
     "SynthesizeBrandingWhenMissing": true,
+    "BrandingValueName": "Revision",
     "DefaultIconPath": "Assets\\DefaultAppIcon.png",
     "NormalizeIconTo256": true,
     "DescriptionDocxMaxScanMB": 25,

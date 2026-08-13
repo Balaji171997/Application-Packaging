@@ -186,7 +186,7 @@ Assert-True  'a preview only warns, so a plan can still be reviewed' `
 # path with no drive qualifier is resolved by the CURRENT provider. A UNC share
 # has no drive qualifier, so without naming the filesystem provider a share that
 # is sitting right there and perfectly readable comes back as "not found".
-$providerLines = @(Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'Server\Engine\Src\Sccm.ps1'))
+$providerLines = @(Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'Server\Engine\Src\Provider.ps1'))
 foreach ($probe in 'TestContentPath', 'TestContentShare', 'GetContentShareNames') {
     # the assignment and the two lines after it - these probes span more than one line
     $at = @(0..($providerLines.Count - 1) | Where-Object { $providerLines[$_] -match "^\s*$probe\s*=" })[0]
@@ -240,12 +240,15 @@ Assert-True 'the security scope is looked up as an object first' `
 # real one. So the two are compared here, as text, without needing SCCM.
 $providerText = ($providerLines -join "`n")
 
-# what the REAL provider and its helpers read off $c
+# what the REAL provider and its helpers read off $c - Provider.ps1 only
 $reads = @([regex]::Matches($providerText, '\$c\.(?<p>[A-Za-z_][A-Za-z0-9_]*)') |
            ForEach-Object { $_.Groups['p'].Value } | Sort-Object -Unique)
 
-# what the engine puts INTO $c, at every call site
-$passed = @([regex]::Matches($providerText, '&\s*\$Provider\.\w+\s*@\{(?<body>[\s\S]*?)\}') |
+# what the engine puts INTO $c - EVERY file, because the call sites live in
+# Steps.ps1, Inspect.ps1 and Orchestrator.ps1 now, not beside the provider
+$engineText = (Get-ChildItem -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'Server\Engine\Src') -Filter '*.ps1' |
+               ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+$passed = @([regex]::Matches($engineText, '&\s*\$Provider\.\w+\s*@\{(?<body>[\s\S]*?)\}') |
             ForEach-Object { [regex]::Matches($_.Groups['body'].Value, '(?m)(?<k>[A-Za-z_][A-Za-z0-9_]*)\s*=') } |
             ForEach-Object { $_.Groups['k'].Value } | Sort-Object -Unique)
 
@@ -510,8 +513,14 @@ Assert-True  'the job id is carried through' ($run.JobId -eq $plan.JobId)
 # ---------------------------------------------------------------- removal
 Write-Host ''
 Write-Host 'Removal' -ForegroundColor Cyan
-$provider5 = New-AudiSccmDryRunProvider
-$rem = Invoke-AudiSwRemoval -Plan (New-TestPlan) -Provider $provider5 -DryRun
+# The provider is seeded with everything on the site, because removal now only
+# touches what it can actually find - see "Removal when the site does not match
+# the plan" below. An empty site is a legitimate case, not the normal one.
+$fullPlan = New-TestPlan
+$allNames = @($fullPlan.Collections | ForEach-Object { $_.Name })
+$provider5 = New-AudiSccmDryRunProvider -ExistingApplications @($fullPlan.ApplicationName) `
+                 -ExistingCollections $allNames -ExistingDeployments $allNames
+$rem = Invoke-AudiSwRemoval -Plan $fullPlan -Provider $provider5 -DryRun
 Assert-True  'removal reports success' $rem.Ok $rem.Message
 $remLog = $provider5.Log.ToArray()
 Assert-Equal 'nine deployments removed' 9 (@($remLog | Where-Object Operation -eq 'RemoveDeployment').Count)
@@ -523,16 +532,199 @@ Assert-True 'deployments are removed before collections' ($depIdx -lt $colIdx)
 
 # If removing deployments fails, collections and the application must be skipped
 # rather than attempted anyway.
-$provider6 = New-AudiSccmDryRunProvider -FailOn 'RemoveDeployment'
-$rem2 = Invoke-AudiSwRemoval -Plan (New-TestPlan) -Provider $provider6 -DryRun
+$provider6 = New-AudiSccmDryRunProvider -FailOn 'RemoveDeployment' `
+                 -ExistingApplications @($fullPlan.ApplicationName) `
+                 -ExistingCollections $allNames -ExistingDeployments $allNames
+$rem2 = Invoke-AudiSwRemoval -Plan $fullPlan -Provider $provider6 -DryRun
 Assert-True  'a failed removal reports failure' (-not $rem2.Ok)
 Assert-True  'collection removal is skipped when deployment removal fails' `
              ((@($rem2.Steps | Where-Object Step -eq 'Collections')[0].Message) -like 'Skipped*')
 Assert-Equal 'no collections were removed' 0 (@($provider6.Log | Where-Object Operation -eq 'RemoveCollection').Count)
 Assert-True  'the independent AD group step still ran' (@($rem2.Steps | Where-Object { $_.Step -eq 'ArsGroup' -and $_.Ok }).Count -eq 1)
 
+# ------------------------------------------------ removal takes what it finds
+# Somebody deleting one collection by hand must not strand the application. On
+# the real site, removal stopped at the missing collection and the application
+# was left behind - the opposite of what "remove this package" is for.
+Write-Host ''
+Write-Host 'Removal when the site does not match the plan' -ForegroundColor Cyan
+
+$partial   = New-TestPlan
+$survivors = @($partial.Collections | ForEach-Object { $_.Name } | Select-Object -Skip 2)
+$gapProvider = New-AudiSccmDryRunProvider -ExistingApplications @($partial.ApplicationName) `
+                   -ExistingCollections $survivors -ExistingDeployments $survivors
+$gapRun = Invoke-AudiSwRemoval -Plan $partial -Provider $gapProvider -DryRun
+Assert-True  'removal succeeds even when collections were deleted by hand' $gapRun.Ok $gapRun.Message
+Assert-Equal 'only the collections that were really there are removed' 7 `
+    (@($gapProvider.Log | Where-Object Operation -eq 'RemoveCollection').Count)
+Assert-Equal 'and the application still goes'  1 `
+    (@($gapProvider.Log | Where-Object Operation -eq 'RemoveApplication').Count)
+Assert-True  'the message says how many were already gone' `
+    ((@($gapRun.Steps | Where-Object { $_.Step -eq 'Collections' })[0].Message) -like '*already gone*')
+
+$goneProvider = New-AudiSccmDryRunProvider
+$goneRun = Invoke-AudiSwRemoval -Plan (New-TestPlan) -Provider $goneProvider -DryRun
+Assert-True  'removing a package that is already gone is not an error' $goneRun.Ok $goneRun.Message
+Assert-Equal 'and nothing is removed' 0 (@($goneProvider.Log | Where-Object Operation -like 'Remove*').Count)
+
+# -------------------------------------------- security scopes are VERIFIED
+# The first real run reported "4 security scopes attached" and the console
+# showed only Default. Four calls returning without throwing is not evidence.
+Write-Host ''
+Write-Host 'Security scopes are read back, not assumed' -ForegroundColor Cyan
+
+$stuck = Invoke-AudiSwIntegration -Plan (New-TestPlan) -DryRun `
+             -Provider (New-AudiSccmDryRunProvider)
+$scopeStep = @($stuck.Steps | Where-Object { $_.Step -eq 'SecurityScope' })[0]
+Assert-True 'a scope that sticks is reported as verified' ($scopeStep.Message -like '*verified*') $scopeStep.Message
+
+$notStuck = Invoke-AudiSwIntegration -Plan (New-TestPlan) -DryRun `
+                -Provider (New-AudiSccmDryRunProvider -Missing @('ScopeDidNotStick'))
+$noneStep = @($notStuck.Steps | Where-Object { $_.Step -eq 'SecurityScope' })[0]
+Assert-True 'a scope that does NOT stick is reported as not attached' `
+    ($noneStep.Message -like '*NONE*') $noneStep.Message
+Assert-True 'and the operator is told where to check' `
+    ($noneStep.Message -like '*Security Scopes tab*') $noneStep.Message
+
+# ------------------------------------------------------- what is on the site
+# Read-only. This is what a Modify screen is built on, and the answer to
+# "what actually happened to my package" without opening the console.
+Write-Host ''
+Write-Host 'Reading what the site holds' -ForegroundColor Cyan
+
+$statePlan = New-TestPlan
+$stateProvider = New-AudiSccmDryRunProvider -ExistingApplications @($statePlan.ApplicationName) `
+    -ExistingCollections (@($statePlan.Collections | ForEach-Object { $_.Name } | Select-Object -Skip 1) + 'SM1-INA_AUDI_DummyTest_x86_1.0_0001_MUL_Legacy') `
+    -ExistingDeployments @($statePlan.Collections | ForEach-Object { $_.Name }) `
+    -ExistingScopes @('INA00003')
+$state = Get-AudiSwPackageState -Plan $statePlan -Provider $stateProvider -DryRun
+
+Assert-True  'the state is readable'            $state.Ok $state.Message
+Assert-True  'it finds the application'         $state.Application
+Assert-Equal 'it names the collection that is missing' 1 @($state.Missing).Count
+Assert-Equal 'and the one nobody asked for'            1 @($state.Extra).Count
+Assert-Equal 'and it is the hand-made one' 'SM1-INA_AUDI_DummyTest_x86_1.0_0001_MUL_Legacy' $state.Extra[0].Name
+# Reported as "Name (ID)": the environment file holds IDs, but the console's
+# Security Scopes tab lists names, so an ID alone cannot be checked against what
+# is on screen.
+Assert-True 'it reports the scopes really attached, by name and id' `
+    (($state.SecurityScopes -join ',') -like '*(INA00003)*') ($state.SecurityScopes -join ',')
+Assert-True  'the summary is one line a person can read' ($state.Message -like '*collections in place*') $state.Message
+# .ToArray(), not @() - wrapping a List[object] of PSObjects throws
+# "Argument types do not match" in PowerShell 5.1
+Assert-Equal 'nothing was created by looking' 0 $stateProvider.Log.ToArray().Count
+
+$emptyState = Get-AudiSwPackageState -Plan (New-TestPlan) -Provider (New-AudiSccmDryRunProvider) -DryRun
+Assert-True 'a package that is not there says so plainly' ($emptyState.Message -like 'No application*') $emptyState.Message
+
 # ---------------------------------------------------------------- summary
 Write-Host ''
+
+# ---------------------------------------------------------------- settings read
+Write-Host ''
+Write-Host 'Reading the settings back' -ForegroundColor White
+
+$plan9 = New-TestPlan
+$prov9 = New-AudiSccmDryRunProvider -ExistingApplications @($plan9.ApplicationName)
+$st9   = Get-AudiSwPackageState -Plan $plan9 -Provider $prov9 -DryRun
+
+Assert-True 'every catalogued setting comes back with the state' `
+    ($st9.Settings.Count -eq (Get-AudiSettingCatalogue).Count) "$($st9.Settings.Count) settings"
+
+Assert-True 'every setting could actually be read from the site' `
+    (@($st9.Settings | Where-Object { -not $_.Readable }).Count -eq 0) `
+    ("unreadable: " + (@($st9.Settings | Where-Object { -not $_.Readable } | ForEach-Object { $_.Key }) -join ', '))
+
+# A Choice with no alternatives is a dropdown with nothing in it.
+Assert-True 'every choice setting offers alternatives' `
+    (@($st9.Settings | Where-Object { $_.Editor -eq 'Choice' -and $_.Options.Count -lt 2 }).Count -eq 0)
+
+# The current value has to BE one of the offered options, or the packager cannot
+# see what is set now - this catches the catalogue drifting from what SCCM returns.
+$mismatched = New-Object System.Collections.Generic.List[string]
+foreach ($row in @($st9.Settings | Where-Object { $_.Editor -eq 'Choice' -and $_.Readable })) {
+    $cur = $row.Current
+    if (-not (@($row.Options | Where-Object { $_.Value -eq $cur }))) {
+        $mismatched.Add("$($row.Key)='$cur'") | Out-Null
+    }
+}
+Assert-True 'the current value of each choice is one of its options' `
+    ($mismatched.Count -eq 0) ($mismatched -join ', ')
+
+# A choice must read back as a sentence, not a raw enum name.
+$ctx9 = @($st9.Settings | Where-Object { $_.Key -eq 'ExecutionContext' })[0]
+Assert-True 'a choice reads back as words, not an enum name' `
+    ($ctx9.CurrentLabel -ne $ctx9.Current) "$($ctx9.Current) -> $($ctx9.CurrentLabel)"
+
+# Nothing to edit when there is no application.
+$prov10 = New-AudiSccmDryRunProvider
+$st10   = Get-AudiSwPackageState -Plan $plan9 -Provider $prov10 -DryRun
+Assert-True 'no settings are offered when the application does not exist' ($st10.Settings.Count -eq 0)
+
+# The catalogue is config: both scopes have to be represented, or the Modify tab
+# silently loses half of what it can edit.
+Assert-True 'the catalogue covers the application'     ((Get-AudiSettingCatalogue -Scope 'Application').Count -gt 0)
+Assert-True 'the catalogue covers the deployment type' ((Get-AudiSettingCatalogue -Scope 'DeploymentType').Count -gt 0)
+
+Write-Host ''# ------------------------------------------------------------- applying settings
+Write-Host ''
+Write-Host 'Changing a setting' -ForegroundColor White
+
+function New-SettingRun { param($Changes, $Prov)
+    if (-not $Prov) { $Prov = New-AudiSccmDryRunProvider -ExistingApplications @((New-TestPlan).ApplicationName) }
+    Invoke-AudiSwChange -Plan (New-TestPlan) -SettingChanges $Changes -Provider $Prov -DryRun
+}
+
+# ---- the happy path
+$r1 = New-SettingRun @([pscustomobject]@{ Key = 'RebootBehavior'; To = 'ForceReboot' })
+Assert-True 'a valid setting change succeeds' $r1.Ok $r1.Message
+Assert-Equal 'one deployment type setting was written' 1 `
+    (@($r1.Provider.Log | Where-Object Operation -eq 'SetDeploymentTypeSetting').Count)
+Assert-True 'it names the cmdlet parameter, not the read property' `
+    ((@($r1.Provider.Log | Where-Object Operation -eq 'SetDeploymentTypeSetting')[0].Detail) -like 'RebootBehavior = ForceReboot*')
+
+# ---- the read and write vocabularies differ, and the WRITE one must go out
+$r2 = New-SettingRun @([pscustomobject]@{ Key = 'ExecutionContext'; To = 'User' })
+Assert-True 'the install behaviour change succeeds' $r2.Ok $r2.Message
+Assert-True 'the value SCCM wants is sent, not the one the site reported' `
+    ((@($r2.Provider.Log | Where-Object Operation -eq 'SetDeploymentTypeSetting')[0].Detail) -like '*= InstallForUser') `
+    (@($r2.Provider.Log | Where-Object Operation -eq 'SetDeploymentTypeSetting')[0].Detail)
+
+# ---- an application-scope setting goes through the other cmdlet
+$r3 = New-SettingRun @([pscustomobject]@{ Key = 'Description'; To = 'A new description.' })
+Assert-True 'a description change succeeds' $r3.Ok $r3.Message
+Assert-Equal 'it is written as an application setting' 1 `
+    (@($r3.Provider.Log | Where-Object Operation -eq 'SetApplicationSetting').Count)
+
+# ---- REFUSALS. The window is not trusted: the catalogue on this side decides.
+$r4 = New-SettingRun @([pscustomobject]@{ Key = 'Publisher'; To = 'Somebody Else' })
+Assert-True 'a locked setting is refused' (-not $r4.Ok)
+Assert-True 'and the refusal explains why' ($r4.Message -like '*package name*') $r4.Message
+Assert-Equal 'and nothing at all was written' 0 (@($r4.Provider.Log | Where-Object { $_.Operation -like 'Set*Setting' }).Count)
+
+$r5 = New-SettingRun @([pscustomobject]@{ Key = 'NotARealSetting'; To = 'x' })
+Assert-True 'an unknown setting key is refused' (-not $r5.Ok)
+
+$r6 = New-SettingRun @([pscustomobject]@{ Key = 'RebootBehavior'; To = 'RebootWhenever' })
+Assert-True 'a value outside the allowed list is refused' (-not $r6.Ok)
+Assert-True 'and the refusal lists what IS allowed' ($r6.Message -like '*Allowed:*') $r6.Message
+
+$r7 = New-SettingRun @([pscustomobject]@{ Key = 'MaximumRuntime'; To = 'quite a while' })
+Assert-True 'a number field rejects text' (-not $r7.Ok) $r7.Message
+
+# ---- a run that fails part way says how far it got
+$r8 = New-SettingRun @([pscustomobject]@{ Key = 'RebootBehavior'; To = 'NoAction' }) `
+                     (New-AudiSccmDryRunProvider -ExistingApplications @((New-TestPlan).ApplicationName) -FailOn 'SetDeploymentTypeSetting')
+Assert-True 'a failed setting write reports failure' (-not $r8.Ok)
+Assert-True 'and nothing is claimed to have been rolled back' ($r8.RolledBack.Count -eq 0)
+
+# ---- settings are applied BEFORE collections, so a refusal stops the whole job
+$r9 = Invoke-AudiSwChange -Plan (New-TestPlan) -Add @() -Remove @() `
+        -SettingChanges @([pscustomobject]@{ Key = 'Version'; To = '9.9' }) `
+        -Provider (New-AudiSccmDryRunProvider -ExistingApplications @((New-TestPlan).ApplicationName)) -DryRun
+Assert-True 'a locked setting blocks the job before any collection is touched' (-not $r9.Ok)
+Assert-Equal 'no collection was created' 0 (@($r9.Provider.Log | Where-Object Operation -eq 'NewCollection').Count)
+
 if ($script:Fail -eq 0) { Write-Host ("All {0} checks passed." -f $script:Pass) -ForegroundColor Green }
 else                    { Write-Host ("{0} passed, {1} FAILED." -f $script:Pass, $script:Fail) -ForegroundColor Red }
 Write-Host ''

@@ -235,6 +235,223 @@ try {
     Assert-Equal 'once it finishes the heartbeat is gone and only the result remains' 2 `
         @(Get-AudiSwJobHistory -DropFolder $drop -PackageName $package).Count
 
+    # ------------------------------------------------ Inspect and Change
+    # The Modify tab's whole round trip: ask the server what is there, tick
+    # rows, send back exactly those names. The window never touches the site.
+    Write-Host ''
+    Write-Host 'The Modify tab round trip' -ForegroundColor Cyan
+
+    $inspectDoc = New-AudiSwJobFile -PackageName $package -EnvironmentCode 'INA' -Rfc 'RFC0012345' -Action 'Inspect'
+    $inspectPath = Join-Path $paths.New 'inspect.xml'
+    $inspectDoc.Save($inspectPath)
+    $readInspect = Read-AudiSwJobFile -Path $inspectPath
+    Assert-True  'an Inspect job is accepted by the schema' $readInspect.Ok ($readInspect.Errors -join '; ')
+    Assert-Equal 'and keeps its action' 'Inspect' $readInspect.Job.Action
+    Remove-Item -LiteralPath $inspectPath -Force
+
+    $changeDoc = New-AudiSwJobFile -PackageName $package -EnvironmentCode 'INA' -Rfc 'RFC0012345' -Action 'Change' `
+                    -AddCollections @("GY1-$package") -RemoveCollections @("SM1-${package}_Legacy")
+    $changePath = Join-Path $paths.New 'change.xml'
+    $changeDoc.Save($changePath)
+    $readChange = Read-AudiSwJobFile -Path $changePath
+    Assert-True  'a Change job is accepted by the schema' $readChange.Ok ($readChange.Errors -join '; ')
+    Assert-Equal 'the ticked additions survive the round trip' "GY1-$package" ($readChange.Job.AddCollections -join ',')
+    Assert-Equal 'and the ticked removals'                     "SM1-${package}_Legacy" ($readChange.Job.RemoveCollections -join ',')
+    Assert-True  'a Change job still carries no requester' (-not ([xml](Get-Content $changePath -Raw)).Job.HasAttribute('requester'))
+    Remove-Item -LiteralPath $changePath -Force
+
+    # ---- setting edits over the same road -----------------------------------
+    #
+    # The window sends a key and a value; the SERVER decides what that key means
+    # and whether it may be written. So what has to survive the trip is exactly
+    # that pair - not a cmdlet parameter name, and not a translated value. If a
+    # job file ever carried the resolved parameter, a hand-edited file in the
+    # drop folder could call any parameter it liked.
+    $settingDoc = New-AudiSwJobFile -PackageName $package -EnvironmentCode 'INA' -Rfc 'RFC0012345' -Action 'Change' `
+                    -SettingChanges @(
+                        [pscustomobject]@{ Key = 'RebootBehavior'; From = 'BasedOnExitCode'; To = 'ForceReboot' }
+                        [pscustomobject]@{ Key = 'Description';    From = 'old text';        To = 'new text' }
+                    )
+    $settingPath = Join-Path $paths.New 'change-settings.xml'
+    $settingDoc.Save($settingPath)
+    $readSetting = Read-AudiSwJobFile -Path $settingPath
+
+    Assert-True  'a Change job carrying setting edits is accepted by the schema' `
+        $readSetting.Ok ($readSetting.Errors -join '; ')
+    Assert-Equal 'both setting edits survive the round trip' 2 (@($readSetting.Job.SettingChanges).Count)
+    Assert-Equal 'the key survives'   'RebootBehavior'  (@($readSetting.Job.SettingChanges)[0].Key)
+    Assert-Equal 'the new value survives' 'ForceReboot' (@($readSetting.Job.SettingChanges)[0].To)
+    # 'from' is the audit trail: what the operator was looking at when they
+    # decided. The server never acts on it - it re-reads the site itself.
+    Assert-Equal 'and the value the operator saw is kept for the record' 'BasedOnExitCode' `
+        (@($readSetting.Job.SettingChanges)[0].From)
+
+    # A value with XML-significant characters must come back intact, not as a
+    # mangled attribute - descriptions and command lines contain both.
+    $awkward = 'Ends with "quotes" & <angles>'
+    $oddDoc  = New-AudiSwJobFile -PackageName $package -EnvironmentCode 'INA' -Rfc 'RFC0012345' -Action 'Change' `
+                    -SettingChanges @([pscustomobject]@{ Key = 'Description'; From = ''; To = $awkward })
+    $oddPath = Join-Path $paths.New 'change-odd.xml'
+    $oddDoc.Save($oddPath)
+    $readOdd = Read-AudiSwJobFile -Path $oddPath
+    Assert-True  'quotes and angle brackets do not break the job file' $readOdd.Ok ($readOdd.Errors -join '; ')
+    Assert-Equal 'and the value comes back exactly as typed' $awkward (@($readOdd.Job.SettingChanges)[0].To)
+
+    # Collections and settings in one job: the Modify tab can send both at once.
+    $bothDoc = New-AudiSwJobFile -PackageName $package -EnvironmentCode 'INA' -Rfc 'RFC0012345' -Action 'Change' `
+                    -AddCollections @("GY1-$package") `
+                    -SettingChanges @([pscustomobject]@{ Key = 'MaximumRuntime'; From = '120'; To = '240' })
+    $bothPath = Join-Path $paths.New 'change-both.xml'
+    $bothDoc.Save($bothPath)
+    $readBoth = Read-AudiSwJobFile -Path $bothPath
+    Assert-True  'one job can carry both a collection and a setting' $readBoth.Ok ($readBoth.Errors -join '; ')
+    Assert-Equal 'the collection is still there' "GY1-$package" ($readBoth.Job.AddCollections -join ',')
+    Assert-Equal 'and so is the setting'         'MaximumRuntime' (@($readBoth.Job.SettingChanges)[0].Key)
+
+    # A job with no setting edits must not grow an empty Changes block, and must
+    # still read back as an empty list rather than $null.
+    $plainDoc = New-AudiSwJobFile -PackageName $package -EnvironmentCode 'INA' -Rfc 'RFC0012345' -Action 'Integrate'
+    $plainPath = Join-Path $paths.New 'plain.xml'
+    $plainDoc.Save($plainPath)
+    $readPlain = Read-AudiSwJobFile -Path $plainPath
+    Assert-True  'a job with no changes is still valid' $readPlain.Ok ($readPlain.Errors -join '; ')
+    Assert-Equal 'and reports no setting edits' 0 (@($readPlain.Job.SettingChanges).Count)
+
+    foreach ($p in $settingPath, $oddPath, $bothPath, $plainPath) { Remove-Item -LiteralPath $p -Force }
+
+    # ---- the settings have to come BACK, not just go out --------------------
+    #
+    # This is the leg that was missing: Get-AudiSwPackageState worked out all
+    # the settings and the result file threw them away, so the Modify tab only
+    # ever showed collections. Everything upstream can be right and the feature
+    # still not exist.
+    $inspectPlan = Get-AudiIntegrationPlan -PackageName $package -EnvironmentCode 'INA' -Rfc 'RFC0012345'
+    $inspectProv = New-AudiSccmDryRunProvider -ExistingApplications @($inspectPlan.ApplicationName)
+    $liveState   = Get-AudiSwPackageState -Plan $inspectPlan -Provider $inspectProv -DryRun
+
+    $inspectResult = [pscustomobject]@{
+        Ok = $true; JobId = 'insp-1'; Environment = 'INA'; Package = $package
+        Executor = 'svc-swint'; DryRun = $true; Message = $liveState.Message
+        Steps = @(); RolledBack = @(); State = $liveState; LogPath = ''
+    }
+    $resPath = Join-Path $paths.Done 'insp-1.result.xml'
+    Write-AudiSwJobResult -Path $resPath -Executor 'svc-swint' -Job ([pscustomobject]@{
+        JobId = 'insp-1'; Environment = 'INA'; PackageName = $package; Rfc = 'RFC0012345' }) -Result $inspectResult
+
+    # Read it back the way the window does - through the waiter, not by parsing
+    # the file here. A test that parses it itself would pass while the window
+    # still saw nothing, which is exactly the failure this covers.
+    $readBack = Wait-AudiSwJobResult -TimeoutMinutes 1 -PollSeconds 1 -Submission ([pscustomobject]@{
+        JobId = 'insp-1'; Path = $resPath; ResultPath = $resPath; FailedPath = "$resPath.missing" })
+    Assert-True 'an Inspect result carrying settings is read back' $readBack.Found $readBack.Message
+
+    $backSettings = @($readBack.Settings)
+    Assert-Equal 'every setting survives the trip back to the window' `
+        $liveState.Settings.Count $backSettings.Count
+    Assert-True  'the locked ones are still locked' `
+        (@($backSettings | Where-Object { -not $_.Editable }).Count -eq 3) `
+        ("editable=false: " + (@($backSettings | Where-Object { -not $_.Editable } | ForEach-Object { $_.Key }) -join ', '))
+    Assert-True  'and they still say why' `
+        ((@($backSettings | Where-Object { -not $_.Editable })[0].LockedReason) -like '*package name*')
+
+    # Without the options a Choice renders as an empty dropdown, which is the
+    # difference between an editor and a picture of one.
+    $choiceBack = @($backSettings | Where-Object { $_.Editor -eq 'Choice' })
+    Assert-True 'the choices come back with their options' `
+        ($choiceBack.Count -gt 0 -and @($choiceBack | Where-Object { $_.Options.Count -lt 2 }).Count -eq 0)
+    Assert-True 'an option keeps both its value and its wording' `
+        ($choiceBack[0].Options[0].Value -and $choiceBack[0].Options[0].Label)
+
+    # The grid binds to NewValue; if it did not start at the current value,
+    # opening the tab and pressing Apply would rewrite every setting.
+    Assert-True 'nothing looks changed until somebody changes it' `
+        (@($backSettings | Where-Object { $_.NewValue -ne $_.Current }).Count -eq 0)
+
+    Remove-Item -LiteralPath $resPath -Force
+
+    # The state Inspect found has to survive into the result file, because that
+    # is what the window draws its three lists from.
+    $stateJob = [pscustomobject]@{ JobId = 'state-1'; Environment = 'INA'; PackageName = $package; Rfc = 'RFC0012345' }
+    $stateResult = [pscustomobject]@{
+        Ok = $true; DryRun = $false; Message = 'Application present.'; Steps = @()
+        State = [pscustomobject]@{
+            Application = $true
+            Collections = @([pscustomobject]@{ Name = "GY1-$package"; Wanted = $true; Exists = $false; HasDeployment = $false })
+            Extra       = @([pscustomobject]@{ Name = "SM1-${package}_Legacy"; Wanted = $false; Exists = $true; HasDeployment = $true })
+            SecurityScopes = @('INA00003')
+        }
+    }
+    $statePath = Join-Path $paths.Done 'state.result.xml'
+    $null = Write-AudiSwJobResult -Path $statePath -Job $stateJob -Executor $me -Result $stateResult
+    $stateCheck = Test-AudiConfigFile -Path $statePath -SchemaPath (Join-Path (Get-AudiConfigRoot) 'Environment.xsd')
+    Assert-True  'a result carrying the site state validates' $stateCheck.Ok ($stateCheck.Errors -join '; ')
+
+    $stateXml = [xml](Get-Content $statePath -Raw)
+    Assert-Equal 'both collections are recorded' 2 @($stateXml.JobResult.State.Collection).Count
+    Assert-Equal 'the missing one is marked wanted but absent' 'false' `
+        (@($stateXml.JobResult.State.Collection | Where-Object { $_.name -eq "GY1-$package" })[0].exists)
+    Assert-Equal 'the unwanted one is marked present but not wanted' 'false' `
+        (@($stateXml.JobResult.State.Collection | Where-Object { $_.name -like '*_Legacy' })[0].wanted)
+    Assert-Equal 'the scopes come through' 'INA00003' ([string]$stateXml.JobResult.State.Scope)
+    Remove-Item -LiteralPath $statePath -Force
+
+    # ------------------------------ the Modify tab, through the REAL collector
+    #
+    # Everything above tests the pieces. This drives the whole road the way the
+    # window does: a job file into \New, the actual Watch-AudiSwDropFolder.ps1
+    # picking it up, the engine running, a result file coming back out - for
+    # both of the new actions. No SCCM: the collector runs -DryRun, so the
+    # dry-run provider stands in for the site.
+    Write-Host ''
+    Write-Host 'Inspect and Change through the collector' -ForegroundColor Cyan
+
+    $engineRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'Server\Engine'
+
+    $inspectJob = Submit-AudiSwJob -DropFolder $drop -Job (
+        New-AudiSwJobFile -PackageName $package -EnvironmentCode 'INA' -Rfc 'RFC0012345' -Action 'Inspect')
+    & $watcher -DropFolder $drop -DryRun -EngineRoot $engineRoot
+    $inspectResult = Wait-AudiSwJobResult -Submission $inspectJob -TimeoutMinutes 1 -PollSeconds 1
+
+    Assert-True  'the collector runs an Inspect job' $inspectResult.Found $inspectResult.Message
+    Assert-True  'and it reports on the package'     ($inspectResult.Message -like '*application*') $inspectResult.Message
+    Assert-True  'the answer carries the collections the window needs' `
+        (@($inspectResult.State).Count -gt 0) 'the Modify tab has nothing to draw'
+    Assert-True  'every collection says whether it is wanted and whether it exists' `
+        (@($inspectResult.State | Where-Object { $null -ne $_.Wanted -and $null -ne $_.Exists }).Count -eq @($inspectResult.State).Count)
+
+    # Inspect must never write to the site. Nothing it did may look like a change.
+    $inspectSteps = @($inspectResult.Steps)
+    Assert-Equal 'Inspect reports exactly one step' 1 $inspectSteps.Count
+    Assert-Equal 'and that step is the inspection'  'Inspect' $inspectSteps[0].Step
+
+    # ...then the packager ticks two rows and sends them back.
+    $changeJob = Submit-AudiSwJob -DropFolder $drop -Job (
+        New-AudiSwJobFile -PackageName $package -EnvironmentCode 'INA' -Rfc 'RFC0012345' -Action 'Change' `
+            -AddCollections @("GY1-$package") -RemoveCollections @("SM1-${package}_Legacy") -DryRun)
+    & $watcher -DropFolder $drop -DryRun -EngineRoot $engineRoot
+    $changeResult = Wait-AudiSwJobResult -Submission $changeJob -TimeoutMinutes 1 -PollSeconds 1
+
+    Assert-True 'the collector runs a Change job' $changeResult.Found $changeResult.Message
+    # Each collector pass builds a fresh dry-run provider, so the site it sees is
+    # empty and there is no application to change. That is the RIGHT answer, and
+    # it proves the engine checks before it acts rather than blindly creating.
+    # Changing a real application is covered against the engine in Test-Sccm.
+    Assert-True 'a Change against a site with no application is refused' (-not $changeResult.Ok) $changeResult.Message
+    Assert-True 'and it says to Integrate first' ($changeResult.Message -like '*Use Integrate*') $changeResult.Message
+    Assert-True 'the result names no person' `
+        (-not ((Get-Content -LiteralPath $changeResult.Path -Raw).Replace($me, 'X') -like "*$($me.Split('\')[-1])*"))
+
+    # A ticked name that is not this package's is refused by the ENGINE, not
+    # trusted because a window sent it.
+    $strayJob = Submit-AudiSwJob -DropFolder $drop -Job (
+        New-AudiSwJobFile -PackageName $package -EnvironmentCode 'INA' -Rfc 'RFC0012345' -Action 'Change' `
+            -RemoveCollections @('SM1-SomebodyElsesCollection') -DryRun)
+    & $watcher -DropFolder $drop -DryRun -EngineRoot $engineRoot
+    $strayResult = Wait-AudiSwJobResult -Submission $strayJob -TimeoutMinutes 1 -PollSeconds 1
+
+    Assert-True 'a collection belonging to another package is refused' (-not $strayResult.Ok) $strayResult.Message
+    Assert-True 'and the refusal says why' ($strayResult.Message -like '*not belong*') $strayResult.Message
+
     # ------------------------------------------- a job in the wrong folder
     # One drop folder serves one environment. A job for another environment has
     # been put there by mistake, and running it would carry work out against a

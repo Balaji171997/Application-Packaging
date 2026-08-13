@@ -103,6 +103,37 @@ function Get-AudiDefaults {
 
     $namePatterns = @($result.Document.SelectNodes('/Defaults/PackageName/Pattern') | ForEach-Object { $_.InnerText.Trim() })
 
+    # The editable-settings catalogue. Options are read as a list of
+    # value/label pairs so the window can show a sentence and send back the
+    # value SCCM wants.
+    $settings = @($result.Document.SelectNodes('/Defaults/Settings/Setting')) |
+        ForEach-Object {
+            $node = $_
+            [pscustomobject]@{
+                Key      = $node.key
+                Scope    = $node.scope
+                Property = $node.property
+                Label    = $node.label
+                Editor   = $node.editor
+                Unit     = $(if ($node.HasAttribute('unit')) { $node.unit } else { '' })
+                Hint     = $(if ($node.HasAttribute('hint')) { $node.hint } else { '' })
+                # Editable unless the file says otherwise, so a new setting is
+                # editable by default and locking one is a deliberate act.
+                Editable = $(if ($node.HasAttribute('editable')) { [bool]::Parse($node.editable) } else { $true })
+                LockedReason = $(if ($node.HasAttribute('lockedReason')) { $node.lockedReason } else { '' })
+                WriteParameter = $(if ($node.HasAttribute('writeParameter')) { $node.writeParameter } else { '' })
+                Options  = @($node.SelectNodes('Option') | ForEach-Object {
+                                [pscustomobject]@{
+                                    Value = $_.value
+                                    Label = $_.InnerText.Trim()
+                                    # What the SET cmdlet wants. Same as Value
+                                    # unless the file says otherwise.
+                                    WriteValue = $(if ($_.HasAttribute('writeValue')) { $_.writeValue } else { $_.value })
+                                }
+                            })
+            }
+        }
+
     $scripts = @($result.Document.SelectNodes('/Defaults/PackageSource/Script')) |
         ForEach-Object {
             $node = $_
@@ -177,9 +208,25 @@ function Get-AudiDefaults {
             LockTimeoutMinutes         = [int]$d.Runtime.lockTimeoutMinutes
             TransientErrors            = @($result.Document.SelectNodes('/Defaults/Runtime/TransientErrors/Pattern') | ForEach-Object { $_.InnerText })
         }
+        Settings         = $settings
         Path             = $path
     }
     return $script:AudiDefaultsCache
+}
+
+function Get-AudiSettingCatalogue {
+    <#  The settings the Modify tab is allowed to edit, and the values SCCM
+        accepts for each. Straight out of Defaults.xml - the window never
+        carries its own list, so adding an option is a config edit.
+
+        A Choice setting's Options are what the operator picks from. A Text or
+        Number setting has none, and is typed.  #>
+    [CmdletBinding()]
+    param([string]$Root, [string]$Scope)
+
+    $all = @((Get-AudiDefaults -Root $Root).Settings)
+    if ($Scope) { return @($all | Where-Object { $_.Scope -eq $Scope }) }
+    return $all
 }
 
 function Get-AudiEnvironmentCode {
@@ -534,29 +581,53 @@ function Read-AudiPackageDetail {
             break
         }
     }
-    if (-not $scriptPath) { $notes.Add('No PSADT deployment script found in the package.') }
+    if (-not $scriptPath) {
+        $wanted = ($source.Scripts | ForEach-Object { $_.FileName }) -join ' or '
+        $notes.Add("No deployment script found in this folder - looked for $wanted, up to $($source.SearchDepth) folder(s) deep. Check the path points at the package root, or fill the fields in by hand.")
+    }
 
     # ---- the install instruction document -------------------------------------
     $documentPath = $null
     if ($source.Document) {
         $doc = Get-ChildItem -LiteralPath $PackagePath -Filter $source.Document.Filter -File -Recurse -Depth $source.SearchDepth -ErrorAction SilentlyContinue |
                Where-Object { $_.Name -notlike '~$*' } |
-               Sort-Object LastWriteTime -Descending | Select-Object -First 1
+               # A readable .docx always beats an old .doc, however recent the
+               # .doc is; newest wins only within the same format.
+               Sort-Object @{ Expression = { $_.Extension -ieq '.docx' }; Descending = $true },
+                           @{ Expression = { $_.LastWriteTime };          Descending = $true } |
+               Select-Object -First 1
         if ($doc) {
             $documentPath = $doc.FullName
             $text = Get-AudiDocumentText -Path $doc.FullName
             if ($text) {
+                $took = 0
                 foreach ($field in $source.Document.Fields) {
                     $m = [regex]::Match($text, $field.Pattern)
                     if ($m.Success) {
                         $value = $m.Groups[1].Value.Trim()
                         if ($value -and -not $fields.Contains($field.Name)) {
                             $fields[$field.Name] = $value; $origin[$field.Name] = 'document'
+                            $took++
                         }
                     }
                 }
-            } else { $notes.Add("Instruction document found but no text could be read: $($doc.Name)") }
-        } else { $notes.Add('No install instruction document found in the package.') }
+                # Read cleanly but matched nothing: the document exists and is
+                # legible, so the headings are not the ones we look for. Say so,
+                # otherwise it looks identical to "no document" from outside.
+                if ($took -eq 0) {
+                    $notes.Add("Read $($doc.Name) but found no description in it - the headings may differ from the standard template. Type the descriptions in by hand.")
+                }
+            }
+            elseif ($doc.Extension -ine '.docx') {
+                # .doc is a binary OLE file, not a zip, so the reader cannot open
+                # it. Word being installed makes no difference - the fix is the
+                # file format.
+                $notes.Add("$($doc.Name) is in the old .doc format, which cannot be read. Open it in Word and Save As .docx, or type the descriptions in by hand.")
+            }
+            else {
+                $notes.Add("Instruction document found but no text could be read: $($doc.Name). It may be corrupt or still open in Word.")
+            }
+        } else { $notes.Add('No install instruction document found in the package - the descriptions have to be typed in by hand.') }
     }
 
     # ---- description: short, else detailed, else leave it to the caller -------
@@ -747,13 +818,11 @@ function Get-AudiIntegrationPlan {
         EstimatedInstallMinutes  = [int]$defaults.Application.estimatedInstallMinutes
         DeploymentType  = "$PackageName$($defaults.Naming.deploymentTypeSuffix)"
         BrandingKey     = $branding
-        # Rule 1, kept flat because messages and the log quote it. The full set
-        # is DetectionRules - .ToArray(), because @() on a List[object] of
-        # PSObjects throws under PowerShell 5.1.
-        DetectionKey    = $detection
-        DetectionValue  = $defaults.Detection.valueName
-        DetectionData   = $parts.Revision
-        DetectionIs64Bit = [bool]::Parse($defaults.Detection.is64Bit)
+        # THE detection rules. There is no flat copy of rule 1 beside this any
+        # more - two representations of the same thing drift apart, and the flat
+        # one was already only half true once a second rule existed.
+        # .ToArray(), because @() on a List[object] of PSObjects throws under
+        # PowerShell 5.1.
         DetectionRules  = $detectionRules.ToArray()
 
         # Everything the old tool declared on its <DeploymentType>, so the
