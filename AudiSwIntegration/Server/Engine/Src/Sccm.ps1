@@ -78,7 +78,33 @@ function New-AudiSccmProvider {
             New-CMApplication -Name $c.ApplicationName -Publisher $c.Publisher -SoftwareVersion $c.Version `
                               -LocalizedApplicationName $c.LocalizedName -LocalizedApplicationDescription $c.LocalizedDescription `
                               -AutoInstall $true -ErrorAction Stop | Out-Null
-            Set-CMApplication -Name $c.ApplicationName -Owner $c.Owner -SupportContact $c.Owner -ErrorAction Stop | Out-Null
+
+            # -Description is the admin Comment in the console, which is NOT the
+            # Software Center description above. Their <Description> element put
+            # "created by manual MCB script" there; this carries the job and the
+            # RFC, so an application can be traced back the same way its
+            # collections can.
+            Set-CMApplication -Name $c.ApplicationName -Owner $c.Owner -SupportContact $c.Owner `
+                              -Description $c.ApplicationComment -ErrorAction Stop | Out-Null
+
+            # The Distribution Settings tab. Their tool set both of these and we
+            # did not, which is why "Enable for on-demand distribution" was
+            # unticked on the application ours made, and the prestaged radio sat
+            # on SCCM's default of "manually copy" instead of AutoDownload.
+            #
+            # Applied separately and failing soft: they are console settings, not
+            # the application itself, and losing a good application over a tick
+            # box would be the wrong trade. If the parameter name differs on a
+            # given console build, the run says so and carries on.
+            try {
+                Set-CMApplication -Name $c.ApplicationName `
+                                  -DistributionPointSetting $c.PrestagedSetting `
+                                  -SendToProtectedDistributionPoint $c.OnDemandDistribution `
+                                  -ErrorAction Stop | Out-Null
+            }
+            catch {
+                Write-Warning ("The Distribution Settings could not be applied to '{0}': {1}. Set them by hand on the application's Distribution Settings tab." -f $c.ApplicationName, $_.Exception.Message)
+            }
             & $script:AudiSetGermanDisplay $c
         }
 
@@ -88,7 +114,15 @@ function New-AudiSccmProvider {
             # inside SCCM, so the clauses are built properly here.
             $clauses = & $script:AudiNewDetectionClause $c
 
-            Add-CMScriptDeploymentType -ApplicationName $c.ApplicationName -DeploymentTypeName $c.DeploymentTypeName `
+            # The Repair command is optional - the old tool set none at all - so
+            # it is only passed when the config asks for one. Passing an empty
+            # string would put a blank Repair command on the deployment type,
+            # which is not the same as having none.
+            $repair = @{}
+            if (-not [string]::IsNullOrWhiteSpace($c.RepairCommand)) { $repair['RepairCommand'] = $c.RepairCommand }
+
+            Add-CMScriptDeploymentType @repair `
+                                       -ApplicationName $c.ApplicationName -DeploymentTypeName $c.DeploymentTypeName `
                                        -ContentLocation $c.ContentPath -InstallCommand $c.InstallCommand `
                                        -UninstallCommand $c.UninstallCommand -AddDetectionClause $clauses `
                                        -InstallationBehaviorType $c.InstallationBehaviorType `
@@ -98,8 +132,26 @@ function New-AudiSccmProvider {
                                        -ContentFallback:$c.AllowClientToUseFallback `
                                        -EnableBranchCache:$c.AllowClientToShareContent `
                                        -SlowNetworkDeploymentMode $c.OnSlowNetworkMode `
+                                       -PersistContentInClientCache:$c.PersistContentInCache `
                                        -Force32Bit:$c.Run32BitOn64Bit `
                                        -ErrorAction Stop | Out-Null
+
+            # Two of their <DeploymentType> values have no switch on the
+            # supported cmdlets, so they are not set here:
+            #
+            #   OnFastNetworkMode=Download   already the default for a fast
+            #                                network - the cmdlet only exposes
+            #                                the SLOW network choice, which is
+            #                                set above to the same value
+            #   SendToProtectedDistributionPoint / DistributionPointSetting
+            #                                their module wrote these straight
+            #                                onto the content object through
+            #                                WMI. Reaching for raw WMI to match
+            #                                them would give back the very thing
+            #                                this tool exists to remove.
+            #
+            # Neither changes what a client does with the package. If Audi wants
+            # them set, they are a console change on the deployment type.
 
             # Operating system requirement rules, as the old tool set from its
             # <SccmOSRequirements> block. The platform strings in Defaults.xml
@@ -733,6 +785,7 @@ function Invoke-AudiModifyStepBody {
             & $Provider.SetDeploymentType @{
                 ApplicationName = $Plan.ApplicationName; DeploymentTypeName = $Plan.DeploymentType
                 ContentPath = $Plan.ContentPath; InstallCommand = $Plan.InstallCommand; UninstallCommand = $Plan.UninstallCommand
+                RepairCommand = $Plan.RepairCommand
                 DetectionRules = $Plan.DetectionRules
                 DetectionKey = $Plan.DetectionKey; DetectionValue = $Plan.DetectionValue
                 DetectionData = $Plan.DetectionData; DetectionIs64Bit = $Plan.DetectionIs64Bit
@@ -743,6 +796,7 @@ function Invoke-AudiModifyStepBody {
                 OnSlowNetworkMode = $Plan.OnSlowNetworkMode
                 AllowClientToShareContent = $Plan.AllowClientToShareContent
                 AllowClientToUseFallback  = $Plan.AllowClientToUseFallback
+                PersistContentInCache     = $Plan.PersistContentInCache
                 Run32BitOn64Bit           = $Plan.Run32BitOn64Bit
                 OperatingSystems          = $Plan.OperatingSystems }
             $Changed.Add('deployment type updated') | Out-Null
@@ -834,12 +888,15 @@ function Invoke-AudiStepBody {
             & $Provider.NewApplication @{
                 ApplicationName = $Plan.ApplicationName; Publisher = $Plan.Parts.Publisher; Version = $Plan.Parts.Version
                 LocalizedName = $Plan.LocalizedName; LocalizedDescription = $Plan.LocalizedDescription
-                LocalizedNameDe = $Plan.LocalizedNameDe; LocalizedDescriptionDe = $Plan.LocalizedDescriptionDe; Owner = $Plan.Executor }
+                LocalizedNameDe = $Plan.LocalizedNameDe; LocalizedDescriptionDe = $Plan.LocalizedDescriptionDe
+                ApplicationComment = $Plan.ApplicationComment; Owner = $Plan.Executor
+                OnDemandDistribution = $Plan.OnDemandDistribution; PrestagedSetting = $Plan.PrestagedSetting }
             $Created.Add([pscustomobject]@{ Kind = 'Application'; Name = $Plan.ApplicationName }) | Out-Null
 
             & $Provider.AddDeploymentType @{
                 ApplicationName = $Plan.ApplicationName; DeploymentTypeName = $Plan.DeploymentType
                 ContentPath = $Plan.ContentPath; InstallCommand = $Plan.InstallCommand; UninstallCommand = $Plan.UninstallCommand
+                RepairCommand = $Plan.RepairCommand
                 DetectionRules = $Plan.DetectionRules
                 DetectionKey = $Plan.DetectionKey; DetectionValue = $Plan.DetectionValue
                 DetectionData = $Plan.DetectionData; DetectionIs64Bit = $Plan.DetectionIs64Bit
@@ -850,6 +907,7 @@ function Invoke-AudiStepBody {
                 OnSlowNetworkMode = $Plan.OnSlowNetworkMode
                 AllowClientToShareContent = $Plan.AllowClientToShareContent
                 AllowClientToUseFallback  = $Plan.AllowClientToUseFallback
+                PersistContentInCache     = $Plan.PersistContentInCache
                 Run32BitOn64Bit           = $Plan.Run32BitOn64Bit
                 OperatingSystems          = $Plan.OperatingSystems }
             return "Application and deployment type '$($Plan.DeploymentType)' created."

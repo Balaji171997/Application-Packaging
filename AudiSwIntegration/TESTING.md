@@ -77,7 +77,7 @@ Then:
 ### Without opening the window
 
 ```powershell
-.\Tests\Invoke-AllTests.ps1                    # 334 checks, no SCCM, no rights
+.\Tests\Invoke-AllTests.ps1                    # 378 checks, no SCCM, no rights
 .\Client\Start-AudiSwClient.ps1 -SelfTest      # drives the window's own code, no screen
 ```
 
@@ -187,7 +187,7 @@ Same again with **Dry run unticked**. Then check in the console:
 | Deployments | 4 - three Available, `_RemoveComputer` **Uninstall** |
 | Security scopes | ICZ00001, ICZ00002, ICZ00005, ICZ00006 |
 | Folders | app in `\Software Library\...\Applications\ICZ-Applications`; collections in `\Assets and Compliance\...\Device Collections\II1-Site\` and `\SCCM-Manager\`. Missing folders are created |
-| AD group | `G-AUDI-AG-SW-ICZ_ETAS_INCA_x64_7.5.7-0001_MUL` |
+| AD group | **none** - the step reports SKIPPED. Switched off in `Defaults.xml` (`Steps/@createArsGroup`) until the ARS attributes are agreed |
 
 Then **Modify** (change the revision first and watch the detection rule follow),
 and finally **Remove** to put ICZ back as you found it.
@@ -200,7 +200,7 @@ these, and the message will say which step:
 - `New-CMDetectionClauseRegistryKeyValue` - the two detection rules, and replacing them on Modify
 - `New-CMRequirementRuleOperatingSystemValue` - the OS requirements
 - the German display entry, written through `SDMPackageXML`
-- the ARS/SPML call that creates the AD group
+- the ARS/SPML call that creates the AD group - SWITCHED OFF, it fails with "malformedRequest: some of the specified attributes for the group object class are not defined in the schema"
 - `Move-CMObject` and `New-CMFolder` - filing into the console folders, and creating any that are missing
 - everything else on the site, in fact: no ConfigMgr cmdlet runs unless the
   current location IS the `<SITE>:` drive. The tool steps into it on connect and

@@ -157,6 +157,34 @@
           <xs:complexType>
             <xs:attribute name="install" type="NonEmptyString" use="required"/>
             <xs:attribute name="uninstall" type="NonEmptyString" use="required"/>
+            <!-- May be empty: the old tool set no Repair command at all. -->
+            <xs:attribute name="repair" type="xs:string" use="optional" default=""/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- The application's Distribution Settings tab. -->
+        <xs:element name="Distribution">
+          <xs:complexType>
+            <xs:attribute name="onDemand" type="xs:boolean" use="required"/>
+            <xs:attribute name="prestaged" use="required">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="AutoDownload"/>
+                  <xs:enumeration value="DownloadOnlyContentChange"/>
+                  <xs:enumeration value="ManualCopy"/>
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Steps that can be switched off for every environment at once.
+             createArsGroup="false" leaves the AD access group uncreated; the
+             step still runs and reports itself as SKIPPED, so nobody is left
+             believing the group exists. -->
+        <xs:element name="Steps">
+          <xs:complexType>
+            <xs:attribute name="createArsGroup" type="xs:boolean" use="required"/>
           </xs:complexType>
         </xs:element>
 
@@ -238,6 +266,12 @@
         <xs:element name="Comments">
           <xs:complexType>
             <xs:attribute name="collection" type="NonEmptyString" use="required"/>
+            <!-- The application's admin description - the Comment field in the
+                 console, not what a user sees in Software Center. The old tool
+                 wrote a fixed "created by manual MCB script" here; this carries
+                 the job and the RFC instead, so every object made by a run can
+                 be traced back to it. -->
+            <xs:attribute name="application" type="NonEmptyString" use="required"/>
           </xs:complexType>
         </xs:element>
 

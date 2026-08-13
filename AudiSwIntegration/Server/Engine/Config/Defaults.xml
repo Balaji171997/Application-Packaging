@@ -11,8 +11,51 @@
 -->
 <Defaults schemaVersion="1.0">
 
+  <!-- What the deployment type runs. repair="" leaves the Repair command empty,
+       which is what the old tool did - it had no <RepairCommandline> at all.
+       PSADT supports it, so it is offered here as one edit. -->
   <Commands install="Invoke-AppDeployToolkit.exe Install"
-            uninstall="Invoke-AppDeployToolkit.exe Uninstall"/>
+            uninstall="Invoke-AppDeployToolkit.exe Uninstall"
+            repair="Invoke-AppDeployToolkit.exe Repair"/>
+
+  <!--
+    The application's Distribution Settings tab in the console.
+
+    onDemand="true"          "Enable for on-demand distribution" - when a client
+                             asks for content that is not on its distribution
+                             point, distribute it there on demand. Their tool set
+                             this; ours did not, which is why the tick box was
+                             empty on the application it made.
+
+    prestaged="AutoDownload" the "Prestaged distribution point settings" radio:
+                               AutoDownload               automatically download
+                               DownloadOnlyContentChange  changes only
+                               ManualCopy                 copy it by hand
+                             ManualCopy is what SCCM defaults to, and it is why
+                             the third radio was selected on ours.
+  -->
+  <Distribution onDemand="true" prestaged="AutoDownload"/>
+
+  <!--
+    Steps that can be switched off for every environment at once.
+
+    createArsGroup="false" - the Active Directory access group is NOT created.
+
+    On the first real run that reached it, the directory refused the request:
+
+        malformedRequest - Some of the specified attributes for the 'group'
+        object class are not defined in the schema.
+
+    Everything in SCCM is finished and correct by the time this step runs, so
+    letting it fail would roll a good application back out over a step nobody
+    can use yet. The step still RUNS and still reports - as SKIPPED, saying the
+    group was not created - so nobody is left believing it exists.
+
+    To turn it back on: settle the attribute names with whoever owns the ARS
+    schema (the old tool sent 'description' and 'edsva-Auftragsnummer'), then
+    set this to true. Nothing else changes.
+  -->
+  <Steps createArsGroup="false"/>
 
   <Naming brandingRegistryRoot="Software\VWG\CM\"
           deploymentTypeSuffix="_INSTALLCOMPUTER"
@@ -21,7 +64,7 @@
 
   <Application category="Development"
                maxRuntimeMinutes="120"
-               estimatedInstallMinutes="5"
+               estimatedInstallMinutes="3"
                defaultLanguage="en-us"/>
 
   <!--
@@ -81,7 +124,8 @@
        back into this template does not work - the tool rejects the config file
        at load with an explanation, so the rule cannot be undone by an edit on
        the server. Available placeholders: {package} {jobId} {rfc} -->
-  <Comments collection="Created by the SCCM Integration Tool | job {jobId} | RFC {rfc}"/>
+  <Comments collection="Created by the SCCM Integration Tool | job {jobId} | RFC {rfc}"
+            application="Created by the SCCM Integration Tool | job {jobId} | RFC {rfc}"/>
 
   <!-- No personal name is kept anywhere on the SCCM side, so the RFC number is
        the ONLY route from an object in the console back to the person who asked

@@ -235,6 +235,61 @@ Assert-True  'rfc is recorded on every collection'         (@($plan.Collections 
 # becomes the gMSA later, and the test should not care which
 Assert-Equal 'executor is the environment service account' $ina.Service.account $plan.Executor
 
+# ------------------------------------------------- parity with the old tool
+# Every value below is read straight out of the tool being replaced, from
+# EQS-PoshGUI-Tool-1.0.3\INA\VWG-SCCM-ApplicationIntegration_v2.0.0.0.xml.
+# An application this tool makes must be indistinguishable from one theirs made,
+# so a difference here has to be a decision, not a slip.
+Write-Host ''
+Write-Host 'Parity with the old tool' -ForegroundColor Cyan
+
+$d = Get-AudiDefaults
+Assert-Equal 'estimated install minutes'      '3'   $d.Application.estimatedInstallMinutes
+Assert-Equal 'maximum run time minutes'       '120' $d.Application.maxRuntimeMinutes
+Assert-Equal 'category'                       'Development' $d.Application.category
+Assert-Equal 'default language'               'en-us' $d.Application.defaultLanguage
+Assert-Equal 'install command'                'Invoke-AppDeployToolkit.exe Install'   $d.Commands.install
+Assert-Equal 'uninstall command'              'Invoke-AppDeployToolkit.exe Uninstall' $d.Commands.uninstall
+Assert-Equal 'deployment type suffix'         '_INSTALLCOMPUTER' $d.Naming.deploymentTypeSuffix
+Assert-Equal 'branding registry root'         'Software\VWG\CM\' $d.Naming.brandingRegistryRoot
+Assert-Equal 'AD group prefix'                'G-AUDI-AG-SW-' $d.Naming.arsGroupPrefix
+
+Assert-Equal 'program visibility'             'Hidden' $d.DeploymentType.programVisibility
+Assert-Equal 'installation behaviour'         'InstallForSystem' $d.DeploymentType.installationBehaviorType
+Assert-Equal 'logon requirement'              'WhetherOrNotUserLoggedOn' $d.DeploymentType.logonRequirementType
+Assert-Equal 'slow network mode'              'Download' $d.DeploymentType.slowNetworkDeploymentMode
+Assert-Equal 'distribution point setting'     'AutoDownload' $d.DeploymentType.distributionPointSetting
+Assert-Equal 'allow client to share content'  'false' $d.DeploymentType.allowClientToShareContent
+Assert-Equal 'allow client to use fallback'   'true'  $d.DeploymentType.allowClientToUseFallback
+Assert-Equal 'persist content in cache'       'false' $d.DeploymentType.persistContentInClientCache
+Assert-Equal 'run 32-bit on 64-bit'           'false' $d.DeploymentType.run32BitOn64Bit
+
+Assert-Equal 'detection value name'           'Revision' $d.Detection.valueName
+Assert-Equal 'detection data type'            'String'   $d.Detection.dataType
+Assert-Equal 'detection is 64-bit'            'true'     $d.Detection.is64Bit
+Assert-Equal 'detection method'               'Value'    $d.Detection.method
+
+# The settings the deployment type is actually given, not just the ones in
+# config - a value that never reaches SCCM is not parity.
+foreach ($field in 'MaxRuntimeMinutes', 'EstimatedInstallMinutes', 'ProgramVisibility',
+                   'InstallationBehaviorType', 'LogonRequirementType', 'OnSlowNetworkMode',
+                   'AllowClientToShareContent', 'AllowClientToUseFallback',
+                   'PersistContentInCache', 'Run32BitOn64Bit', 'ApplicationComment') {
+    Assert-True "the plan carries $field" ([bool]$plan.PSObject.Properties[$field])
+}
+Assert-Equal 'the plan carries their estimate, not ours' 3 $plan.EstimatedInstallMinutes
+
+# Windows 7 is the one deliberate difference in the OS list, because it is out
+# of support. Everything else about the deployment type matches.
+Assert-Equal 'two operating systems, Windows 7 dropped on purpose' 2 @($d.OperatingSystems).Count
+Assert-True  'no Windows 7 platform string remains' `
+    (@($d.OperatingSystems | Where-Object { $_.Value -like '*Windows_7*' }).Count -eq 0)
+
+# The application's admin comment carries the audit link instead of their fixed
+# "created by manual MCB script".
+Assert-True 'the application comment carries the job id' ($plan.ApplicationComment -like "*$($plan.JobId)*")
+Assert-True 'and the RFC'                                ($plan.ApplicationComment -like '*RFC0012345*')
+
 # ------------------------------------------------------------ detection rules
 # Two rules, both of which must hold: the branding key the package writes, and
 # the product's own uninstall entry from VWG_SoftIdent. There is deliberately no

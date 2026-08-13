@@ -104,7 +104,7 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Client\Start-Audi
 ```
 
 ```powershell
-# all 334 checks - no SCCM, no network, no rights
+# all 378 checks - no SCCM, no network, no rights
 .\Tests\Invoke-AllTests.ps1
 ```
 
@@ -169,7 +169,7 @@ declared in `Defaults.xml`.
 
 ## Tests
 
-`.\Tests\Invoke-AllTests.ps1` - **334 checks, none needing SCCM.** Several exist
+`.\Tests\Invoke-AllTests.ps1` - **378 checks, none needing SCCM.** Several exist
 because the tool being replaced got them wrong:
 
 - `ADO_ADOBE_Reader_x64_...` must survive intact - the old text replacement turned

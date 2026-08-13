@@ -72,7 +72,23 @@ Assert-Equal 'one application created'          1 (@($log | Where-Object Operati
 Assert-Equal 'nine collections created'         9 (@($log | Where-Object Operation -eq 'NewCollection').Count)
 Assert-Equal 'nine deployments created'         9 (@($log | Where-Object Operation -eq 'NewDeployment').Count)
 Assert-Equal 'ten objects filed (app + nine)'  10 (@($log | Where-Object Operation -eq 'MoveObject').Count)
-Assert-Equal 'one AD group created'             1 (@($log | Where-Object Operation -eq 'NewArsGroup').Count)
+# The AD group is switched OFF for every environment in Defaults.xml, because
+# the directory refuses the request the old tool's attributes produce. The step
+# must still RUN and still SAY it was skipped - a step that quietly reports
+# success would leave everyone believing a group exists that does not.
+Assert-Equal 'no AD group is created while the step is off' 0 (@($log | Where-Object Operation -eq 'NewArsGroup').Count)
+$arsStep = @($run.Steps | Where-Object { $_.Step -eq 'ArsGroup' })[0]
+Assert-True  'the AD group step still runs'      $arsStep.Ok
+Assert-True  'and says it was skipped, not done' ($arsStep.Message -like 'SKIPPED*') $arsStep.Message
+Assert-True  'and says the group was NOT created' ($arsStep.Message -like '*NOT created*') $arsStep.Message
+Assert-True  'and names the switch that turns it on' ($arsStep.Message -like '*createArsGroup*') $arsStep.Message
+
+# Turning it back on is one config value away, and nothing else changes.
+$arsOn = New-TestPlan
+$arsOn.CreateArsGroup = $true
+$arsRun = Invoke-AudiSwIntegration -Plan $arsOn -Provider (New-AudiSccmDryRunProvider) -DryRun
+Assert-Equal 'switching it on creates the group again' 1 `
+    (@($arsRun.Provider.Log | Where-Object Operation -eq 'NewArsGroup').Count)
 
 # Move-CMObject wants a PROVIDER path rooted at the object type, not the folder
 # name the environment file holds. A bare name binds to the parameter and then
@@ -210,6 +226,32 @@ $at = @(0..($providerLines.Count - 1) | Where-Object { $providerLines[$_] -match
 $scopeBlock = ($providerLines[$at..([Math]::Min($at + 12, $providerLines.Count - 1))] -join ' ')
 Assert-True 'the security scope is looked up as an object first' `
     ($scopeBlock -like '*Get-CMSecurityScope*') $scopeBlock
+
+# ------------------------------------------------ the provider's own contract
+#
+# Every provider operation is handed one hashtable, $c. If it reads $c.Something
+# that no caller ever puts in, StrictMode throws AT THE SITE:
+#
+#     "The property 'ApplicationComment' cannot be found on this object."
+#
+# and the run dies on step 1 having done nothing. That has happened twice -
+# once for DetectionRules, once for ApplicationComment - and neither showed up
+# in a dry run, because the dry-run provider reads far fewer properties than the
+# real one. So the two are compared here, as text, without needing SCCM.
+$providerText = ($providerLines -join "`n")
+
+# what the REAL provider and its helpers read off $c
+$reads = @([regex]::Matches($providerText, '\$c\.(?<p>[A-Za-z_][A-Za-z0-9_]*)') |
+           ForEach-Object { $_.Groups['p'].Value } | Sort-Object -Unique)
+
+# what the engine puts INTO $c, at every call site
+$passed = @([regex]::Matches($providerText, '&\s*\$Provider\.\w+\s*@\{(?<body>[\s\S]*?)\}') |
+            ForEach-Object { [regex]::Matches($_.Groups['body'].Value, '(?m)(?<k>[A-Za-z_][A-Za-z0-9_]*)\s*=') } |
+            ForEach-Object { $_.Groups['k'].Value } | Sort-Object -Unique)
+
+$orphans = @($reads | Where-Object { $_ -notin $passed })
+Assert-Equal 'every property the provider reads is one the engine passes' 0 $orphans.Count `
+    ("nothing ever puts these into `$c, so the real site throws on the first step that reads one: " + ($orphans -join ', '))
 
 # A distribution point group that exists but is EMPTY passes the existence check
 # and then fails when content is distributed to it - after the application has

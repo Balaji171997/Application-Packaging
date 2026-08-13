@@ -145,6 +145,10 @@ function Get-AudiDefaults {
     $script:AudiDefaultsCache = [pscustomobject]@{
         SchemaVersion    = $d.schemaVersion
         Commands         = $d.Commands
+        # Steps that can be switched off for every environment at once.
+        Steps            = [pscustomobject]@{ CreateArsGroup = [bool]::Parse($d.Steps.createArsGroup) }
+        # The application's Distribution Settings tab in the console.
+        Distribution     = $d.Distribution
         Naming           = $d.Naming
         Application      = $d.Application
         Detection        = $d.Detection
@@ -699,6 +703,10 @@ function Get-AudiIntegrationPlan {
         rfc     = $(if ($Rfc) { $Rfc } else { 'none' })
     }
     $collectionComment = Expand-AudiTemplate -Template $defaults.Comments.collection -Values $sccmTokens
+    # The application's admin Comment field in the console. Their tool wrote a
+    # fixed 'created by manual MCB script'; this carries the job and the RFC, so
+    # the application is traceable the same way its collections are.
+    $applicationComment = Expand-AudiTemplate -Template $defaults.Comments.application -Values $sccmTokens
 
     $collections = @($env.Collections | ForEach-Object {
         [pscustomobject]@{
@@ -765,9 +773,16 @@ function Get-AudiIntegrationPlan {
         Category        = $defaults.Application.category
         InstallCommand  = $defaults.Commands.install
         UninstallCommand= $defaults.Commands.uninstall
+        # Empty leaves the Repair command unset, which is what the old tool did.
+        RepairCommand   = $(if ($defaults.Commands.HasAttribute('repair')) { $defaults.Commands.repair } else { '' })
+        # The application's Distribution Settings tab.
+        OnDemandDistribution = [bool]::Parse($defaults.Distribution.onDemand)
+        PrestagedSetting     = $defaults.Distribution.prestaged
         ApplicationFolder = $env.ApplicationFolder
         Collections     = $collections
         SecurityScopes  = $env.SecurityScopes
+        ApplicationComment = $applicationComment
+        CreateArsGroup  = $defaults.Steps.CreateArsGroup
         ArsGroupName    = "$($defaults.Naming.arsGroupPrefix)$PackageName"
         ArsGroupOu      = $env.ArsGroupOu
         ArsProviderUrl  = $env.ArsProviderUrl
