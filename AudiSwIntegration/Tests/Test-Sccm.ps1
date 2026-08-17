@@ -725,6 +725,39 @@ $r9 = Invoke-AudiSwChange -Plan (New-TestPlan) -Add @() -Remove @() `
 Assert-True 'a locked setting blocks the job before any collection is touched' (-not $r9.Ok)
 Assert-Equal 'no collection was created' 0 (@($r9.Provider.Log | Where-Object Operation -eq 'NewCollection').Count)
 
+# ------------------------------------- a second person, on a second machine
+Write-Host ''
+Write-Host 'Modify from a blank form' -ForegroundColor White
+
+# The scenario: one packager integrates. Another opens the tool on their own PC,
+# types only the package name, and modifies. Everything Modify acts on comes from
+# the package NAME and the environment file - both present on every machine - so
+# the run must work. What it must NOT do is blank the name and descriptions the
+# first packager filled in, just because this form is empty.
+$blankPlan = New-TestPlan
+Assert-True  'a plan builds from the package name alone' ($null -ne $blankPlan.ApplicationName)
+Assert-True  'and derives the deployment type' ($blankPlan.DeploymentType -like '*_INSTALLCOMPUTER')
+Assert-Equal 'and all nine collections' 9 (@($blankPlan.Collections).Count)
+
+$blankProv = New-AudiSccmDryRunProvider -ExistingApplications @($blankPlan.ApplicationName)
+$blankRun  = Invoke-AudiSwModification -Plan $blankPlan -Provider $blankProv -DryRun
+Assert-True 'Modify runs with no package folder read' $blankRun.Ok $blankRun.Message
+
+$setCall = @($blankRun.Provider.Log | Where-Object Operation -eq 'SetApplication')
+Assert-Equal 'the application is still updated' 1 $setCall.Count
+Assert-True  'but no descriptive field is written from a blank form' `
+    ($setCall[0].Detail -like '*nothing descriptive*') $setCall[0].Detail
+
+# And when the details ARE loaded, they are written.
+$fullPlan = Get-AudiIntegrationPlan -PackageName $blankPlan.PackageName -EnvironmentCode 'INA' `
+                -Rfc 'RFC0012345' -LocalizedName 'Git 2.54.0' -LocalizedDescription 'Version control.'
+$fullProv = New-AudiSccmDryRunProvider -ExistingApplications @($fullPlan.ApplicationName)
+$fullRun  = Invoke-AudiSwModification -Plan $fullPlan -Provider $fullProv -DryRun
+$fullSet  = @($fullRun.Provider.Log | Where-Object Operation -eq 'SetApplication')
+Assert-True 'a loaded form does write the name and description' `
+    ($fullSet[0].Detail -like '*name*' -and $fullSet[0].Detail -like '*descEn*') $fullSet[0].Detail
+
+Write-Host ''
 if ($script:Fail -eq 0) { Write-Host ("All {0} checks passed." -f $script:Pass) -ForegroundColor Green }
 else                    { Write-Host ("{0} passed, {1} FAILED." -f $script:Pass, $script:Fail) -ForegroundColor Red }
 Write-Host ''

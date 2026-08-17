@@ -121,6 +121,14 @@ function New-AudiSccmProvider {
             # it is only passed when the config asks for one. Passing an empty
             # string would put a blank Repair command on the deployment type,
             # which is not the same as having none.
+            # The Repair COMMAND lives on the deployment type. The tick box that
+            # lets a user run it - "Allow end users to attempt to repair this
+            # application" - is on the DEPLOYMENT, not here, and is set in
+            # NewDeployment below. Two different objects, one feature.
+            #
+            # Only passed when the config asks for one: an empty string would put
+            # a blank Repair command on the deployment type, which is not the
+            # same as having none.
             $repair = @{}
             if (-not [string]::IsNullOrWhiteSpace($c.RepairCommand)) { $repair['RepairCommand'] = $c.RepairCommand }
 
@@ -215,7 +223,18 @@ function New-AudiSccmProvider {
                 'Required'  { $action = 'Install';   $purpose = 'Required' }
                 default     { $action = 'Install';   $purpose = 'Available' }
             }
-            New-CMApplicationDeployment -Name $c.ApplicationName -CollectionName $c.CollectionName `
+            # "Allow end users to attempt to repair this application", on the
+            # deployment's Deployment Settings tab. SCCM leaves it unticked, so
+            # the Repair command on the deployment type was there but no user
+            # could reach it.
+            #
+            # Only meaningful on an Install deployment - there is nothing to
+            # repair once the uninstall deployment has run - and only when a
+            # repair command actually exists.
+            $repair = @{}
+            if ($action -eq 'Install' -and $c.AllowUserRepair) { $repair['AllowRepairApp'] = $true }
+
+            New-CMApplicationDeployment @repair -Name $c.ApplicationName -CollectionName $c.CollectionName `
                                         -DeployAction $action -DeployPurpose $purpose -ErrorAction Stop | Out-Null
         }
 
@@ -259,12 +278,33 @@ function New-AudiSccmProvider {
         # Modify never creates a second application. It updates the one that is
         # there, adds what is missing and removes what is no longer wanted.
         SetApplication = { param($c)
-            Set-CMApplication -Name $c.ApplicationName `
-                              -Publisher $c.Publisher -SoftwareVersion $c.Version `
-                              -LocalizedApplicationName $c.LocalizedName `
-                              -LocalizedApplicationDescription $c.LocalizedDescription `
-                              -ErrorAction Stop | Out-Null
-            & $script:AudiSetGermanDisplay $c
+            # EMPTY MEANS "NOT SUPPLIED", NOT "SET IT TO EMPTY".
+            #
+            # Modify can legitimately be run by somebody who never opened the
+            # package folder - a second packager, on a second machine, who knows
+            # only the package name. Their form is blank, and passing those
+            # blanks straight through would wipe the description and display
+            # name that whoever integrated it had filled in.
+            #
+            # So each descriptive field is passed only when it carries a value.
+            # Clearing one is then something nobody can do by accident; it is an
+            # edit on the Modify tab, where the old value is on screen next to
+            # the new one.
+            $set = @{ Name = $c.ApplicationName; ErrorAction = 'Stop' }
+            foreach ($pair in @(
+                @('Publisher',                       $c.Publisher),
+                @('SoftwareVersion',                 $c.Version),
+                @('LocalizedApplicationName',        $c.LocalizedName),
+                @('LocalizedApplicationDescription', $c.LocalizedDescription))) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$pair[1])) { $set[$pair[0]] = $pair[1] }
+            }
+            Set-CMApplication @set | Out-Null
+
+            # Same rule for the German pair.
+            if (-not [string]::IsNullOrWhiteSpace([string]$c.LocalizedNameDe) -or
+                -not [string]::IsNullOrWhiteSpace([string]$c.LocalizedDescriptionDe)) {
+                & $script:AudiSetGermanDisplay $c
+            }
         }
 
         SetDeploymentType = { param($c)
@@ -765,7 +805,19 @@ function New-AudiSccmDryRunProvider {
     $provider.RemoveArsGroup           = { param($c) & $record 'RemoveArsGroup'           $c.GroupName }.GetNewClosure()
 
     # ---- Modify
-    $provider.SetApplication    = { param($c) & $record 'SetApplication'    $c.ApplicationName }.GetNewClosure()
+    # Records WHICH descriptive fields were supplied, not just that the call
+    # happened - a dry run that reports "SetApplication" either way cannot show
+    # that a blank form leaves the live description alone.
+    $provider.SetApplication    = { param($c)
+        $named = @()
+        foreach ($pair in @(@('name', $c.LocalizedName), @('descEn', $c.LocalizedDescription),
+                            @('nameDe', $c.LocalizedNameDe), @('descDe', $c.LocalizedDescriptionDe))) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$pair[1])) { $named += $pair[0] }
+        }
+        $detail = $(if ($named.Count -gt 0) { "$($c.ApplicationName) | sets: $($named -join ',')" }
+                    else                    { "$($c.ApplicationName) | sets: nothing descriptive" })
+        & $record 'SetApplication' $detail
+    }.GetNewClosure()
     $provider.SetDeploymentType = { param($c) & $record 'SetDeploymentType' $c.DeploymentTypeName }.GetNewClosure()
     $provider.TestDeployment    = { param($c) $ExistingDeployments -contains $c.CollectionName }.GetNewClosure()
     $provider.GetPackageCollections = { param($c) @($ExistingCollections) }.GetNewClosure()

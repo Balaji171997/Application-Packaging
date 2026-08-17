@@ -116,6 +116,84 @@ foreach ($m in [regex]::Matches($xamlText, 'Background"?\s*(?:=|Value=)\s*"(#FF[
 Assert-True 'no dark backgrounds are left behind the dark text' `
     ($darkLeftovers.Count -eq 0) "dark backgrounds still present: $($darkLeftovers -join ', ')"
 
+# ------------------------------------------------- the client / server boundary
+Write-Host ''
+Write-Host 'The client carries no SCCM code' -ForegroundColor White
+
+# Client and Server are deployed to different machines. The window never
+# connects to a site, holds no SCCM rights and needs no ConfigMgr console - so
+# the SCCM half must not be in its folder at all. A window that CAN reach SCCM
+# will eventually be made to.
+$lib       = Join-Path $root 'Client\Lib'
+$libFiles  = @(Get-ChildItem -LiteralPath $lib -Filter '*.ps1' -File | ForEach-Object { $_.Name })
+
+$codeLinesEarly = @($clientText -split "\r?\n" |
+                    Where-Object { $_.Trim() -and $_.Trim() -notlike '#*' })
+
+Assert-True 'the client ships its own library' (Test-Path -LiteralPath $lib)
+foreach ($needed in 'Config.ps1', 'Runtime.ps1', 'Transport.ps1', 'Load.ps1') {
+    Assert-True "  it has $needed" ($libFiles -contains $needed)
+}
+foreach ($banned in 'Provider.ps1', 'Steps.ps1', 'Inspect.ps1', 'Preflight.ps1', 'Orchestrator.ps1') {
+    Assert-True "  and NOT $banned" ($libFiles -notcontains $banned)
+}
+
+# The window needs Defaults.xml - the patterns that read a PSADT script and an
+# instruction document, and the package name layout. That is packaging
+# knowledge, not SCCM knowledge.
+Assert-True 'the client has its own Defaults.xml' `
+    (Test-Path -LiteralPath (Join-Path $root 'Client\Config\Defaults.xml'))
+
+# It must NOT have the environment files. Those describe SCCM topology -
+# collections, security scopes, console folders, distribution point groups - and
+# putting them on every packager PC spreads the site's layout around and gives
+# an environment change N copies to keep in step. The window works the
+# environment out from the package name and the drop folder instead.
+Assert-True 'the client has NO environment files' `
+    (-not (Test-Path -LiteralPath (Join-Path $root 'Client\Config\Environments'))) `
+    'Client\Config\Environments still exists'
+
+foreach ($banned in 'Get-AudiEnvironment', 'Get-AudiEnvironmentCode', 'Resolve-AudiEnvironmentCode') {
+    $calls = @($codeLinesEarly | Where-Object { $_ -match "\b$banned\b" })
+    Assert-True "the window never calls $banned" ($calls.Count -eq 0) ($calls -join ' | ')
+}
+
+# And the server still has them - this moved the files, it did not delete them.
+Assert-True 'the server still holds the environment files' `
+    (@(Get-ChildItem (Join-Path $root 'Server\Engine\Config\Environments') -Filter '*.xml' -File).Count -gt 0)
+
+# Nothing in the window may reach for the server's engine while it is running.
+# The self-test loads it deliberately to play both sides, and says so, so that
+# one line is allowed - any other is the boundary being eroded.
+# Code lines only - the comments above explain the boundary and naturally name
+# the folder they are describing.
+$codeLines = @($clientText -split "\r?\n" | Where-Object { $_.Trim() -and $_.Trim() -notlike '#*' })
+$serverReaches = @($codeLines |
+                   Where-Object { $_ -match 'Server\\Engine' } |
+                   Where-Object { $_ -notmatch 'serverEngine' })
+Assert-True 'the window never loads the server engine outside the self-test' `
+    ($serverReaches.Count -eq 0) ($serverReaches -join ' | ')
+
+# Loading the client library must not define a single SCCM function.
+$probe = [powershell]::Create()
+$null  = $probe.AddScript(@"
+Set-StrictMode -Version 2.0
+. '$lib\Load.ps1'
+@(Get-Command -CommandType Function | Where-Object { `$_.Name -like '*-Audi*' } | ForEach-Object { `$_.Name })
+"@)
+$loaded = @($probe.Invoke())
+$probe.Dispose()
+
+Assert-True 'loading the client library defines the transport functions' `
+    (($loaded -contains 'Submit-AudiSwJob') -and ($loaded -contains 'Read-AudiPackageDetail')) `
+    ("$($loaded.Count) function(s)")
+
+$sccmOnly = @('Invoke-AudiSwIntegration', 'Invoke-AudiSwRemoval', 'Invoke-AudiSwModification',
+              'New-AudiSccmProvider', 'Connect-AudiSccm', 'Get-AudiSwPackageState',
+              'Invoke-AudiSwChange', 'Test-AudiSwPrerequisite')
+$leaked = @($sccmOnly | Where-Object { $loaded -contains $_ })
+Assert-True 'and defines no SCCM function at all' ($leaked.Count -eq 0) ($leaked -join ', ')
+
 # ------------------------------------------------------------------------ done
 Write-Host ''
 if ($script:Fail -eq 0) { Write-Host "All $($script:Pass) checks passed." -ForegroundColor Green }

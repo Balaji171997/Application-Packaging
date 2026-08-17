@@ -35,7 +35,9 @@ param(
     # real one.
     [string]$DropFolder,
 
-    # exercises the window's own code paths and exits, without showing it
+    # Exercises the window's own code paths and exits, without showing it. Where
+    # the server half is also present - the source tree, or the SCCM machine -
+    # it plays both sides and checks the full round trip as well.
     [switch]$SelfTest
 )
 
@@ -45,8 +47,43 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.Windows.Forms
 
-$ToolRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'Server\Engine'
-. (Join-Path $ToolRoot 'AudiSwIntegration.ps1')
+# ------------------------------------------------------------------ the engine
+#
+# THE CLIENT IS SELF-CONTAINED.
+#
+# It loads three files from its own Lib folder and nothing from the server:
+# Config.ps1 to read the package and the environment files, Transport.ps1 to
+# write the job and read results back, Runtime.ps1 for the logging those use.
+#
+# The SCCM half - Provider, Steps, Inspect, Preflight, Orchestrator - is not in
+# this folder at all. The window never connects to a site, so it must not be
+# able to; a window that CAN reach SCCM will eventually be made to.
+#
+# Client\Config is a COPY of Server\Engine\Config. Sync-AudiSwClient.ps1 keeps
+# them identical - the server's is the master, and nothing here is edited by
+# hand.
+. (Join-Path $PSScriptRoot 'Lib\Load.ps1')
+
+# ------------------------------------------------------------- the drop folder
+#
+# THE ONE THING A PACKAGER MACHINE CONFIGURES.
+#
+# A single root, shared with the server. The window creates <ENV>\<Package>\New
+# underneath it the first time each is needed, and works out the environment
+# from the package name - so there is one path to set and nothing else.
+#
+#   1. -DropFolder on the command line     (testing, shows a SANDBOX badge)
+#   2. DropFolder.txt beside this script   (the normal install)
+#   3. Transport/@dropFolder in the environment file (single-machine install)
+$SandboxDrop = [bool]$DropFolder
+if (-not $DropFolder) {
+    $dropPointer = Join-Path $PSScriptRoot 'DropFolder.txt'
+    if (Test-Path -LiteralPath $dropPointer) {
+        $DropFolder = (@(Get-Content -LiteralPath $dropPointer |
+                         Where-Object { $_.Trim() -and $_.Trim() -notlike '#*' } |
+                         Select-Object -First 1) -join '').Trim()
+    }
+}
 
 # ------------------------------------------------------------------ the window
 $xamlPath = Join-Path $PSScriptRoot 'MainWindow.xaml'
@@ -94,6 +131,12 @@ $state = [hashtable]::Synchronized(@{
 $defaults = Get-AudiDefaults
 
 # ---------------------------------------------------------------- small helpers
+# Declared up front: under Set-StrictMode -Version 2.0 reading one of these
+# before it has been assigned is a terminating error, and both are read by
+# handlers that can fire before the package has been read.
+$script:DocOperatingSystems = @()   # Windows versions the instruction document ticked
+$script:SettingsBaseline    = @{}   # setting values as the site reported them
+
 function Set-Status { param([string]$Text, [string]$Colour = '#FF16242A')
     $ui.txtStatus.Text = $Text
     $ui.txtStatus.Foreground = $Colour
@@ -106,7 +149,7 @@ function Show-Warning { param([string]$Text)
 }
 
 function Set-Busy { param([bool]$Busy)
-    foreach ($b in 'btnPreview','btnIntegrate','btnModify','btnRemove','btnBrowse','btnRead') { $ui[$b].IsEnabled = -not $Busy }
+    foreach ($b in 'btnHistory','btnIntegrate','btnModify','btnRemove','btnBrowse','btnRead') { $ui[$b].IsEnabled = -not $Busy }
     $ui.Window.Cursor = if ($Busy) { 'Wait' } else { 'Arrow' }
 }
 
@@ -126,11 +169,47 @@ function Get-PackageDetail {
 }
 
 # ---------------------------------------------------------------- populate once
-foreach ($code in (Get-AudiEnvironmentCode)) { $null = $ui.cboEnvironment.Items.Add($code) }
+# WHERE THE ENVIRONMENT LIST COMES FROM, NOW THAT THIS MACHINE HAS NO
+# ENVIRONMENT FILES.
+#
+# Environment files describe SCCM topology - collections, security scopes,
+# console folders, distribution point groups. That is the server's business and
+# has no place on a packager PC, so the window works the list out from two
+# things it can see:
+#
+#   - folders already in the drop root: environments this share is used for
+#   - the code at the front of the package name being worked on
+#
+# The list therefore fills itself in as the tool is used, and a new environment
+# appears the moment somebody types a package named for it. Whether that
+# environment really exists is the SERVER's decision - it has the files - and it
+# refuses the job if it does not.
+function Update-EnvironmentList {
+    $known = New-Object System.Collections.Generic.List[string]
+    if ($DropFolder -and (Test-Path -LiteralPath $DropFolder)) {
+        foreach ($d in @(Get-ChildItem -LiteralPath $DropFolder -Directory -ErrorAction SilentlyContinue)) {
+            if (-not $known.Contains($d.Name)) { $known.Add($d.Name) | Out-Null }
+        }
+    }
+    $fromPackage = Get-PackageSiteCode
+    if ($fromPackage -and -not $known.Contains($fromPackage)) { $known.Add($fromPackage) | Out-Null }
 
-$detected = if ($EnvironmentCode) { $EnvironmentCode } else { Resolve-AudiEnvironmentCode }
-if ($detected -and $ui.cboEnvironment.Items.Contains($detected)) { $ui.cboEnvironment.SelectedItem = $detected }
-elseif ($ui.cboEnvironment.Items.Count -gt 0) { $ui.cboEnvironment.SelectedIndex = 0 }
+    $selected = [string]$ui.cboEnvironment.SelectedItem
+    $ui.cboEnvironment.Items.Clear()
+    foreach ($code in @($known | Sort-Object)) { $null = $ui.cboEnvironment.Items.Add($code) }
+
+    # The package decides. It carries the environment as its first part, so a
+    # packager never has to choose and cannot choose wrongly by accident.
+    if ($fromPackage -and $ui.cboEnvironment.Items.Contains($fromPackage)) {
+        $ui.cboEnvironment.SelectedItem = $fromPackage
+    }
+    elseif ($selected -and $ui.cboEnvironment.Items.Contains($selected)) {
+        $ui.cboEnvironment.SelectedItem = $selected
+    }
+    elseif ($ui.cboEnvironment.Items.Count -gt 0) { $ui.cboEnvironment.SelectedIndex = 0 }
+}
+
+if ($EnvironmentCode) { $null = $ui.cboEnvironment.Items.Add($EnvironmentCode); $ui.cboEnvironment.SelectedItem = $EnvironmentCode }
 
 # Operating systems are deliberately NOT a field either. The old tool put OS
 # requirement rules on the deployment type; this tool does not do that yet, so a
@@ -143,15 +222,20 @@ elseif ($ui.cboEnvironment.Items.Count -gt 0) { $ui.cboEnvironment.SelectedIndex
 
 # ------------------------------------------------------------- sandbox badge
 # A test run must never be mistakable for a real one.
-if ($DropFolder) {
+# Only for -DropFolder on the command line. A path from DropFolder.txt is the
+# normal install, not a test rig, and badging it SANDBOX would train people to
+# ignore the badge on the day it means something.
+if ($SandboxDrop) {
     $ui.txtMode.Text = 'SANDBOX'
-    $ui.brdMode.ToolTip = "Jobs go to $DropFolder instead of the environment's drop folder."
+    $ui.brdMode.ToolTip = "Jobs go to $DropFolder instead of the configured drop folder."
     $ui.brdMode.Visibility = 'Visible'
 }
 
-function Get-ActiveDropFolder { param($Environment)
-    if ($DropFolder) { return $DropFolder }
-    return $Environment.Transport.DropFolder
+function Get-ActiveDropFolder {
+    # One root for every environment - see DropFolder.txt. The per-environment
+    # and per-package folders underneath it are worked out from the package name
+    # when the job is written.
+    return $DropFolder
 }
 
 # ------------------------------------------------------- environment awareness
@@ -168,11 +252,17 @@ function Get-PackageSiteCode {
     $package = $ui.txtPackage.Text.Trim()
     if (-not $package) { return $null }
     try { $site = (Split-AudiPackageName -PackageName $package).Site } catch { return $null }
-    if ($ui.cboEnvironment.Items.Contains($site)) { return $site }
-    return $null
+
+    # Returned whether or not it is already in the dropdown. It used to be
+    # checked against the list of environments this machine had files for, but
+    # there are none here now - and the list is built FROM this, so checking
+    # against it would be circular. Whether the environment really exists is the
+    # server's decision; it has the files and refuses the job if it does not.
+    return $site
 }
 
 function Sync-EnvironmentToPackage {
+    Update-EnvironmentList
     <#  Points the dropdown at the environment the package name asks for.
         Called after a package is read or its name is typed.  #>
     $site = Get-PackageSiteCode
@@ -202,10 +292,9 @@ function Show-PreviousRuns {
     if (-not $package -or -not $code) { return }
 
     try {
-        $environment = Get-AudiEnvironment -Code $code
-        $drop = Get-ActiveDropFolder -Environment $environment
+        $drop = Get-ActiveDropFolder
         if ([string]::IsNullOrWhiteSpace($drop) -or -not (Test-Path -LiteralPath $drop)) { return }
-        $runs = @(Get-AudiSwJobHistory -DropFolder $drop -PackageName $package)
+        $runs = @(Get-AudiSwJobHistory -DropFolder $drop -EnvironmentCode $code -PackageName $package)
     }
     catch { return }   # this is a convenience; it must never break the window
 
@@ -295,13 +384,13 @@ function Update-EnvironmentNotice {
     $mismatch = Test-EnvironmentMatch
     if ($mismatch) { Show-Warning $mismatch; return }
 
-    try {
-        $env = Get-AudiEnvironment -Code $code
-        if (-not $env.Verified) {
-            Show-Warning ("Environment {0} is marked unverified - some of its settings were carried over from another environment and still need confirming by Audi. Preview works; a real run is refused." -f $code)
-        } else { Show-Warning '' }
-    }
-    catch { Show-Warning "Environment $code could not be read: $($_.Exception.Message)" }
+    # The "unverified environment" warning used to be raised here by reading the
+    # environment file. The server still refuses a real run against an
+    # unverified environment - that check has not been weakened, it has simply
+    # moved to the side that owns the files. Warning here as well would mean
+    # keeping a copy of them on every packager PC to repeat a message the server
+    # already gives.
+    Show-Warning ''
 }
 
 # ----------------------------------------------------------------- derive names
@@ -405,6 +494,11 @@ function Read-PackageFolder { param([string]$Path)
         # not left in a tooltip nobody hovers. A blank form with a cheerful
         # "read 0 values" is exactly the sort of thing that gets noticed only
         # after the package is in SCCM.
+        # The Windows versions the instruction document ticked. Kept until the
+        # next package is read, so Integrate/Modify require exactly what was
+        # asked for rather than every platform the tool knows about.
+        $script:DocOperatingSystems = @($detail.OperatingSystems)
+
         $problems = @($detail.Notes)
         if ($problems.Count -gt 0) {
             Set-Status ($problems -join '  ') '#FF8A5300'
@@ -424,18 +518,31 @@ function New-PlanFromForm {
     $package = $ui.txtPackage.Text.Trim()
     if (-not $package) { throw 'Enter a package name first.' }
     $code = [string]$ui.cboEnvironment.SelectedItem
-    if (-not $code) { throw 'Choose an environment first.' }
+    # The package name carries the environment as its first part, so the PACKAGE
+    # decides and the dropdown only confirms it. Falling back to the package's
+    # own code means the window works before the list has been refreshed, and
+    # that no job can be submitted whose environment disagrees with the name of
+    # the package it is for.
+    if (-not $code) { $code = Get-PackageSiteCode }
+    if (-not $code) {
+        throw "Cannot tell which environment '$package' belongs to. A package name starts with its site code - for example INA_ETAS_INCA_x64_7.5.7-0001_MUL."
+    }
 
-    return Get-AudiIntegrationPlan -PackageName $package -EnvironmentCode $code `
-                                   -Rfc $ui.txtRfc.Text.Trim() `
-                                   -LocalizedName $ui.txtNameEN.Text.Trim() `
-                                   -LocalizedDescription $ui.txtDescEN.Text.Trim() `
-                                   -LocalizedNameDe $ui.txtNameDE.Text.Trim() `
-                                   -LocalizedDescriptionDe $ui.txtDescDE.Text.Trim() `
-                                   -PartOverride (Get-PackageDetail) `
-                                   -BrandingKey $ui.txtBranding.Text.Trim() `
-                                   -SoftIdent $ui.txtSoftIdent.Text.Trim()
+    # NOT a full plan. Building one needs the environment's collections, scopes,
+    # folders and distribution point group - SCCM topology, which does not
+    # belong on a packager machine and is not installed there.
+    #
+    # The server builds the real plan from the job file. All that is needed here
+    # is that the package name is well formed and an environment is chosen; the
+    # rest of the form travels as Detail and is used exactly as typed.
+    $null = Split-AudiPackageName -PackageName $package      # throws if malformed
+    return [pscustomobject]@{
+        PackageName = $package
+        Environment = $code
+        Rfc         = $ui.txtRfc.Text.Trim()
+    }
 }
+
 
 # ------------------------------------------------------------- reading results
 # Wait-AudiSwJobResult hands back a hashtable and the engine hands back a
@@ -504,7 +611,7 @@ function Start-Worker { param([scriptblock]$Body, [hashtable]$Arguments, [int]$S
     $state.Runspace.ThreadOptions  = 'ReuseThread'
     $state.Runspace.Open()
     $state.Runspace.SessionStateProxy.SetVariable('state', $state)
-    $state.Runspace.SessionStateProxy.SetVariable('toolRoot', $ToolRoot)
+    $state.Runspace.SessionStateProxy.SetVariable('toolRoot', (Join-Path $PSScriptRoot 'Lib'))
     # NOT called 'args': inside a script $args is the automatic argument list
     $state.Runspace.SessionStateProxy.SetVariable('jobArgs', $Arguments)
 
@@ -552,22 +659,10 @@ function Start-Worker { param([scriptblock]$Body, [hashtable]$Arguments, [int]$S
 # Runs the plan through the dry-run provider on this machine. Nothing is written
 # to the drop folder and the server is never involved, so a packager can check a
 # package before queuing anything.
-function Start-Preview {
-    try   { $plan = New-PlanFromForm }
-    catch { Set-Status $_.Exception.Message '#FF8A5300'; return }
-
-    $state.Note = '  |  preview only - nothing was queued'
-    Set-Status 'Preview running on this machine...'
-    Start-Worker -Steps 8 -Arguments @{ Plan = $plan } -Body {
-        try {
-            . (Join-Path $toolRoot 'AudiSwIntegration.ps1')
-            $state.Result = Invoke-AudiSwIntegration -Plan $jobArgs.Plan -DryRun `
-                                -OnProgress { param($stepName) $state.Step = $stepName }
-        }
-        catch { $state.Error = $_.Exception.Message }
-        finally { $state.Done = $true; $state.Running = $false }
-    }
-}
+# Start-Preview is gone. It ran the whole integration locally through the
+# dry-run provider, which meant the window had to load the SCCM half of the
+# engine - the one thing this split exists to prevent. It also proved nothing
+# about the site, and Dry run already covers rehearsing. History replaced it.
 
 # ------------------------------------------------- integrate / remove: flow 2
 # The window writes a job file into the environment's drop folder and waits for
@@ -590,39 +685,59 @@ function Start-Run { param([string]$Mode)   # Integrate | Modify | Remove
     catch { Set-Status $_.Exception.Message '#FF8A5300'; return }
 
     $code = [string]$ui.cboEnvironment.SelectedItem
-    try   { $env = Get-AudiEnvironment -Code $code }
-    catch { Set-Status $_.Exception.Message '#FFB3261E'; return }
-
-    if ($env.Transport.Mode -ne 'DropFolder' -and -not $DropFolder) {
-        Set-Status "Environment $code is set to transport '$($env.Transport.Mode)', which this window does not use." '#FFB3261E'
-        return
-    }
-    $drop = Get-ActiveDropFolder -Environment $env
+    $drop = Get-ActiveDropFolder
     if ([string]::IsNullOrWhiteSpace($drop)) {
-        Set-Status "Environment $code has no drop folder set. Fill in Transport/@dropFolder in $($env.Path)." '#FFB3261E'
+        Set-Status ("No drop folder is set. Put the UNC path of the shared drop folder in {0}." -f `
+                    (Join-Path $PSScriptRoot 'DropFolder.txt')) '#FFB3261E'
         return
     }
 
-    # With no personal name kept on the server, the RFC is the only record of
-    # who asked - so stop here rather than queue an untraceable change.
+    # The RFC is recorded, not required - the application name already
+    # identifies the package uniquely. The gate is kept behind the same config
+    # switch the server uses, so if Audi ever decides every change must carry
+    # one, both sides turn on together and the window is not left letting
+    # through jobs the server will reject.
     $rfc = $ui.txtRfc.Text.Trim()
     if ((Get-AudiDefaults).Audit.RequireRfc -and -not $rfc) {
-        Set-Status 'Enter the RFC number first. It is the only record of who requested this change, so the server refuses a job without one.' '#FF8A5300'
+        Set-Status 'Enter the RFC number first - this environment is set to require one.' '#FF8A5300'
         $ui.txtRfc.Focus() | Out-Null
         return
     }
     $rfcShown = if ($rfc) { $rfc } else { 'not given' }
+
+    # Integrate needs the package folder; Modify and Remove do not.
+    #
+    # Everything Modify and Remove act on - the application name, the deployment
+    # type, the collections - comes from the package NAME and the environment
+    # file, both of which are on every machine. So a second packager can modify
+    # what a first one integrated, from their own PC, without the package folder
+    # in front of them.
+    #
+    # What they cannot do from a blank form is supply the descriptive fields, so
+    # those are left alone rather than blanked - see SetApplication. Say which
+    # way it is going, so nobody has to guess.
+    $blankDetail = -not ($ui.txtNameEN.Text.Trim() -or $ui.txtDescEN.Text.Trim())
+    if ($Mode -eq 'Integrate' -and $blankDetail) {
+        Set-Status 'Read the package folder first - Integrate needs its script and instruction document.' '#FF8A5300'
+        $ui.tabPackage.IsSelected = $true
+        $ui.txtPackagePath.Focus() | Out-Null
+        return
+    }
+    $detailNote = $(if ($Mode -eq 'Modify' -and $blankDetail) {
+        "`r`n`r`nNo package details are loaded, so the name and descriptions" +
+        "`r`nalready in SCCM are left as they are. Collections and settings" +
+        "`r`nare still reconciled."
+    } else { '' })
 
     $dryRun = [bool]$ui.chkDryRun.IsChecked
     $verb   = switch ($Mode) { 'Remove' { 'REMOVE' } 'Modify' { 'MODIFY' } default { 'INTEGRATE' } }
     $what   = if ($dryRun) { "The server will rehearse this and change nothing." }
               else         { "The server will make real changes in $code." }
     $answer = [System.Windows.MessageBox]::Show(
-        ("$verb '$($plan.PackageName)' in $code" + "?`r`n`r`n" + $what +
+        ("$verb '$($plan.PackageName)' in $code" + "?`r`n`r`n" + $what + $detailNote +
          "`r`n`r`nThe job goes to:`r`n$drop`r`n`r`n" +
          "The work is carried out by the server's service account. Your name is`r`n" +
-         "not sent and is not recorded on the server - the RFC number ($rfcShown)`r`n" +
-         "is what ties this change back to you."),
+         "not sent and is not recorded on the server. RFC: $rfcShown."),
         'Confirm', 'YesNo', $(if ($dryRun) { 'Question' } else { 'Warning' }))
     if ($answer -ne 'Yes') { Set-Status 'Cancelled.'; return }
 
@@ -631,7 +746,7 @@ function Start-Run { param([string]$Mode)   # Integrate | Modify | Remove
     Start-Worker -Steps $(switch ($Mode) { 'Remove' { 4 } 'Modify' { 9 } default { 8 } }) -Arguments @{
         Action        = $Mode
         DropFolder    = $drop
-        Timeout       = $env.Transport.ResultTimeoutMinutes
+        Timeout       = $defaults.Runtime.ResultTimeoutMinutes
         PackageName   = $plan.PackageName
         Environment   = $code
         Rfc           = $ui.txtRfc.Text.Trim()
@@ -640,10 +755,14 @@ function Start-Run { param([string]$Mode)   # Integrate | Modify | Remove
         DescriptionEn = $ui.txtDescEN.Text.Trim()
         DescriptionDe = $ui.txtDescDE.Text.Trim()
         Detail        = Get-PackageDetail
+        # The Windows versions the instruction document ticked. Without these in
+        # the job file the server requires every platform it knows about, which
+        # is not what the document asked for.
+        OperatingSystems = $script:DocOperatingSystems
         DryRun        = $dryRun
     } -Body {
         try {
-            . (Join-Path $toolRoot 'AudiSwIntegration.ps1')
+            . (Join-Path $toolRoot 'Load.ps1')
 
             $wantsDryRun = [bool]$jobArgs.DryRun
             $state.Step = 'Writing the job file...'
@@ -651,7 +770,8 @@ function Start-Run { param([string]$Mode)   # Integrate | Modify | Remove
                                      -Action $jobArgs.Action -Rfc $jobArgs.Rfc `
                                      -NameEn $jobArgs.NameEn -NameDe $jobArgs.NameDe `
                                      -DescriptionEn $jobArgs.DescriptionEn -DescriptionDe $jobArgs.DescriptionDe `
-                                     -Detail $jobArgs.Detail -DryRun:$wantsDryRun
+                                     -Detail $jobArgs.Detail -OperatingSystems $jobArgs.OperatingSystems `
+                                     -DryRun:$wantsDryRun
 
             $submission = Submit-AudiSwJob -DropFolder $jobArgs.DropFolder -Job $doc
             $state.JobId = $submission.JobId
@@ -723,12 +843,9 @@ function Submit-AudiAction {
           [object[]]$SettingChanges = @(), [string]$Description)
 
     $code = [string]$ui.cboEnvironment.SelectedItem
-    try   { $environment = Get-AudiEnvironment -Code $code }
-    catch { Set-Status $_.Exception.Message '#FFB3261E'; return }
-
-    $drop = Get-ActiveDropFolder -Environment $environment
+    $drop = Get-ActiveDropFolder
     if ([string]::IsNullOrWhiteSpace($drop)) {
-        Set-Status "Environment $code has no drop folder set." '#FFB3261E'; return
+        Set-Status "No drop folder is set - see DropFolder.txt." '#FFB3261E'; return
     }
 
     $state.Note = ''
@@ -738,7 +855,7 @@ function Submit-AudiAction {
     Start-Worker -Steps 1 -StayOnTab:($Action -eq 'Inspect') -Arguments @{
         Action      = $Action
         DropFolder  = $drop
-        Timeout     = $environment.Transport.ResultTimeoutMinutes
+        Timeout     = $defaults.Runtime.ResultTimeoutMinutes
         PackageName = $Plan.PackageName
         Environment = $code
         Rfc         = $ui.txtRfc.Text.Trim()
@@ -748,7 +865,7 @@ function Submit-AudiAction {
         SettingChanges = $SettingChanges
     } -Body {
         try {
-            . (Join-Path $toolRoot 'AudiSwIntegration.ps1')
+            . (Join-Path $toolRoot 'Load.ps1')
             $state.Step = 'Writing the job file...'
             $doc = New-AudiSwJobFile -PackageName $jobArgs.PackageName -EnvironmentCode $jobArgs.Environment `
                                      -Action $jobArgs.Action -Rfc $jobArgs.Rfc -Detail $jobArgs.Detail `
@@ -782,30 +899,34 @@ function Show-PackageState { param($State)
         if ($collection.Wanted -and -not $collection.Exists) {
             $rows.Add([pscustomobject]@{
                 Selected = $false; Actionable = $true; Action = 'Add'; Name = $collection.Name
-                OnSite = 'no'; Deployment = '-'
+                State = 'not there'
                 Why = 'The environment file asks for it and it is not there.' }) | Out-Null
         }
         elseif (-not $collection.Wanted -and $collection.Exists) {
             $rows.Add([pscustomobject]@{
                 Selected = $false; Actionable = $true; Action = 'Remove'; Name = $collection.Name
-                OnSite = 'yes'; Deployment = $(if ($collection.HasDeployment) { 'yes' } else { 'no' })
+                State = $(if ($collection.HasDeployment) { 'on site, deployed' } else { 'on site, not deployed' })
                 Why = 'Named for this package, but the environment file does not ask for it.' }) | Out-Null
         }
         else {
+            # In place and wanted - but still removable. Matching the
+            # environment file is not a reason to forbid removing a collection:
+            # the file says what a NEW package gets, not what this one must keep
+            # for ever. The row says it matches, and lets the packager decide.
             $rows.Add([pscustomobject]@{
-                Selected = $false; Actionable = $false; Action = '-'; Name = $collection.Name
-                OnSite = 'yes'; Deployment = $(if ($collection.HasDeployment) { 'yes' } else { 'no' })
-                Why = 'In place, nothing to do.' }) | Out-Null
+                Selected = $false; Actionable = $true; Action = 'Remove'; Name = $collection.Name
+                State = $(if ($collection.HasDeployment) { 'on site, deployed' } else { 'on site, not deployed' })
+                Why = 'In place and as the environment file asks. Tick only if you want it gone.' }) | Out-Null
         }
     }
 
     $ui.lstModify.ItemsSource = $rows.ToArray()
-    $actionable = @($rows | Where-Object { $_.Action -ne '-' }).Count
+    $actionable = @($rows | Where-Object { $_.Actionable }).Count
     $ui.btnApplyChanges.IsEnabled = ($actionable -gt 0)
     $ui.txtModifyHint.Text = if ($actionable -eq 0) {
-        'Nothing to change - the site matches the environment file.'
+        'Nothing on the site for this package yet.'
     } else {
-        "$actionable row(s) can be acted on. Tick the ones you want, then Apply. Only ticked rows are touched."
+        "Tick what you want changed, then Apply. Nothing is touched unless it is ticked."
     }
 }
 
@@ -852,8 +973,12 @@ function Get-ChangedSettings {
         $now = [string]$row.NewValue
         if ($now -ne $was) {
             $changed.Add([pscustomobject]@{
-                Key = $row.Key; Label = $row.Label; Scope = $row.Scope
-                Property = $row.Property; From = $was; To = $now }) | Out-Null
+                # Key and value only. Deliberately NOT the cmdlet parameter:
+                # the server resolves what a key means from its own catalogue,
+                # so a window cannot name a parameter for it to call. It is
+                # also not carried in the result file, so reading it here threw
+                # "The property 'Property' cannot be found on this object".
+                Key = $row.Key; Label = $row.Label; From = $was; To = $now }) | Out-Null
         }
     }
     return $changed.ToArray()
@@ -938,7 +1063,55 @@ $ui.mnuCopyAll.Add_Click({
 $ui.btnInspect.Add_Click({ Start-Inspect })
 $ui.btnApplyChanges.Add_Click({ Start-ApplyChanges })
 
-$ui.btnPreview.Add_Click({ Start-Preview })
+function Show-PackageHistory {
+    <#  Everything this tool has done to this package, in the Result grid.
+
+        Reads the drop folder's own result files - the same ones the window
+        waits on - so it works after the window has been closed and reopened,
+        and needs nothing from SCCM.  #>
+    $package = $ui.txtPackage.Text.Trim()
+    if (-not $package) { Set-Status 'Enter a package name first.' '#FF8A5300'; $ui.txtPackage.Focus() | Out-Null; return }
+
+    $code = [string]$ui.cboEnvironment.SelectedItem
+    $drop = Get-ActiveDropFolder
+    if ([string]::IsNullOrWhiteSpace($drop)) { Set-Status "No drop folder is set - see DropFolder.txt." '#FFB3261E'; return }
+
+    try   { $runs = @(Get-AudiSwJobHistory -DropFolder $drop -EnvironmentCode $code -PackageName $package) }
+    catch { Set-Status "Could not read the history: $($_.Exception.Message)" '#FFB3261E'; return }
+
+    $ui.tabResult.IsSelected = $true
+    if ($runs.Count -eq 0) {
+        $ui.lstResults.ItemsSource = @()
+        $ui.txtHistory.Text = "No job has been run for $package in $code."
+        Set-Status "No history for $package in $code." '#FF8A5300'
+        return
+    }
+
+    # One row per run, newest first, then that run's own steps indented under it,
+    # so a failure can be read without opening the result file.
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($run in $runs) {
+        $when = $(if ($run.Completed) { $run.Completed } else { 'in progress' })
+        $rows.Add([pscustomobject]@{
+            Step    = $when
+            Result  = $run.Outcome
+            Message = ("{0}{1} | RFC {2} | job {3} | {4}" -f `
+                        $run.Action, $(if ($run.DryRun) { ' (dry run)' } else { '' }),
+                        $(if ($run.Rfc) { $run.Rfc } else { 'none' }), $run.JobId, $run.Message)
+        }) | Out-Null
+        foreach ($step in @($run.Steps)) {
+            $rows.Add([pscustomobject]@{
+                Step = "    $($step.Step)"
+                Result = $(if ($step.Ok) { 'OK' } else { 'FAILED' })
+                Message = $step.Message }) | Out-Null
+        }
+    }
+    $ui.lstResults.ItemsSource = $rows.ToArray()
+    $ui.txtHistory.Text = ("{0} run(s) for {1} in {2}. Newest first." -f $runs.Count, $package, $code)
+    Set-Status ("{0} run(s) found for {1}." -f $runs.Count, $package)
+}
+
+$ui.btnHistory.Add_Click({ Show-PackageHistory })
 $ui.btnIntegrate.Add_Click({ Start-Run -Mode 'Integrate' })
 $ui.btnModify.Add_Click({ Start-Run -Mode 'Modify' })
 $ui.btnRemove.Add_Click({ Start-Run -Mode 'Remove' })
@@ -1022,10 +1195,40 @@ if ($SelfTest) {
     $ui.txtRfc.Text    = 'RFC0012345'
     $plan = New-PlanFromForm
     Write-Output ''
-    Write-Output ("  plan collections     : {0}" -f $plan.Collections.Count)
-    Write-Output ("  executed as          : {0}" -f $plan.Executor)
+    # The window's "plan" is now just the three things it is allowed to decide.
+    # Collections, scopes and the executor are the server's, worked out from the
+    # environment files it holds and this machine does not.
+    Write-Output ("  package              : {0}" -f $plan.PackageName)
+    Write-Output ("  environment          : {0}" -f $plan.Environment)
     Write-Output ("  audit link (RFC)     : {0}" -f $plan.Rfc)
     Write-Output ("  carries a person?    : {0}" -f $(if ($plan.PSObject.Properties['Requester']) { 'YES - WRONG' } else { 'no' }))
+
+    # The rest of this self-test plays BOTH sides - it runs the engine to make a
+    # result for the window to read back. That is server code, which a packager
+    # machine deliberately does not have, so it only runs where the server half
+    # is present: in the source tree, or on the SCCM machine.
+    $serverEngine = Join-Path (Split-Path -Parent $PSScriptRoot) 'Server\Engine\AudiSwIntegration.ps1'
+    if (-not (Test-Path -LiteralPath $serverEngine)) {
+        Write-Output ''
+        Write-Output '  server half not present - this is a client-only install, which is correct.'
+        Write-Output '  Everything the window itself does has been checked above.'
+        return
+    }
+    . $serverEngine
+
+    # The server builds the REAL plan - from the environment files it holds -
+    # which is exactly what the collector does with a job file off the share.
+    $serverPlan = Get-AudiIntegrationPlan -PackageName $plan.PackageName -EnvironmentCode $plan.Environment `
+                      -Rfc $plan.Rfc -LocalizedName $ui.txtNameEN.Text.Trim() `
+                      -LocalizedDescription $ui.txtDescEN.Text.Trim() `
+                      -PartOverride (Get-PackageDetail) `
+                      -BrandingKey $ui.txtBranding.Text.Trim() `
+                      -SoftIdent $ui.txtSoftIdent.Text.Trim() `
+                      -OperatingSystemKeys $script:DocOperatingSystems
+    Write-Output ''
+    Write-Output ("  server-side plan     : {0} collections, executed as {1}" -f `
+                  @($serverPlan.Collections).Count, $serverPlan.Executor)
+    $plan = $serverPlan
 
     $run = Invoke-AudiSwIntegration -Plan $plan -DryRun
     Write-Output ''
@@ -1035,11 +1238,9 @@ if ($SelfTest) {
     Write-Output ("  log folder           : {0}" -f (Split-Path -Parent $run.LogPath))
 
     # --- flow 2: the window submits a file, it does not connect anywhere
-    $envINA = Get-AudiEnvironment -Code 'INA'
     Write-Output ''
-    Write-Output ("  transport            : {0}" -f $envINA.Transport.Mode)
-    Write-Output ("  drop folder          : {0}" -f $envINA.Transport.DropFolder)
-    Write-Output ("  result timeout       : {0} min" -f $envINA.Transport.ResultTimeoutMinutes)
+    Write-Output ("  drop folder          : {0}" -f $(if ($DropFolder) { $DropFolder } else { 'not set - see DropFolder.txt' }))
+    Write-Output ("  result timeout       : {0} min" -f $defaults.Runtime.ResultTimeoutMinutes)
 
     # submitted into a temporary folder, so the self test needs no share
     $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("AudiClientSelfTest_{0}" -f ([guid]::NewGuid().ToString('N')))

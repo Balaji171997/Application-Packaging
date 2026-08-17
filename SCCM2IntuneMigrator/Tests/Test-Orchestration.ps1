@@ -178,6 +178,42 @@ T 'status is Skipped'          { $rs.Status -eq 'Skipped' }
 T 'the existing App ID is given'{ $rs.AppId -eq 'app-already' }
 T 'nothing new was created'    { $global:SIM.CreatedApps.Count -eq 0 }
 
+Write-Host "`n=== migrating the SAME app twice must not duplicate it ===" -ForegroundColor Cyan
+# This is the exact case that got through: run 1 creates the app; run 2 must NOT create a second
+# copy just because the pre-flight did not flag it (the app was never shown in the review dialog).
+Reset-Sim; New-Run | Out-Null
+$script:ReviewedApps = @{}          # nothing was reviewed - this app never appeared in the dialog
+$global:SIM.ExistingApp = $null
+$dup1 = Invoke-MigApplication -DisplayName 'Contoso_TestAppV4_x64_2.5.1-0003_ENU'
+T 'run 1 creates the app'            { $dup1.Status -eq 'Success' -and $global:SIM.CreatedApps.Count -eq 1 }
+
+# run 2: it now exists in Intune, and it was NOT reviewed
+$global:SIM.ExistingApp = [pscustomobject]@{ id = 'app-from-run-1'; displayName = 'TestAppV4'; createdDateTime = '2026-01-01' }
+$dup2 = Invoke-MigApplication -DisplayName 'Contoso_TestAppV4_x64_2.5.1-0003_ENU'
+T 'run 2 SKIPS instead of duplicating' { $dup2.Status -eq 'Skipped' }
+T 'run 2 created NOTHING'              { $global:SIM.CreatedApps.Count -eq 1 }
+T 'run 2 reports the existing App ID'  { $dup2.AppId -eq 'app-from-run-1' }
+T 'the note explains why'              { $dup2.Message -match 'already in Intune' }
+
+Write-Host "`n=== ... unless the operator reviewed it and chose Continue ===" -ForegroundColor Cyan
+Reset-Sim; New-Run | Out-Null
+$global:SIM.ExistingApp = [pscustomobject]@{ id = 'app-existing'; displayName = 'TestAppV4'; createdDateTime = '2026-01-01' }
+# the operator saw this one in the review dialog and picked "Continue - migrate anyway"
+$script:ReviewedApps = @{ 'Contoso_TestAppV4_x64_2.5.1-0003_ENU' = $true }
+$dup3 = Invoke-MigApplication -DisplayName 'Contoso_TestAppV4_x64_2.5.1-0003_ENU'
+T 'a reviewed app IS created'          { $dup3.Status -eq 'Success' -and $global:SIM.CreatedApps.Count -eq 1 }
+T 'and it says a copy already existed' { $dup3.Warnings -match 'a copy already exists' }
+$script:ReviewedApps = @{}
+
+Write-Host "`n=== the check runs for EVERY app, not just the first ===" -ForegroundColor Cyan
+Reset-Sim; New-Run | Out-Null
+$script:ReviewedApps = @{}
+$global:SIM.ExistingApp = [pscustomobject]@{ id = 'app-x'; displayName = 'TestAppV4'; createdDateTime = '2026-01-01' }
+$many = @('Contoso_TestAppV4_x64_2.5.1-0003_ENU','Contoso_TestAppV4_x64_2.5.1-0003_ENU','Contoso_TestAppV4_x64_2.5.1-0003_ENU')
+$resDup = @(Invoke-MigBatch -Applications $many)
+T 'every one of the three was checked' { @($resDup | Where-Object { $_.Status -eq 'Skipped' }).Count -eq 3 }
+T 'nothing at all was created'         { $global:SIM.CreatedApps.Count -eq 0 }
+
 Write-Host "`n=== dry run creates nothing ===" -ForegroundColor Cyan
 Reset-Sim; New-Run | Out-Null
 $rd = Invoke-MigApplication -DisplayName 'Contoso_TestAppV4_x64_2.5.1-0003_ENU' -DryRun

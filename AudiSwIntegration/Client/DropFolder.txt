@@ -1,0 +1,21 @@
+# The one folder this window drops jobs into.
+#
+# Put the UNC path below, with no quotes. Lines starting with # are ignored,
+# and the first real line wins.
+#
+#   \\audiinsa1299\AudiSwDrop$
+#
+# This is the ROOT, not one environment's queue. Underneath it the window
+# creates, the first time each is needed:
+#
+#   <root>\<ENV>\New\<PackageName>\<package>_<jobid>.xml
+#              \Working\  \Done\  \Failed\
+#
+# Which environment a job goes to is decided by the package name - II1_GitSCM_...
+# goes to II1 - so there is nothing to choose and nothing else to configure. The
+# same root is watched by the server, which serves every environment from it.
+#
+# Left empty, the window falls back to Transport/@dropFolder in the environment
+# file, which is how a single-machine install works.
+#
+# Overridden by -DropFolder on the command line.

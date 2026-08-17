@@ -427,7 +427,7 @@
                   </Grid.RowDefinitions>
 
                   <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Style="{StaticResource SectionTitle}" Text="3 &#183; PUBLISHED IN SCCM" Margin="0,0,0,4"/>
-                  <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="What a user will see in Software Center. The RFC number is required."
+                  <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="What a user will see in Software Center."
                              FontSize="11" Foreground="{StaticResource InkMuted}" TextWrapping="Wrap" Margin="0,0,0,14"/>
 
                   <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource Label}" Text="Name (EN)"/>
@@ -442,7 +442,7 @@
 
                   <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource Label}" Text="RFC number"/>
                   <TextBox   Grid.Row="6" Grid.Column="1" x:Name="txtRfc" HorizontalAlignment="Left" Width="260" FontFamily="Consolas"
-                             ToolTip="Required. Read from VWG_OrderNumber in the deployment script. With no personal name kept on the server, this is the only record of who asked."/>
+                             ToolTip="Optional. Read from VWG_OrderNumber in the deployment script. Written onto the application and its collections when given."/>
 
                 </Grid>
               </Border>
@@ -507,17 +507,26 @@
                        Text="Press Read from SCCM to see what this package has on the site."
                        FontSize="11" Foreground="{StaticResource InkMuted}" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
+            <!-- Side by side, not stacked. Two half-height grids meant scrolling
+                 both of them to see four rows each; a window is wider than it is
+                 tall, and these two lists are read together. The splitter lets
+                 whoever is working decide which half matters today. -->
             <Grid Grid.Row="2">
-              <Grid.RowDefinitions>
-                <!-- Settings first: changing what is already there is the common
-                     case. Adding and removing collections is the rarer one, so
-                     it sits underneath. -->
-                <RowDefinition Height="3*" MinHeight="150"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="2*" MinHeight="110"/>
-              </Grid.RowDefinitions>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="3*" MinWidth="420"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="2*" MinWidth="300"/>
+              </Grid.ColumnDefinitions>
 
-              <DataGrid Grid.Row="0" x:Name="lstSettings" Style="{StaticResource GridStyle}"
+              <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TextBlock Grid.Row="0" Text="SETTINGS" FontSize="10" FontWeight="SemiBold"
+                           Foreground="{StaticResource InkMuted}" Margin="0,0,0,5"/>
+
+              <DataGrid Grid.Row="1" x:Name="lstSettings" Style="{StaticResource GridStyle}"
                         CanUserAddRows="False" IsReadOnly="False">
                 <DataGrid.Columns>
                   <DataGridTextColumn Header="Setting" Width="190" Binding="{Binding Label}" IsReadOnly="True"/>
@@ -589,14 +598,23 @@
                     </DataGridTemplateColumn.CellTemplate>
                   </DataGridTemplateColumn>
 
-                  <DataGridTextColumn Header="" Width="70" Binding="{Binding Unit}" IsReadOnly="True"/>
+                  <DataGridTextColumn Header="" Width="46" Binding="{Binding Unit}" IsReadOnly="True"/>
                 </DataGrid.Columns>
               </DataGrid>
+              </Grid>
 
-              <TextBlock Grid.Row="1" Text="COLLECTIONS AND DEPLOYMENTS" FontSize="10" FontWeight="SemiBold"
-                         Foreground="{StaticResource InkMuted}" Margin="0,14,0,5"/>
+              <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch"
+                            Background="Transparent" ShowsPreview="True"/>
 
-              <DataGrid Grid.Row="2" x:Name="lstModify" Style="{StaticResource GridStyle}"
+              <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TextBlock Grid.Row="0" Text="COLLECTIONS AND DEPLOYMENTS" FontSize="10" FontWeight="SemiBold"
+                           Foreground="{StaticResource InkMuted}" Margin="0,0,0,5"/>
+
+              <DataGrid Grid.Row="1" x:Name="lstModify" Style="{StaticResource GridStyle}"
                         CanUserAddRows="False" IsReadOnly="False">
                 <DataGrid.Columns>
                 <!--
@@ -634,12 +652,42 @@
                     </Style>
                   </DataGridTextColumn.ElementStyle>
                 </DataGridTextColumn>
-                <DataGridTextColumn Header="Collection" Width="*"   Binding="{Binding Name}"  IsReadOnly="True"/>
-                <DataGridTextColumn Header="On site"    Width="70"  Binding="{Binding OnSite}" IsReadOnly="True"/>
-                <DataGridTextColumn Header="Deployment" Width="90"  Binding="{Binding Deployment}" IsReadOnly="True"/>
-                <DataGridTextColumn Header="Why"        Width="230" Binding="{Binding Why}" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Collection" Width="*"   Binding="{Binding Name}"  IsReadOnly="True">
+                  <DataGridTextColumn.ElementStyle>
+                    <Style TargetType="TextBlock">
+                      <Setter Property="TextWrapping" Value="Wrap"/>
+                      <Setter Property="Margin" Value="0,4,6,4"/>
+                      <Setter Property="VerticalAlignment" Value="Top"/>
+                    </Style>
+                  </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <!-- One column, not two. "On site" and "Deployment" were a
+                     yes/no each, costing 160px of a pane that has to fit a long
+                     collection name - and "yes / no" says less than
+                     "on site, not deployed". -->
+                <DataGridTextColumn Header="State" Width="112" Binding="{Binding State}" IsReadOnly="True">
+                  <DataGridTextColumn.ElementStyle>
+                    <Style TargetType="TextBlock">
+                      <Setter Property="TextWrapping" Value="Wrap"/>
+                      <Setter Property="Foreground" Value="{StaticResource InkMuted}"/>
+                      <Setter Property="Margin" Value="0,4,6,4"/>
+                      <Setter Property="VerticalAlignment" Value="Top"/>
+                    </Style>
+                  </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="Why"        Width="*"   Binding="{Binding Why}" IsReadOnly="True">
+                  <DataGridTextColumn.ElementStyle>
+                    <Style TargetType="TextBlock">
+                      <Setter Property="TextWrapping" Value="Wrap"/>
+                      <Setter Property="Foreground" Value="{StaticResource InkMuted}"/>
+                      <Setter Property="Margin" Value="0,4,6,4"/>
+                      <Setter Property="VerticalAlignment" Value="Top"/>
+                    </Style>
+                  </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
                 </DataGrid.Columns>
               </DataGrid>
+              </Grid>
             </Grid>
 
             <Border Grid.Row="3" Background="#FFF4F7F8" BorderBrush="{StaticResource CardBorder}"
@@ -755,8 +803,12 @@
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
 
-        <Button   Grid.Row="0" Grid.Column="0" x:Name="btnPreview"   Style="{StaticResource BtnGhost}"   Content="Preview on this PC" MinWidth="172"
-                  ToolTip="Rehearses the whole job locally. Nothing is sent anywhere."/>
+        <!-- Was "Preview on this PC". A local rehearsal proved nothing about the
+             site, and Dry run already covers rehearsing. History is what people
+             actually want at this point: everything this tool has done to this
+             package, in one place. -->
+        <Button   Grid.Row="0" Grid.Column="0" x:Name="btnHistory"   Style="{StaticResource BtnGhost}"   Content="History" MinWidth="140"
+                  ToolTip="Every job this tool has run for this package in this environment - what was done, when, and whether it worked."/>
         <Button   Grid.Row="0" Grid.Column="1" x:Name="btnIntegrate" Style="{StaticResource BtnPrimary}" Content="Integrate"
                   ToolTip="Creates the application. Writes the job into the drop folder; the Script Runner picks it up."/>
         <Button   Grid.Row="0" Grid.Column="2" x:Name="btnModify"    Style="{StaticResource BtnGhost}"   Content="Modify"

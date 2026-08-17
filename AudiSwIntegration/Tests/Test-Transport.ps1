@@ -86,13 +86,27 @@ try {
     Assert-True  'a job naming a requester is rejected by the schema' (-not $readForged.Ok)
     Remove-Item -LiteralPath $forgedPath -Force
 
-    # the RFC is the only route back to a person, so it cannot be left out
+    # The RFC is recorded, not required. The application name already identifies
+    # the package uniquely - SCCM enforces that - so nothing depends on the RFC
+    # to know what an object is. A job without one is accepted and runs.
     $noRfcPath = Join-Path $paths.New 'norfc.xml'
     (New-AudiSwJobFile -PackageName $package -EnvironmentCode 'INA' -DryRun).Save($noRfcPath)
     $readNoRfc = Read-AudiSwJobFile -Path $noRfcPath
-    Assert-True 'a job with no RFC is refused'          (-not $readNoRfc.Ok)
-    Assert-True 'the refusal explains why the RFC matters' (($readNoRfc.Errors -join ' ') -like '*who requested*')
+    Assert-True 'a job with no RFC is accepted' $readNoRfc.Ok ($readNoRfc.Errors -join '; ')
     Remove-Item -LiteralPath $noRfcPath -Force
+
+    # Recorded when it IS given - that is the whole point of keeping the field.
+    $withRfcPath = Join-Path $paths.New 'withrfc.xml'
+    (New-AudiSwJobFile -PackageName $package -EnvironmentCode 'INA' -Rfc 'RFC0012345' -DryRun).Save($withRfcPath)
+    $readWithRfc = Read-AudiSwJobFile -Path $withRfcPath
+    Assert-Equal 'an RFC that IS given survives the round trip' 'RFC0012345' $readWithRfc.Job.Rfc
+    Remove-Item -LiteralPath $withRfcPath -Force
+
+    # Turning it back into a requirement has to be one config value and nothing
+    # else, so the switch stays real rather than becoming dead config.
+    Assert-True 'requiring an RFC is still one switch away' `
+        ((Get-AudiDefaults).PSObject.Properties['Audit'] -and
+         $null -ne (Get-AudiDefaults).Audit.RequireRfc)
 
     # a malformed file must be rejected, not half-processed
     $badPath = Join-Path $paths.New 'broken.xml'
@@ -178,11 +192,35 @@ try {
     # A packager who closed the window must still be able to see what happened.
     Write-Host ''
     Write-Host 'Looking up an earlier run' -ForegroundColor Cyan
-    $history = @(Get-AudiSwJobHistory -DropFolder $drop -PackageName $package)
-    Assert-Equal 'both finished runs are found again' 2 $history.Count
-    Assert-True  'the newest is first' ($history[0].Completed -ge $history[1].Completed)
-    Assert-True  'a failed run is found too, not only the successful one' `
-        (@($history | Where-Object { $_.Outcome -eq 'Failed' }).Count -eq 1)
+    # One root, a folder per environment, a folder per package inside it - so
+    # history is looked up by environment AND package, not by scanning one flat
+    # queue.
+    # Two runs were submitted for the SAME package name but different
+    # environments - an INA one and a PCZ one. Under one root with a folder per
+    # environment they are separate queues, and history has to answer per
+    # environment. Reporting the PCZ run when asked about INA would tell a
+    # packager their INA package had been touched when it had not.
+    $history = @(Get-AudiSwJobHistory -DropFolder $drop -EnvironmentCode 'INA' -PackageName $package)
+    Assert-Equal 'the INA run is found under INA' 1 $history.Count
+    Assert-Equal 'and it is the INA one' 'INA' $history[0].Environment
+
+    $pczHistory = @(Get-AudiSwJobHistory -DropFolder $drop -EnvironmentCode 'PCZ' -PackageName $package)
+    Assert-Equal 'the PCZ run is found under PCZ' 1 $pczHistory.Count
+
+    # A third environment nobody submitted to has nothing at all.
+    $noneHistory = @(Get-AudiSwJobHistory -DropFolder $drop -EnvironmentCode 'ICZ' -PackageName $package)
+    Assert-Equal 'an environment with no runs reports none' 0 $noneHistory.Count
+    # Newest first, whatever the count - the window shows this list top-down.
+    $outOfOrder = $false
+    for ($i = 1; $i -lt $history.Count; $i++) {
+        if ($history[$i - 1].Completed -lt $history[$i].Completed) { $outOfOrder = $true }
+    }
+    Assert-True 'runs come back newest first' (-not $outOfOrder)
+    # The failed run is the PCZ one - refused because PCZ is flagged unverified.
+    # It belongs in PCZ's queue, which is exactly why it is not in INA's.
+    Assert-True  'a failed run is kept too, not only successful ones' `
+        (@($pczHistory | Where-Object { $_.Outcome -eq 'Failed' }).Count -eq 1) `
+        (@($pczHistory | ForEach-Object { $_.Outcome }) -join ',')
 
     $succeeded = @($history | Where-Object { $_.Outcome -eq 'Succeeded' })[0]
     Assert-Equal 'the earlier run still reports its eight steps' 8 @($succeeded.Steps).Count
@@ -196,7 +234,7 @@ try {
     Assert-Equal 'a drop folder that does not exist yet has no history' 0 `
         @(Get-AudiSwJobHistory -DropFolder (Join-Path $drop 'nowhere') -PackageName $package).Count
     Assert-Equal 'the caller can cap how many runs come back' 1 `
-        @(Get-AudiSwJobHistory -DropFolder $drop -PackageName $package -Newest 1).Count
+        @(Get-AudiSwJobHistory -DropFolder $drop -EnvironmentCode 'INA' -PackageName $package -Newest 1).Count
 
     # ---------------------------------------------- watching a job in progress
     # The window holds no connection to the server. The heartbeat the collector
@@ -206,7 +244,10 @@ try {
     Write-Host 'Following a job that is still running' -ForegroundColor Cyan
 
     $liveJob = [pscustomobject]@{ JobId = 'live-0001'; Environment = 'INA'; PackageName = $package; Rfc = 'RFC0012345' }
-    $beat    = Join-Path $paths.Working "$($package)_live-0001.result.xml"
+    # The heartbeat belongs in the same place the collector would write it:
+    # <root>\<ENV>\Working\<Package>\ - not the flat root.
+    $livePaths = Initialize-AudiDropFolder -DropFolder $drop -EnvironmentCode 'INA' -PackageName $package
+    $beat      = Join-Path $livePaths.Working "$($package)_live-0001.result.xml"
     Write-AudiSwJobProgress -Path $beat -Job $liveJob -Executor $me -CurrentStep 'Collections' `
                             -StepNumber 4 -StepCount 8 -DryRun `
                             -Completed @(
@@ -219,12 +260,12 @@ try {
     $beatCheck = Test-AudiConfigFile -Path $beat -SchemaPath (Join-Path (Get-AudiConfigRoot) 'Environment.xsd')
     Assert-True 'the heartbeat validates against the same schema as a result' $beatCheck.Ok ($beatCheck.Errors -join '; ')
 
-    $live = @(Get-AudiSwJobHistory -DropFolder $drop -PackageName $package)
+    $live = @(Get-AudiSwJobHistory -DropFolder $drop -EnvironmentCode 'INA' -PackageName $package)
     Assert-Equal 'the running job comes back first'        'Running' $live[0].Outcome
     Assert-Equal 'it reports the steps done so far'        3 @($live[0].Steps).Count
     Assert-Equal 'and how many there are in total'         8 $live[0].StepCount
     Assert-True  'it names the step being worked on'       ($live[0].Message -like '*Collections*') $live[0].Message
-    Assert-True  'the finished runs are still listed after it' (@($live | Where-Object { $_.Outcome -ne 'Running' }).Count -eq 2)
+    Assert-True  'the finished runs are still listed after it' (@($live | Where-Object { $_.Outcome -ne 'Running' }).Count -ge 1)
 
     # a heartbeat names no more people than a result does
     $beatRaw = (Get-Content -LiteralPath $beat -Raw).Replace($me, 'THE-SERVICE-ACCOUNT')
@@ -232,8 +273,8 @@ try {
         (-not ($beatRaw -like "*$($me.Split('\')[-1])*")) 'a person reached the heartbeat file'
 
     Remove-Item -LiteralPath $beat -Force
-    Assert-Equal 'once it finishes the heartbeat is gone and only the result remains' 2 `
-        @(Get-AudiSwJobHistory -DropFolder $drop -PackageName $package).Count
+    Assert-Equal 'once it finishes the heartbeat is gone and only the result remains' 1 `
+        @(Get-AudiSwJobHistory -DropFolder $drop -EnvironmentCode 'INA' -PackageName $package).Count
 
     # ------------------------------------------------ Inspect and Change
     # The Modify tab's whole round trip: ask the server what is there, tick
@@ -459,10 +500,29 @@ try {
     Write-Host ''
     Write-Host 'A job in the wrong folder' -ForegroundColor Cyan
 
-    $inaDrop = (Get-AudiEnvironment -Code 'INA').Transport.DropFolder
-    $strayDoc = New-AudiSwJobFile -PackageName 'ICZ_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'ICZ' `
+    # Submit-AudiSwJob now derives the folder from the job itself, so the tool
+    # CANNOT misfile a job any more - an ICZ job always lands in ICZ's queue.
+    # Prove that first, then hand-place a file the way a person would and check
+    # the guard still catches it.
+    $inaDrop  = (Get-AudiEnvironment -Code 'INA').Transport.DropFolder
+    $strayPkg = 'ICZ_AUDI_DummyTest_x86_1.0_0001_MUL'
+    $strayDoc = New-AudiSwJobFile -PackageName $strayPkg -EnvironmentCode 'ICZ' `
                                   -Rfc 'RFC0012345' -NameEn 'x' -DryRun
-    $stray = Submit-AudiSwJob -DropFolder $inaDrop -Job $strayDoc
+    $filed = Submit-AudiSwJob -DropFolder $inaDrop -Job $strayDoc
+    Assert-True 'an ICZ job files itself under ICZ, whatever root it is given' `
+        ($filed.Path -like "*\ICZ\New\*") $filed.Path
+    Remove-Item -LiteralPath $filed.Path -Force
+
+    # Now the case the guard exists for: somebody copies the file in by hand.
+    $wrongPaths = Initialize-AudiDropFolder -DropFolder $inaDrop -EnvironmentCode 'INA' -PackageName $strayPkg
+    $strayName  = "{0}_{1}.xml" -f $strayPkg, $strayDoc.Job.jobId
+    $strayDoc.Save((Join-Path $wrongPaths.New $strayName))
+    $stray = [pscustomobject]@{
+        JobId      = $strayDoc.Job.jobId
+        Path       = (Join-Path $wrongPaths.New $strayName)
+        ResultPath = (Join-Path $wrongPaths.Done   ($strayName -replace '\.xml$', '.result.xml'))
+        FailedPath = (Join-Path $wrongPaths.Failed ($strayName -replace '\.xml$', '.result.xml'))
+    }
     try {
         & $watcher -DropFolder $inaDrop -DryRun -EngineRoot (Join-Path (Split-Path -Parent $PSScriptRoot) 'Server\Engine')
         $strayResult = Wait-AudiSwJobResult -Submission $stray -TimeoutMinutes 1 -PollSeconds 1
@@ -483,6 +543,55 @@ try {
 finally {
     if (Test-Path -LiteralPath $drop) { Remove-Item -LiteralPath $drop -Recurse -Force -ErrorAction SilentlyContinue }
 }
+
+Write-Host ''
+# ------------------------------------------------- the queue tidies up after itself
+Write-Host ''
+Write-Host 'Empty package folders' -ForegroundColor Cyan
+
+# A job travels New -> Working -> Done, and each package folder it leaves is one
+# more empty folder in the queue. After a few weeks the real work is hidden
+# among hundreds of them.
+$tidy = Join-Path ([System.IO.Path]::GetTempPath()) ("AudiTidy_{0}" -f ([guid]::NewGuid().ToString('N')))
+try {
+    $tidyPkg = 'INA_ETAS_INCA_x64_7.5.7-0001_MUL'
+    $null = Submit-AudiSwJob -DropFolder $tidy -Job (
+        New-AudiSwJobFile -PackageName $tidyPkg -EnvironmentCode 'INA' -Rfc 'RFC0012345' -DryRun)
+
+    # Submitting must not create a Failed folder for a job that has not failed.
+    Assert-True 'submitting creates the package folder in New' `
+        (Test-Path -LiteralPath (Join-Path $tidy "INA\New\$tidyPkg"))
+    Assert-True 'and does NOT pre-create one in Failed' `
+        (-not (Test-Path -LiteralPath (Join-Path $tidy "INA\Failed\$tidyPkg")))
+
+    & $watcher -DropFolder $tidy -DryRun -EngineRoot (Join-Path (Split-Path -Parent $PSScriptRoot) 'Server\Engine')
+
+    Assert-True 'the New package folder is gone once the job is claimed' `
+        (-not (Test-Path -LiteralPath (Join-Path $tidy "INA\New\$tidyPkg")))
+    Assert-True 'and the Working one once the job is filed' `
+        (-not (Test-Path -LiteralPath (Join-Path $tidy "INA\Working\$tidyPkg")))
+
+    # Done keeps its folder - the result is in it and History reads it.
+    Assert-True 'Done keeps the package folder, because the result is in it' `
+        (Test-Path -LiteralPath (Join-Path $tidy "INA\Done\$tidyPkg"))
+
+    $leftovers = @(Get-ChildItem -LiteralPath $tidy -Recurse -Directory |
+                   Where-Object { $_.Name -notin @('New','Working','Done','Failed') -and
+                                  @(Get-ChildItem -LiteralPath $_.FullName -Force).Count -eq 0 })
+    Assert-Equal 'no empty package folder is left anywhere' 0 $leftovers.Count
+
+    # The state folders themselves must survive - the collector expects them.
+    foreach ($state in 'New','Working','Done','Failed') {
+        Assert-True "the $state folder itself is kept" (Test-Path -LiteralPath (Join-Path $tidy "INA\$state"))
+    }
+
+    # And the folder comes back for the next job.
+    $null = Submit-AudiSwJob -DropFolder $tidy -Job (
+        New-AudiSwJobFile -PackageName $tidyPkg -EnvironmentCode 'INA' -Rfc 'RFC0012345' -DryRun)
+    Assert-True 'a new job recreates the package folder' `
+        (Test-Path -LiteralPath (Join-Path $tidy "INA\New\$tidyPkg"))
+}
+finally { Remove-Item -LiteralPath $tidy -Recurse -Force -ErrorAction SilentlyContinue }
 
 Write-Host ''
 if ($script:Fail -eq 0) { Write-Host ("All {0} checks passed." -f $script:Pass) -ForegroundColor Green }

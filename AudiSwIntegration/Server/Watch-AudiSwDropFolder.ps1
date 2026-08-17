@@ -43,33 +43,70 @@ $ErrorActionPreference = 'Stop'
 # where Get-ChildItem -Filter throws. Come back to the filesystem first.
 Restore-AudiFileSystemLocation
 
-$paths    = Initialize-AudiDropFolder -DropFolder $DropFolder
 $executor = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
-# Which environment does THIS folder belong to? One drop folder per environment,
-# so a job for another one has been put here by mistake and must not be run - a
-# job naming ICZ, collected from INA's folder, would otherwise be carried out
-# against ICZ by the collector INA trusts. Left empty for a folder that is not
-# any environment's (a temporary one used for testing), which is not policed.
-$folderEnvironment = @(Get-AudiEnvironmentCode | Where-Object {
-    $configured = (Get-AudiEnvironment -Code $_).Transport.DropFolder
-    $configured -and ($configured.TrimEnd('\') -eq $DropFolder.TrimEnd('\'))
-})
-$expected = $(if ($folderEnvironment.Count -eq 1) { $folderEnvironment[0] } else { '' })
-if ($expected) { Write-Verbose "This folder belongs to $expected." }
+# ONE ROOT, EVERY ENVIRONMENT.
+#
+# -DropFolder is the root the window writes to, not one environment's queue.
+# Underneath it is a folder per environment, each with its own New/Working/
+# Done/Failed, and a folder per package inside those:
+#
+#     <root>\ICZ\New\INA_ETAS_INCA_x64_...\INA_ETAS_..._<jobid>.xml
+#
+# So one watcher serves every environment, and adding an environment needs no
+# change here - the folder appears the first time somebody submits for it.
+#
+# Every environment configured is looked at, plus any folder already present in
+# the root. A folder for an environment this server does not know about is left
+# alone rather than guessed at.
+$configuredCodes = @(Get-AudiEnvironmentCode)
+$presentCodes    = @()
+if (Test-Path -LiteralPath $DropFolder) {
+    $presentCodes = @(Get-ChildItem -LiteralPath $DropFolder -Directory -ErrorAction SilentlyContinue |
+                      ForEach-Object { $_.Name })
+}
+$codes = @($configuredCodes | Where-Object { $_ }) + @($presentCodes | Where-Object { $configuredCodes -contains $_ })
+$codes = @($codes | Sort-Object -Unique)
 
-$jobs = @(Get-ChildItem -LiteralPath $paths.New -Filter '*.xml' -File -ErrorAction SilentlyContinue |
-          Sort-Object CreationTimeUtc | Select-Object -First $MaxJobsPerRun)
+$unknown = @($presentCodes | Where-Object { $configuredCodes -notcontains $_ })
+foreach ($u in $unknown) {
+    Write-Verbose "Ignoring '$u' - not an environment this server has a config file for."
+}
 
+# Collect across all of them, oldest first, so a busy environment cannot starve
+# a quiet one of its turn.
+$queue = New-Object System.Collections.Generic.List[object]
+foreach ($code in $codes) {
+    $envPaths = Get-AudiDropFolderPath -DropFolder $DropFolder -EnvironmentCode $code
+    if (-not (Test-Path -LiteralPath $envPaths.New)) { continue }
+    foreach ($f in @(Get-ChildItem -LiteralPath $envPaths.New -Filter '*.xml' -File -Recurse -ErrorAction SilentlyContinue)) {
+        $queue.Add([pscustomobject]@{ File = $f; Code = $code }) | Out-Null
+    }
+}
+
+$jobs = @($queue | Sort-Object { $_.File.CreationTimeUtc } | Select-Object -First $MaxJobsPerRun)
 if ($jobs.Count -eq 0) { Write-Verbose 'Nothing to collect.'; return }
-Write-Verbose "Collecting $($jobs.Count) job(s) as $executor."
+Write-Verbose "Collecting $($jobs.Count) job(s) across $($codes.Count) environment(s) as $executor."
 
-foreach ($file in $jobs) {
+foreach ($entry in $jobs) {
+    $file     = $entry.File
+    $expected = $entry.Code
+
+    # The package folder the job was found in, so its result lands beside it.
+    $package = Split-Path -Leaf (Split-Path -Parent $file.FullName)
+    if ($package -eq 'New') { $package = '' }   # older flat layout
+
+    $paths = Initialize-AudiDropFolder -DropFolder $DropFolder -EnvironmentCode $expected -PackageName $package
 
     # --- claim it first, so a second run cannot take the same job
     $working = Join-Path $paths.Working $file.Name
+    New-AudiJobFolder -Path $working
     try { Move-Item -LiteralPath $file.FullName -Destination $working -Force }
     catch { Write-Verbose "$($file.Name) was already claimed by another run."; continue }
+
+    # The package folder in New is empty the moment the job is claimed. It is
+    # recreated by the window next time somebody submits for this package.
+    Remove-AudiEmptyPackageFolder -Path (Split-Path -Parent $file.FullName)
 
     $outcome    = 'Failed'
     $result     = $null
@@ -99,6 +136,7 @@ foreach ($file in $jobs) {
                     -PartOverride           $job.Detail `
                     -BrandingKey            ([string]$job.Detail['BrandingKey']) `
                     -SoftIdent              ([string]$job.Detail['SoftIdent']) `
+                    -OperatingSystemKeys    $job.OperatingSystems `
                     -JobId                  $job.JobId
 
         $wantsDryRun = ($DryRun -or $job.DryRun)
@@ -167,6 +205,7 @@ foreach ($file in $jobs) {
     # --- file the job and write the result beside it
     $targetFolder = if ($outcome -eq 'Succeeded') { $paths.Done } else { $paths.Failed }
     $resultPath   = Join-Path $targetFolder ($file.Name -replace '\.xml$', '.result.xml')
+    New-AudiJobFolder -Path $resultPath
 
     if (-not $job) {
         # unreadable file: still record why, so the packager is not left guessing
@@ -187,6 +226,11 @@ foreach ($file in $jobs) {
         # the heartbeat has served its purpose - the real result is now filed
         $heartbeat = Join-Path $paths.Working ($file.Name -replace '\.xml$', '.result.xml')
         if (Test-Path -LiteralPath $heartbeat) { Remove-Item -LiteralPath $heartbeat -Force -ErrorAction SilentlyContinue }
+
+        # The package folder in Working has nothing left in it now. Left alone,
+        # every job leaves one behind and the queue silts up with empty folders.
+        # Done keeps its folder - the result is in it, and History reads it.
+        Remove-AudiEmptyPackageFolder -Path $paths.Working
     }
     catch { Write-Warning "Could not file the finished job $($file.Name): $($_.Exception.Message)" }
 

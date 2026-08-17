@@ -72,12 +72,26 @@ function Invoke-AudiModifyStepBody {
             if (-not (& $Provider.TestApplication @{ ApplicationName = $Plan.ApplicationName })) {
                 throw "No application named '$($Plan.ApplicationName)' exists in $($Plan.Environment). Use Integrate to create it."
             }
+            # Only what a human actually typed. A derived name - built from the
+            # package name because nobody supplied one - must not replace the
+            # wording chosen by whoever integrated this package. That is the
+            # difference between a second packager modifying collections from
+            # their own PC and them silently renaming the application.
             & $Provider.SetApplication @{
                 ApplicationName = $Plan.ApplicationName; Publisher = $Plan.Parts.Publisher; Version = $Plan.Parts.Version
-                LocalizedName = $Plan.LocalizedName; LocalizedDescription = $Plan.LocalizedDescription
-                LocalizedNameDe = $Plan.LocalizedNameDe; LocalizedDescriptionDe = $Plan.LocalizedDescriptionDe; Owner = $Plan.Executor }
-            $Changed.Add('application details updated') | Out-Null
-            return "Application '$($Plan.ApplicationName)' updated."
+                LocalizedName          = $(if ($Plan.LocalizedNameSupplied)        { $Plan.LocalizedName }        else { '' })
+                LocalizedDescription   = $(if ($Plan.LocalizedDescriptionSupplied) { $Plan.LocalizedDescription } else { '' })
+                LocalizedNameDe        = $(if ($Plan.LocalizedNameDeSupplied)        { $Plan.LocalizedNameDe }        else { '' })
+                LocalizedDescriptionDe = $(if ($Plan.LocalizedDescriptionDeSupplied) { $Plan.LocalizedDescriptionDe } else { '' })
+                Owner = $Plan.Executor }
+
+            $Changed.Add($(if ($Plan.LocalizedNameSupplied -or $Plan.LocalizedDescriptionSupplied) {
+                'application details updated' } else { 'application checked, descriptions left as they were' })) | Out-Null
+            return $(if ($Plan.LocalizedNameSupplied -or $Plan.LocalizedDescriptionSupplied) {
+                "Application '$($Plan.ApplicationName)' updated."
+            } else {
+                "Application '$($Plan.ApplicationName)' checked. No package details were loaded, so its name and descriptions were left as they are."
+            })
         }
 
         'DeploymentType' {
@@ -126,7 +140,7 @@ function Invoke-AudiModifyStepBody {
             $added = 0
             foreach ($collection in $Plan.Collections) {
                 if (& $Provider.TestDeployment @{ ApplicationName = $Plan.ApplicationName; CollectionName = $collection.Name }) { continue }
-                & $Provider.NewDeployment @{ ApplicationName = $Plan.ApplicationName; CollectionName = $collection.Name; DeploymentAction = $collection.DeploymentAction }
+                & $Provider.NewDeployment @{ ApplicationName = $Plan.ApplicationName; CollectionName = $collection.Name; DeploymentAction = $collection.DeploymentAction; AllowUserRepair = $Plan.AllowUserRepair }
                 $Changed.Add("deployment added: $($collection.Name)") | Out-Null
                 $added++
             }
@@ -258,7 +272,7 @@ function Invoke-AudiStepBody {
             # software and taking it away.
             $made = New-Object System.Collections.Generic.List[string]
             foreach ($collection in $Plan.Collections) {
-                & $Provider.NewDeployment @{ ApplicationName = $Plan.ApplicationName; CollectionName = $collection.Name; DeploymentAction = $collection.DeploymentAction }
+                & $Provider.NewDeployment @{ ApplicationName = $Plan.ApplicationName; CollectionName = $collection.Name; DeploymentAction = $collection.DeploymentAction; AllowUserRepair = $Plan.AllowUserRepair }
                 $Created.Add([pscustomobject]@{ Kind = 'Deployment'; Name = $collection.Name }) | Out-Null
                 $purpose = if ($collection.DeploymentAction -eq 'Uninstall') { 'Uninstall / Required' }
                            elseif ($collection.DeploymentAction -eq 'Required') { 'Install / Required' }

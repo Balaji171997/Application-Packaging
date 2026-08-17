@@ -244,7 +244,7 @@ Write-Host ''
 Write-Host 'Parity with the old tool' -ForegroundColor Cyan
 
 $d = Get-AudiDefaults
-Assert-Equal 'estimated install minutes'      '3'   $d.Application.estimatedInstallMinutes
+Assert-Equal 'estimated install minutes'      '10'  $d.Application.estimatedInstallMinutes
 Assert-Equal 'maximum run time minutes'       '120' $d.Application.maxRuntimeMinutes
 Assert-Equal 'category'                       'Development' $d.Application.category
 Assert-Equal 'default language'               'en-us' $d.Application.defaultLanguage
@@ -277,7 +277,7 @@ foreach ($field in 'MaxRuntimeMinutes', 'EstimatedInstallMinutes', 'ProgramVisib
                    'PersistContentInCache', 'Run32BitOn64Bit', 'ApplicationComment') {
     Assert-True "the plan carries $field" ([bool]$plan.PSObject.Properties[$field])
 }
-Assert-Equal 'the plan carries their estimate, not ours' 3 $plan.EstimatedInstallMinutes
+Assert-Equal 'the plan carries their estimate, not ours' 10 $plan.EstimatedInstallMinutes
 
 # Windows 7 is the one deliberate difference in the OS list, because it is out
 # of support. Everything else about the deployment type matches.
@@ -303,40 +303,67 @@ Assert-Equal 'and it is the branding key'   'Software\VWG\CM\AUDI_DummyTest_x86_
 Assert-Equal 'checked on the revision'      'Revision' $plan.DetectionRules[0].ValueName
 Assert-Equal 'against the revision itself'  '0001'     $plan.DetectionRules[0].Value
 
+# Detection is the BRANDING KEY ONLY. A second rule that also has to be true
+# means a package which is installed, but whose vendor uninstall key moved
+# between builds, reads as not installed and reinstalls on every evaluation.
 $softPlan = Get-AudiIntegrationPlan -PackageName 'INA_ETAS_INCA_x64_7.5.7-0001_MUL' -EnvironmentCode 'INA' -Rfc 'RFC0012345' `
                 -SoftIdent 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\INCA7.5.7 [DisplayVersion=7.5.7]'
-Assert-Equal 'a SoftIdent adds a second rule' 2 @($softPlan.DetectionRules).Count
-$rule2 = $softPlan.DetectionRules[1]
-Assert-Equal 'rule 2 hive'       'HKLM' $rule2.Hive
-Assert-Equal 'rule 2 key'        'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\INCA7.5.7' $rule2.Key
-Assert-Equal 'rule 2 value name' 'DisplayVersion' $rule2.ValueName
-Assert-Equal 'rule 2 value'      '7.5.7' $rule2.Value
-Assert-True  'the two rules are different registry keys' ($softPlan.DetectionRules[0].Key -ne $rule2.Key)
+Assert-Equal 'a SoftIdent does NOT add a second rule' 1 @($softPlan.DetectionRules).Count
+Assert-Equal 'the one rule is still the branding key' 'Branding key' $softPlan.DetectionRules[0].Source
+Assert-True  'and it is not the vendor uninstall key' `
+    ($softPlan.DetectionRules[0].Key -notlike '*Uninstall*') $softPlan.DetectionRules[0].Key
 
-# A 32-bit package resolves the script's own placeholder, so the rule points at
-# the view the product actually installs into. We never guess this.
-$wowPlan = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'INA' -Rfc 'R' `
-               -SoftIdent (Resolve-AudiSoftIdent -SoftIdent 'HKLM:\SOFTWARE\$($VWG_CurrentRegWOW)Vendor\Thing [Version=1.0]' -Architecture 'x86')
-Assert-True 'a 32-bit package detects under Wow6432Node' ($wowPlan.DetectionRules[1].Key -like 'SOFTWARE\Wow6432Node\*') $wowPlan.DetectionRules[1].Key
+# The rule can still be BUILT - only not used. Turning enabled="true" back on in
+# Defaults.xml has to produce a correct rule, not a broken one nobody tested.
+$parsed = Split-AudiSoftIdent -SoftIdent 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\INCA7.5.7 [DisplayVersion=7.5.7]'
+Assert-Equal 'the SoftIdent parser still works, for when it is switched on' 'HKLM' $parsed.Hive
+Assert-Equal 'and reads the key'        'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\INCA7.5.7' $parsed.Key
+Assert-Equal 'and the value name'       'DisplayVersion' $parsed.ValueName
+Assert-Equal 'and the value'            '7.5.7' $parsed.Value
+
+# These check the SoftIdent RULE BUILDER, which is switched off in the plan but
+# must stay correct for the day it is switched back on. They test the parser
+# directly rather than through the plan, which now carries the branding key only.
+
+# A 32-bit package resolves the script's own placeholder, so the rule would
+# point at the view the product actually installs into. We never guess this.
+$wowParsed = Split-AudiSoftIdent -SoftIdent (
+    Resolve-AudiSoftIdent -SoftIdent 'HKLM:\SOFTWARE\$($VWG_CurrentRegWOW)Vendor\Thing [Version=1.0]' -Architecture 'x86')
+Assert-True 'a 32-bit SoftIdent resolves under Wow6432Node' `
+    ($wowParsed.Key -like 'SOFTWARE\Wow6432Node\*') $wowParsed.Key
 
 # A key with no value test is an existence check, not a value comparison.
-$existsPlan = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'INA' -Rfc 'R' `
-                  -SoftIdent 'HKLM:\SOFTWARE\Vendor\Thing'
-Assert-Equal 'a SoftIdent with no value test is an existence check' 'KeyExists' $existsPlan.DetectionRules[1].Method
-Assert-Equal 'and carries no value name' '' $existsPlan.DetectionRules[1].ValueName
+$existsParsed = Split-AudiSoftIdent -SoftIdent 'HKLM:\SOFTWARE\Vendor\Thing'
+Assert-Equal 'a SoftIdent with no value test carries no value name' '' $existsParsed.ValueName
 
 # Guessing at a SoftIdent nobody can parse would produce an application that
 # installs and then reports itself as not installed, so it is dropped instead.
+Assert-True 'an unrecognised SoftIdent is dropped rather than guessed at' `
+    ($null -eq (Split-AudiSoftIdent -SoftIdent 'this is not a registry path'))
+
+# And whatever the SoftIdent says, the plan still carries one rule.
 $oddPlan = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'INA' -Rfc 'R' `
                -SoftIdent 'this is not a registry path'
-Assert-Equal 'an unrecognised SoftIdent is dropped rather than guessed at' 1 @($oddPlan.DetectionRules).Count
+Assert-Equal 'the plan carries the branding key rule only' 1 @($oddPlan.DetectionRules).Count
 
 $unresolvedPlan = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'INA' -Rfc 'R' `
                       -SoftIdent 'HKLM:\SOFTWARE\$($VWG_CurrentRegWOW)Vendor\Thing [Version=1.0]'
 Assert-Equal 'an unresolved placeholder never becomes a literal key' 1 @($unresolvedPlan.DetectionRules).Count
 
-Assert-True 'the rules read back as one line for the log and the window' `
-    ((Format-AudiDetectionRule -Rules $softPlan.DetectionRules) -like '*AND*')
+# One rule reads as one rule - no dangling "AND" for a condition that is not
+# there. The formatter still joins with AND when there IS more than one, which
+# is what a two-rule package would need, so both shapes are checked.
+$oneLine = Format-AudiDetectionRule -Rules $softPlan.DetectionRules
+Assert-True 'a single rule reads back without a dangling AND' `
+    ($oneLine -and $oneLine -notlike '*AND*') $oneLine
+Assert-True 'and it names the branding key it checks' ($oneLine -like '*Software\VWG\CM\*') $oneLine
+
+$twoLine = Format-AudiDetectionRule -Rules @(
+    $softPlan.DetectionRules[0],
+    [pscustomobject]@{ Source = 'SoftIdent'; Hive = 'HKLM'; Key = 'SOFTWARE\Vendor\Thing'
+                       ValueName = 'Version'; Value = '1.0'; DataType = 'String'; Is64Bit = $true; Method = 'Value' })
+Assert-True 'two rules are joined with AND, for when the second is switched on' `
+    ($twoLine -like '*AND*') $twoLine
 
 # The test site is a plain environment file like any other - its own site code
 # and server, everything else ICZ's. Skipped once it is deleted.
@@ -377,7 +404,20 @@ $sccmBound = @($plan.ApplicationName, $plan.LocalizedName, $plan.LocalizedDescri
 $leaked = @($sccmBound | Where-Object { $_ -like "*$env:USERNAME*" -or $_ -like '*tester*' })
 Assert-True 'nothing bound for SCCM or AD names a person' ($leaked.Count -eq 0) ($leaked -join ' | ')
 
-Assert-True 'an RFC is required, so a change is never untraceable' (Get-AudiDefaults).Audit.RequireRfc
+# The RFC is recorded, not required: the application name is already unique in
+# SCCM, so nothing depends on the RFC to identify an object. The rule that DOES
+# still hold is the one Audi actually asked for - no personal name on any SCCM
+# object - and that is what the template check below enforces.
+$comment = Expand-AudiTemplate -Template (Get-AudiDefaults).Comments.application `
+                               -Values @{ jobId = 'a1b2c3'; rfc = 'RFC0012345'; package = 'x' }
+Assert-True 'the comment says the tool created it' ($comment -like 'Created by the SCCM Integrator*') $comment
+Assert-True 'and carries the RFC when there is one' ($comment -like '*RFC0012345*') $comment
+
+# An empty RFC must not leave a label pointing at nothing.
+$noRfcComment = Expand-AudiTemplate -Template (Get-AudiDefaults).Comments.application `
+                                    -Values @{ jobId = 'a1b2c3'; rfc = ''; package = 'x' }
+Assert-True 'an empty RFC is dropped, not left dangling' ($noRfcComment -notlike '*RFC*') $noRfcComment
+Assert-True 'and the job id is still there' ($noRfcComment -like '*a1b2c3*') $noRfcComment
 
 # and a config edit must not be able to put it back
 Assert-Equal 'a template naming the requester is refused' 1 `

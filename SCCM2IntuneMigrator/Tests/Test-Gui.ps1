@@ -159,7 +159,9 @@ $global:__TESTS = {
     $fHigher = & $mkFind 'App_High_x64_1.0-1_MUL'   '1.0'    'Higher' '2.0.0' 'UAT'     'h1'
     $fLower  = & $mkFind 'App_Low_x64_4.2.9-1_MUL'  '4.2.9'  'Lower'  '4.1.0' 'LIVE'    'l1'
     $fNoLc   = & $mkFind 'App_NoLc_x64_1.0-1_MUL'   '1.0'    'Higher' '3.0'   'unknown' 'n1'
-    $rows = @(New-MigReviewRows -Findings @($fSame, $fHigher, $fLower, $fNoLc))
+    # NOTE: no @() around the call. New-MigReviewRows returns the collection intact
+    # (comma-protected); wrapping the CALL in @() would give an array holding the collection.
+    $rows = New-MigReviewRows -Findings @($fSame, $fHigher, $fLower, $fNoLc)
 
     T 'SAME says SAME version'        { $rows[0].Relation -eq 'SAME version (v1.0) already in Intune' }
     T 'SAME offers skip or continue'  { (@($rows[0].Actions) -join '|') -eq 'Skip - do not migrate|Continue - migrate anyway' }
@@ -180,6 +182,41 @@ $global:__TESTS = {
     T 'a lifecycle is shown when there is one' { $rows[1].Found -eq 'v2.0.0 [UAT]' }
     T 'no bracket when the brand records none' { $rows[3].Found -eq 'v3.0' }
 
+    Write-Host "`n=== ONE finding must still bind to the grid ===" -ForegroundColor Cyan
+    # PowerShell unrolls a collection on return: with exactly ONE finding the caller used to get a
+    # bare MigReviewRow, and DataGrid.ItemsSource threw "Cannot convert ... to IEnumerable".
+    # Two or more findings hid the bug, so this single-row case is the one that matters.
+    $oneRow = New-MigReviewRows -Findings @($fSame)
+    T 'one finding returns a COLLECTION'  { $oneRow -is [System.Collections.IEnumerable] -and $oneRow -isnot [MigReviewRow] }
+    T 'it still holds exactly one row'    { @($oneRow).Count -eq 1 }
+    T 'and it BINDS to a DataGrid'        {
+        $g2 = New-Object System.Windows.Controls.DataGrid
+        try { $g2.ItemsSource = $oneRow; $true } catch { "ItemsSource threw: $($_.Exception.Message)" }
+    }
+    T 'the single row is decided correctly' {
+        $d1 = Get-MigReviewDecision -Rows $oneRow
+        $d1.Skips.Count -eq 1
+    }
+    # ... and the same must hold for ANY number of applications, not just one
+    foreach ($n in 1, 2, 3, 8, 25) {
+        T "$n finding(s) bind to the grid" {
+            # DISTINCT applications - the decision map is keyed on the application name, so
+            # repeating one finding would collapse to a single key and prove nothing
+            $set = @()
+            for ($k = 0; $k -lt $n; $k++) { $set += (& $mkFind "App_$k`_x64_1.0-1_MUL" '1.0' 'Same' '1.0' 'LIVE' "id$k") }
+            $rr = New-MigReviewRows -Findings $set
+            $gg = New-Object System.Windows.Controls.DataGrid
+            try {
+                $gg.ItemsSource = $rr
+                if (@($rr).Count -ne $n) { "expected $n rows, got $(@($rr).Count)" }
+                elseif ($rr -isnot [System.Collections.IEnumerable]) { 'not enumerable' }
+                elseif ((Get-MigReviewDecision -Rows $rr).Skips.Count -ne $n) { 'decision lost rows' }
+                else { $true }
+            } catch { "ItemsSource threw: $($_.Exception.Message)" }
+        }
+        # NB: no .GetNewClosure() - a closure cannot see script functions like New-MigReviewRows.
+        # T runs the block immediately, so $n still holds this iteration's value.
+    }
     Write-Host "`n=== the decision becomes a clear note ===" -ForegroundColor Cyan
     $rows[1].Action = 'Skip - do not migrate'
     $rows[2].Action = 'Add supersedence - migrate and supersede v4.1.0'

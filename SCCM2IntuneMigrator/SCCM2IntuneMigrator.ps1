@@ -2110,7 +2110,7 @@ function Invoke-MigApplication {
         # an unattended run. What happens next is the user's decision, taken once up front.
         if (-not $DryRun) {
             $dup = $null
-            if ($script:KnownDuplicates -and $script:KnownDuplicates.ContainsKey($DisplayName)) {
+            if (($script:KnownDuplicates -is [hashtable]) -and $script:KnownDuplicates.ContainsKey($DisplayName)) {
                 $dup = $script:KnownDuplicates[$DisplayName]
             } elseif ($script:Cfg.SkipIfAlreadyInIntune) {
                 Set-MigStatus -Indeterminate -Status 'Checking whether this app is already in Intune...'
@@ -2120,9 +2120,15 @@ function Invoke-MigApplication {
                 } catch { Write-MigLog "The duplicate check could not run ($($_.Exception.Message)) - continuing." Warning }
             }
             if ($dup) {
-                if ("$($script:DuplicateAction)" -eq 'Create') {
+                # A second copy is created ONLY when the operator saw this application in the
+                # review dialog and chose to continue. An application that never appeared there
+                # was never agreed to, so it is SKIPPED rather than silently duplicated. This is
+                # the net for anything the pre-flight missed - including an app created by an
+                # earlier run of this very tool.
+                $wasReviewed = ($script:ReviewedApps -is [hashtable]) -and $script:ReviewedApps.ContainsKey($DisplayName)
+                if ($wasReviewed) {
                     $warnings.Add("a copy already exists (AppId $($dup.AppId)) - a second one was created on your instruction")
-                    Write-MigLog "Already in Intune as '$($dup.DisplayName)' (AppId $($dup.AppId)), but you chose to create another copy." Warning
+                    Write-MigLog "Already in Intune as '$($dup.DisplayName)' (AppId $($dup.AppId)), but you chose to continue." Warning
                 } else {
                     $result.Status  = 'Skipped'
                     $result.AppId   = "$($dup.AppId)"
@@ -2209,7 +2215,7 @@ function Invoke-MigApplication {
         # in Intune under a different name. An application the operator already reviewed is left
         # alone - they have seen it and decided.
         if (-not $DryRun -and $script:Cfg.UninstallSignatureShield -and
-            -not ($script:ReviewedApps -and $script:ReviewedApps.ContainsKey($DisplayName))) {
+            -not (($script:ReviewedApps -is [hashtable]) -and $script:ReviewedApps.ContainsKey($DisplayName))) {
             $sig = Get-MigUninstallSignature -Rules $det.Rules
             if ($sig.KeyPath -or $sig.ProductCode) {
                 $hits = @()
@@ -2563,8 +2569,7 @@ function Start-MigWorker {
     $script:RunFolder    = $Sync.RunFolder
     $script:BatchLogPath = $Sync.BatchLogPath
     $script:AppLogPath   = $null
-    # what the user answered to the "already in Intune" question, and what the pre-flight found
-    $script:DuplicateAction = "$($Sync.DuplicateAction)"
+    # what the pre-flight found, and which applications the operator actually reviewed
     $script:KnownDuplicates = $Sync.KnownDuplicates
     $script:SupersedeMap    = $Sync.SupersedeMap
     $script:SkipApps        = $Sync.SkipApps
@@ -2950,7 +2955,7 @@ $Sync = [hashtable]::Synchronized(@{
     RunFolder = ''; BatchLogPath = ''; Report = $null; FatalError = ''
     ConnectState = 'idle'; ConnectApps = $null; ConnectError = ''
     PreflightState = 'idle'; PreflightResult = $null; PreflightError = ''; PendingSelected = @()
-    SkipApps = @{}; SupersedeMap = @{}; KnownDuplicates = @{}; DuplicateAction = 'Skip'; ReviewedApps = @{}
+    SkipApps = @{}; SupersedeMap = @{}; KnownDuplicates = @{}; ReviewedApps = @{}
     CurrentIndex = 0; CurrentTotal = 0; CurrentApp = ''
 })
 $State = @{
@@ -3413,7 +3418,13 @@ function New-MigReviewRows {
         $r.SupersedeIds = ((@($lower | ForEach-Object { $_.Id })) -join ';')
         $rows.Add($r)
     }
-    return $rows
+    # THE LEADING COMMA MATTERS. PowerShell UNROLLS a collection on return, so with exactly ONE
+    # finding the caller would get a single MigReviewRow instead of the collection - and a single
+    # object is not IEnumerable, so binding it to DataGrid.ItemsSource throws
+    # "Cannot convert the MigReviewRow value ... to type System.Collections.IEnumerable".
+    # Two or more findings survive by accident (they stay an array), which is exactly why this
+    # only ever appeared when a SINGLE application was already in Intune.
+    return ,$rows
 }
 
 # Turn the answered rows into what the run needs. Also separate so it can be tested directly.
@@ -3472,7 +3483,7 @@ function Start-MigrationRun {
     $s.RunFolder = $run; $s.BatchLogPath = $script:BatchLogPath
     $s.Queue = $Selected; $s.DryRun = $Dry; $s.AuthHeader = $script:Auth
     $s.SkipApps = $Skips; $s.SupersedeMap = $Supersede; $s.ReviewedApps = $Reviewed
-    $s.KnownDuplicates = @{}; $s.DuplicateAction = 'Create'   # the review dialog has already decided
+    $s.KnownDuplicates = @{}   # the per-application decision comes from $Reviewed, below
     $s.CancelRequested = $false; $s.ReauthRequested = $false; $s.FatalError = ''
     $s.Percent = 0; $s.Status = 'Starting...'; $s.Indeterminate = $true
     $s.CurrentIndex = 0; $s.CurrentTotal = $Selected.Count; $s.CurrentApp = ''
@@ -3596,6 +3607,33 @@ $Win.Add_Closing({
         $State.Sync.CancelRequested = $true
     }
     try { $timer.Stop() } catch {}
+})
+
+# A LAST-RESORT NET. An error inside a button handler or the timer otherwise escapes the message
+# pump, surfaces as 'Exception calling "ShowDialog"' and takes the whole window down - losing both
+# the run and the reason for it. Catch it here: write the real error and where it came from to the
+# activity log and the batch log, say so plainly, and KEEP THE WINDOW OPEN.
+$Win.Dispatcher.Add_UnhandledException({
+    param($sender, $e)
+    $ex = $e.Exception
+    $msg = "$($ex.GetType().Name): $($ex.Message)"
+    $where = ''
+    try { if ($ex.StackTrace) { $where = ($ex.StackTrace -split "`n" | Select-Object -First 1).Trim() } } catch {}
+    try { Add-UiLog "UNEXPECTED ERROR: $msg" 'Error' } catch {}
+    try { if ($where) { Add-UiLog "  at $where" 'Error' } } catch {}
+    try { Write-MigLog "UNEXPECTED ERROR in the window: $msg$(if ($where) { " | at $where" })" Error } catch {}
+    try {
+        $State.UI.ExpLog.IsExpanded = $true
+        Set-UiBusy $false
+        Hide-UiBusy
+        $State.UI.LblStatus.Text = 'Stopped on an unexpected error - see the activity log'
+    } catch {}
+    try {
+        [System.Windows.MessageBox]::Show(
+            "Something went wrong inside the tool:`r`n`r`n$msg`r`n`r`nThe window is still open and the activity log has the detail.",
+            'Unexpected error', 'OK', 'Error') | Out-Null
+    } catch {}
+    $e.Handled = $true      # keep the window alive instead of tearing it down
 })
 
 $UI.LblStatus.Text = 'Not connected'
