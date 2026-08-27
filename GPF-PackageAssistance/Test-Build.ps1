@@ -141,6 +141,28 @@ if (Get-Command Convert-V3ToV4Content -EA SilentlyContinue) {
     $ci = Convert-V3ToV4Content -Content "New-folder -Path 'x'; copy-file -Path a -Destination b"
     Assert "case-insensitive: New-folder -> New-ADTFolder" ($ci -match 'New-ADTFolder' -and (-not ($ci -match '(?<![\w-])New-folder(?![\w-])')))
     Assert "case-insensitive: copy-file -> Copy-ADTFile"   ($ci -match 'Copy-ADTFile')
+    # Field findings (30-Jul testing xlsx): ProcessAsUser drops -Wait/-ContinueOnError; .NET env-var -> ADT wrapper
+    $pau = Convert-V3ToV4Content -Content 'Execute-ProcessAsUser -Path $Stub -Parameters $Args -Wait -ContinueOnError $true'
+    Assert "conv: ProcessAsUser drops -Wait & -ContinueOnError" (($pau -match 'Start-ADTProcessAsUser') -and ($pau -notmatch '-Wait\b') -and ($pau -notmatch '-ContinueOnError'))
+    Assert "conv: -WaitForMsiExec NOT stripped elsewhere"       ((Convert-V3ToV4Content -Content 'Execute-Process -Path a.exe -WaitForMsiExec') -match '-WaitForMsiExec')
+    $ev = Convert-V3ToV4Content -Content '$e = [Environment]::GetEnvironmentVariable("K_PATH", "Machine")'
+    Assert "conv: .NET GetEnvironmentVariable -> Get-ADTEnvironmentVariable" (($ev -match 'Get-ADTEnvironmentVariable -Variable "K_PATH" -Target Machine') -and ($ev -notmatch '\[Environment\]::'))
+    # Sr#7.2: two CONSECUTIVE 'Remove-Folder -IfEmpty' lines must BOTH convert - the -IfEmpty regex must not eat across the
+    # line break into the next line (finding: Adobe - the 2nd (Acrobat) vanished because \s matched the newline).
+    $rf2 = Convert-V3ToV4Content -Content "Remove-Folder -Path `"`$envCommonStartMenuPrograms\Adobe`" -IfEmpty`r`nRemove-Folder -Path `"`$envCommonStartMenuPrograms\Acrobat`" -IfEmpty"
+    Assert "conv: two consecutive -IfEmpty both survive" (($rf2 -match 'StartMenuPrograms\\Adobe') -and ($rf2 -match 'StartMenuPrograms\\Acrobat') -and (([regex]::Matches($rf2,'PathType Container')).Count -eq 2))
+    if (Get-Command Get-MsiCommandSet -EA SilentlyContinue) {
+        Assert "gen: MSI install uses -Transforms (plural, v4)" ((Get-MsiCommandSet -Msi 'A.msi' -Mst 'A.mst' -ProductCode '{11111111-1111-1111-1111-111111111111}').MainInstall -match '-Transforms\s')
+    }
+    if (Get-Command Format-OutputScript -EA SilentlyContinue) {
+        # Sr#9: a stray space inside a -ProductCode GUID literal is trimmed; a normal one is untouched.
+        Assert "fmt: -ProductCode strips stray inner space" ((Format-OutputScript -Text "Start-ADTMsiProcess -Action 'Uninstall' -ProductCode ' {1C4739CF-2225-4513-A178-C746D7D6BDA4}'") -match "-ProductCode '\{1C4739CF-2225-4513-A178-C746D7D6BDA4\}'")
+    }
+    if (Get-Command Get-GpfPredecessorPackageName -EA SilentlyContinue) {
+        # Sr#20: GPF predecessor names - brand prefix stripped, '_0001' -> canonical '-0001'; idempotent for canonical names.
+        Assert "pred-name: INA_ + _0001 -> canonical -0001" ((Get-GpfPredecessorPackageName 'INA_Adobe_CreativeCloud_x64_6.8.0.821_0001_MUL') -eq 'Adobe_CreativeCloud_x64_6.8.0.821-0001_MUL')
+        Assert "pred-name: canonical name unchanged"        ((Get-GpfPredecessorPackageName 'Adobe_CreativeCloud_x64_6.8.0.821-0001_MUL') -eq 'Adobe_CreativeCloud_x64_6.8.0.821-0001_MUL')
+    }
 }
 
 # ---- Plan section 2: uninstall-previous block ----
@@ -1934,6 +1956,20 @@ try {
         Assert "NF F45: model loads from folder holding a package .zip" ((Read-PredecessorModel -PackagePath $f45pf -PackageName $f45pkg).Identity.AppName -eq 'ZipPred')
         Assert "NF F45: bad zip path -> '' (no throw)" ((Expand-PredecessorZip -ZipPath (Join-Path $f45tmp 'nope.zip')) -eq '')
     } finally { Remove-Item -LiteralPath $f45tmp -Recurse -Force -EA SilentlyContinue }
+    # Sr#20: a predecessor folder with a brand prefix + '_0001' -> Identity parses and uses the canonical '-0001'.
+    $rm20 = Read-PredecessorModel -PackageName 'INA_Adobe_CreativeCloud_x64_6.8.0.821_0001_MUL' -Content "`$adtSession=@{AppName='CreativeCloud';AppVersion='6.8.0.821'}"
+    Assert "Sr#20: brand-prefixed _0001 pred -> Identity -0001" (($rm20.Identity.FullName -eq 'Adobe_CreativeCloud_x64_6.8.0.821-0001_MUL') -and ($rm20.Identity.Vendor -eq 'Adobe'))
+    # ...but a VWG-VENDOR package (single-word app) keeps VWG as the vendor (prefix strip must NOT eat the real vendor).
+    $rm20v = Read-PredecessorModel -PackageName 'VWG_ZipPred_x86_1.0.0_0001_MUL' -Content "`$adtSession=@{AppName='ZipPred';AppVersion='1.0.0'}"
+    Assert "Sr#20: VWG-vendor pred keeps VWG + gets -0001" (($rm20v.Identity.Vendor -eq 'VWG') -and ($rm20v.Identity.FullName -eq 'VWG_ZipPred_x86_1.0.0-0001_MUL'))
+    # Sr#3: v4 predecessor stores the process list in $adtSession.AppProcessesToClose; the VWG_ProcToClose wrapper is only
+    # a reference. Extract-SessionValues must still pull the list so ProcToClose carries on reuse.
+    $v4proc = Extract-SessionValues -Content "`$adtSession = @{`r`n    AppProcessesToClose = @('ZEISS_INSPECT')`r`n}`r`n[string[]] `$Global:VWG_ProcToClose = `$adtSession.AppProcessesToClose" -Arch 'x64'
+    Assert "Sr#3: v4 AppProcessesToClose carried as ProcToClose" ($v4proc['ProcToClose'] -eq "@('ZEISS_INSPECT')")
+    # Sr#4.1: a CUSTOM Show-InstallationWelcome close (e.g. a java-applet close inside if($BackTask)) must survive
+    # boilerplate stripping - only the STANDARD dialogs (inside if($VWG_UseDialogs)) and Show-InstallationProgress go.
+    $sbJava = Strip-Boilerplate -Body "`t# user dialogs (deprecated)`r`n`tif (`$VWG_UseDialogs){`r`n`t`tShow-ADTInstallationWelcome -CloseProcesses `$VWG_ProcToClose`r`n`t}`r`n`tif (`$BackTask){`r`n`t`tShow-ADTInstallationWelcome -CloseProcesses `"`$(`$BackTask)=Applet`" -BlockExecution`r`n`t}"
+    Assert "Sr#4.1: custom java Welcome close KEPT"       (($sbJava -match 'BackTask.*BlockExecution') -and ($sbJava -notmatch 'CloseProcesses \$VWG_ProcToClose'))
     # Predecessor-zip MAX_PATH fix: deeply-nested package zipped WITH a long top folder must still extract (short cache +
     # \\?\ extractor), AND a prior EMPTY/incomplete cache must be re-extracted (not reused). Build a zip whose top folder
     # is the 46-char package name + a nested Content\Invoke, then extract, empty the cache, and re-extract.

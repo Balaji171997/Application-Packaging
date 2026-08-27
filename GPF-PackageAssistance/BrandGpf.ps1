@@ -367,9 +367,20 @@ function Resolve-GpfRequest {
     # Vendor_Sources, Thumbs.db, Office ~$ lock files, or anything under Predecessor. ('Documents' kept for requests that
     # use that folder name.) ---
     $docs = New-Object System.Collections.Generic.List[string]
-    foreach ($dn in 'Docs_EQS','Documents','Mails') {
+    foreach ($dn in 'Docs_EQS','Mails') {
         $p = Join-Path $RequestPath $dn
         if (Test-Path -LiteralPath $p) { [void]$docs.Add($p) }
+    }
+    # The request's OWN 'Documents' folder: add its CONTENTS (not the folder itself). Adding the folder made the recursive
+    # copy nest it as <pkg>\Documents\Documents (finding: Adobe CreativeCloud). Apply the same skips the root-file loop uses
+    # below (Complexity Matrix + Office ~$ lock files), so only real docs land directly in the package's Documents folder.
+    $reqDocsFolder = Join-Path $RequestPath 'Documents'
+    if (Test-Path -LiteralPath $reqDocsFolder) {
+        foreach ($c in (Get-ChildItem -LiteralPath $reqDocsFolder -ErrorAction SilentlyContinue)) {
+            if (-not $c.PSIsContainer -and $c.Name -match '(?i)complexity') { continue }
+            if (-not $c.PSIsContainer -and $c.Name -match '^~\$') { continue }
+            [void]$docs.Add($c.FullName)
+        }
     }
     foreach ($f in (Get-ChildItem -LiteralPath $RequestPath -File -ErrorAction SilentlyContinue)) {
         # The Complexity Matrix is an internal effort-estimation sheet - the team does NOT want it shipped inside the

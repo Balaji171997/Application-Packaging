@@ -525,6 +525,34 @@ function Convert-V3ToV4Content {
         })
     }
 
+    # -- LAYER 1c: Start-ADTProcessAsUser in v4 has NO -Wait (it WAITS by default; -NoWait to not) and NO -ContinueOnError
+    #    (v4 uses -ExitOnProcessFailure / -IgnoreExitCodes). A carried v3 '-Wait -ContinueOnError $true' throws "parameter
+    #    cannot be found" and fails the package (field finding: AUDI PrinterMigration). Strip both from Start-ADTProcessAsUser
+    #    calls only - the call line + its backtick-continuation lines. -Wait/-ContinueOnError elsewhere (Start-ADTProcess,
+    #    Start-ADTMsiProcess) is left alone; the negative lookahead keeps -WaitForMsiExec / -WaitForChildProcesses intact.
+    $pauLines = $result -split "`r?`n"; $inPau = $false
+    for ($pi = 0; $pi -lt $pauLines.Count; $pi++) {
+        $isPau = $pauLines[$pi] -match '(?i)Start-ADTProcessAsUser'
+        if ($isPau -or $inPau) {
+            $pauLines[$pi] = [regex]::Replace($pauLines[$pi], "(?i)\s+-ContinueOnError(?![A-Za-z\-])(\s*:?\s*\`$?(?:true|false))?", '')
+            $pauLines[$pi] = [regex]::Replace($pauLines[$pi], "(?i)\s+-Wait(?![A-Za-z\-])", '')
+        }
+        $inPau = ($isPau -or $inPau) -and ($pauLines[$pi] -match '`\s*$')
+    }
+    $result = $pauLines -join "`r`n"
+
+    # -- LAYER 1d: the .NET static [Environment]::GetEnvironmentVariable("VAR","Target") -> the v4 wrapper
+    #    Get-ADTEnvironmentVariable -Variable "VAR" -Target <Target> (team standard; the function-name map only covers the
+    #    PSADT Get-EnvironmentVariable cmdlet, not the .NET static form). Field finding: VW GRS. Target rendered as the bare
+    #    enum (Machine/User/Process). Handles the 2-arg form; the 1-arg form (no target) drops -Target.
+    $result = [regex]::Replace($result,
+        '(?i)\[(?:System\.)?Environment\]::GetEnvironmentVariable\(\s*("[^"]*"|''[^'']*''|\$\w+)\s*,\s*(?:"(Machine|User|Process)"|''(Machine|User|Process)''|(Machine|User|Process))\s*\)',
+        { param($m) $tgt = "$($m.Groups[2].Value)$($m.Groups[3].Value)$($m.Groups[4].Value)"   # only one target group matches
+                    "Get-ADTEnvironmentVariable -Variable $($m.Groups[1].Value) -Target $tgt" })
+    $result = [regex]::Replace($result,
+        '(?i)\[(?:System\.)?Environment\]::GetEnvironmentVariable\(\s*("[^"]*"|''[^'']*''|\$\w+)\s*\)',
+        'Get-ADTEnvironmentVariable -Variable $1')
+
     # Remove the leftover v3 SoftIdent declaration - MTB ONLY (SoftIdent moves into $adtSession there).
     # GPF predecessors legitimately (re)define [string]$VWG_SoftIdent with the runtime WoW token - KEEP it.
     if (-not (Get-Command Get-PBBrand -ErrorAction SilentlyContinue) -or (Get-PBBrand -Path 'Name' -Default 'MTB') -ne 'GPF') {
@@ -690,7 +718,10 @@ function Convert-V3ToV4Content {
     # `Remove-Folder` -> `Remove-ADTFolder` in Layer 1, so by this point
     # the source has `Remove-ADTFolder -Path X -IfEmpty`. We match that.
     # Both `-Path` and `-LiteralPath` are handled.
-    $rxIfEmpty = '(?m)^(\s*)Remove-ADTFolder\s+(?:(?:-LiteralPath|-Path)\s+)?("[^"]+"|''[^'']+''|\$\S+)(?:\s+-\w+\s+\S+)*\s+-IfEmpty\b'
+    # NB: same-line whitespace only ([ \t], NOT \s). \s matches newlines, so the "other params" run (?:...)* greedily ate
+    # across the line break and swallowed the NEXT Remove-ADTFolder -IfEmpty line into this one's single match (finding:
+    # Adobe - two consecutive "Remove-Folder ... -IfEmpty" lines, the 2nd (Acrobat) vanished). [ \t] keeps each on its line.
+    $rxIfEmpty = '(?m)^([ \t]*)Remove-ADTFolder[ \t]+(?:(?:-LiteralPath|-Path)[ \t]+)?("[^"]+"|''[^'']+''|\$\S+)(?:[ \t]+-\w+[ \t]+\S+)*[ \t]+-IfEmpty\b'
     $result = [regex]::Replace($result, $rxIfEmpty, {
         param($m)
         $indent = $m.Groups[1].Value

@@ -1122,6 +1122,10 @@ function Format-OutputScript {
     # Final catch-all: a SoftIdent detection key must never read "...\Uninstall\ {GUID}" (stray space after the
     # backslash - team finding). A real Uninstall subkey never starts with a space, so this is always safe.
     $Text = [regex]::Replace($Text, '(?i)(\\Uninstall)\\[ \t]+\{', '${1}\{')
+    # Final catch-all: a -ProductCode literal must never carry a stray space inside the quotes ("... -ProductCode ' {GUID}'"
+    # - team finding: Fraunhofer PackAssistant). A ProductCode GUID never contains spaces, so trimming inside the quotes is
+    # always safe. Covers a value that got a leading/trailing space (e.g. parsed from a SoftIdent GUID or carried verbatim).
+    $Text = [regex]::Replace($Text, "(?i)(-ProductCode[ \t]+)(['`"])[ \t]*(\{[0-9A-Fa-f-]{36}\})[ \t]*(['`"])", '${1}${2}${3}${4}')
     # Safety net: -IfEmpty is NOT a valid v4 Remove-ADTFolder parameter (verified v4.1.5) but can survive inside a
     # predecessor block that was preserved verbatim (never run through the v3->v4 converter). Rewrite the simple
     # "Remove-ADTFolder [-Path|-LiteralPath] <path> -IfEmpty" form to the Test-Path + emptiness-guarded removal.
@@ -1222,7 +1226,7 @@ function Get-MsiCommandSet {
     if ($NoMst) { $Mst = '' }
     elseif (-not $Mst -and $Msi) { $Mst = [IO.Path]::ChangeExtension($Msi, '.mst') }
     $install = if ($Mst) {
-        "Start-ADTMsiProcess -Action 'Install' -FilePath `"`$(`$adtSession.DirFiles)\$Msi`" -Transform `"`$(`$adtSession.DirFiles)\$Mst`""
+        "Start-ADTMsiProcess -Action 'Install' -FilePath `"`$(`$adtSession.DirFiles)\$Msi`" -Transforms `"`$(`$adtSession.DirFiles)\$Mst`""
     } else {
         "Start-ADTMsiProcess -Action 'Install' -FilePath `"`$(`$adtSession.DirFiles)\$Msi`""
     }

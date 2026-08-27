@@ -159,7 +159,12 @@ function Strip-Boilerplate {
             }
             continue
         }
-        if ($t -match '^\s*#*\s*Show-(ADT)?Installation(Welcome|Progress)\b') { $i++; continue }
+        # Strip only Show-InstallationProgress (the template owns it; Set-PredecessorProgressBar re-carries it when the
+        # predecessor had it enabled). Do NOT strip Show-InstallationWelcome here: the STANDARD dialog-welcome calls sit
+        # inside the "# user dialogs (deprecated)" if($VWG_UseDialogs){...} block and are already consumed above, so any
+        # Welcome reaching this point is a CUSTOM close (e.g. a java-applet Show-InstallationWelcome inside if($BackTask))
+        # that must be KEPT (finding: PTC RVSClient - the predecessor's Java process-close was being dropped).
+        if ($t -match '^\s*#*\s*Show-(ADT)?InstallationProgress\b') { $i++; continue }
         # Strip ONLY the template's own scaffolding log lines - matched by how their MESSAGE BEGINS.
         # (The old loose match - 'Start |successful' ANYWHERE - also deleted CUSTOM log lines like
         # "...Taskschedule ... is successfully deleted" = predecessor corruption.)
@@ -271,6 +276,14 @@ function Extract-SessionValues {
             }
         }
         $out[$f] = $val
+    }
+    # v4 ProcToClose (Sr#3): the actual process list lives in the $adtSession field 'AppProcessesToClose = @(...)'; the
+    # wrapper line "[string[]] $Global:VWG_ProcToClose = $adtSession.AppProcessesToClose" is only an ALIAS (a reference,
+    # not a literal), so the loop above can't read it (finding: ZEISS_INSPECT not carried from a v4 predecessor). When
+    # ProcToClose wasn't captured as a real @(...) list, pull it from AppProcessesToClose so it carries on reuse.
+    if ("$($out['ProcToClose'])" -notmatch '^@\(') {
+        $apc = [regex]::Match($Content, "(?im)^[ \t]*AppProcessesToClose[ \t]*=[ \t]*(@\([^\r\n]*\))")
+        if ($apc.Success) { $out['ProcToClose'] = $apc.Groups[1].Value.Trim() }
     }
     return $out
 }
@@ -434,7 +447,21 @@ function Read-PredecessorModel {
     }
 
     if ($PackageName) {
-        $pn = Parse-PackageName $PackageName
+        # GPF predecessor folders may carry a brand prefix (INA_/VWG_/G1V_) and/or use '_0001' instead of the canonical
+        # '-0001' between version and revision (AUDI folders do this). Normalise to Vendor_App_Arch_Version-Revision_Lang
+        # BEFORE parsing so the Identity - and the branding key built from it (VWG\CM\<FullName>) - always parse and always
+        # use the hyphen. Idempotent for already-canonical names. (Non-GPF / no helper: PackageName used as-is.)
+        $pnName = $PackageName
+        if ((Get-Command Get-GpfPredecessorPackageName -EA SilentlyContinue) -and (Get-Command Get-PBBrand -EA SilentlyContinue) -and ((Get-PBBrand -Path 'Name' -Default 'MTB') -eq 'GPF')) {
+            # INA_/VWG_/G1V_ can be a brand OUTPUT prefix (INA_Adobe_CreativeCloud...) OR the real VENDOR (VWG_ZipPred... =
+            # Volkswagen Group). Disambiguate: prefer the prefix-STRIPPED + '_0001'->'-0001' form ONLY when it still parses
+            # (=> the prefix was a brand prefix); else keep the prefix and only fix '_0001'->'-0001' (=> the prefix is the
+            # vendor). Both fixes always normalise the revision separator to the canonical hyphen.
+            $stripped = Get-GpfPredecessorPackageName $PackageName                                                                        # strip prefix + _0001->-0001
+            $revOnly  = [regex]::Replace($PackageName, '_(\d+(?:\.\d+)*)_(\d{3,4})_([A-Za-z][A-Za-z-]*)$', '_$1-$2_$3')                     # keep prefix, _0001->-0001
+            $pnName   = if ((Parse-PackageName $stripped).IsValid) { $stripped } elseif ((Parse-PackageName $revOnly).IsValid) { $revOnly } else { $PackageName }
+        }
+        $pn = Parse-PackageName $pnName
         if ($pn.IsValid) {
             $model.Identity = @{ Vendor=$pn.Vendor; AppName=$pn.AppName; Arch=$pn.Arch
                                  Version=$pn.Version; Release=$pn.Release; Lang=$pn.Lang; FullName=$pn.FullName }
