@@ -14,3 +14,35 @@
 2026-07-21 15:16:04  [Success] Audit cache: 22938 new event(s); creator known for 2885 app(s).
 2026-07-21 15:16:07  [Info] Snapshot saved: apps-20260721-151606.json
 2026-07-21 15:16:07  [Info] Recorded 709 change(s).
+2026-09-03 15:43:59  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:44:12  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:44:13  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:44:14  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:44:14  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:44:21  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:44:21  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:06  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:10  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:11  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:11  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:12  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:12  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:12  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:13  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:13  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:13  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:14  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:15  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:15  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:45  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:46  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:47  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:47  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:45:47  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:46:07  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:56:51  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:56:52  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:56:53  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:56:53  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:56:54  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
+2026-09-03 15:57:51  [Error] MSAL.PS + IntuneWin32App not found under 'C:\Users\AW140\Downloads\files\lib\PowerShell Module'. Fix settings.json -> ModulePath.
