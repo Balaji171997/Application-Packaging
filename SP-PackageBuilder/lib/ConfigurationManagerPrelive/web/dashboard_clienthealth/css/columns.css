@@ -1,0 +1,288 @@
+﻿.tile {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: var(--background-color);
+    position: relative;
+    height: 350px;
+}
+.tile-1-1 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: var(--background-color);
+    position: relative;
+    height: 350px;
+    height: 144px;
+    width: 164px;
+}
+.tile-2-2 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: var(--background-color);
+    position: relative;
+    height: 350px;
+    width: 340px;
+    overflow: auto;
+}
+
+.c3-text.c3-empty {
+    font-size: 12px;
+}
+
+.c3 svg {
+    overflow: visible !important;
+}
+
+.tile-2-2-transparent {
+  column-gap: 10px;
+  vertical-align: middle;
+  text-align: center;
+  border: 1px solid gainsboro;
+  margin: 5px;
+  float: left;
+  font-size: 16px;
+  position: absolute;
+  height: 350px;
+  width: 340px;
+  z-index:10;
+  display: inline-block;
+}
+.tile-2-4 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: var(--background-color);
+    position: relative;
+    height: 350px;
+    width: 692px;
+}
+.tile-2-6 {
+  column-gap: 10px;
+  vertical-align: middle;
+  text-align: center;
+  border: 1px solid gainsboro;
+  margin: 5px;
+  float: left;
+  font-size: 16px;
+  background: var(--background-color);
+  position: relative;
+  height: 350px;
+  width: 1044px;
+}
+.tile-2-5 {
+    vertical-align: middle;
+    text-align: center;
+    float: left;
+    font-size: 16px;
+    background: var(--background-color);
+    position: relative;
+    height: 350px;
+    width: 690px;
+}
+.tile-2-1 {
+    vertical-align: middle;
+    text-align: left;
+    margin-top: 40px;
+    float: left;
+    font-size: 16px;
+    background: var(--background-color);
+    position: relative;
+    height: 260px;
+    width: 344px;
+}
+.tile-2-6-2 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: var(--background-color);
+    position: relative;
+    width: 1044px;
+}
+.tile-container-base {
+  height: 362px;
+  display: inline-block;
+  float: left;
+}
+.tile-container-2-2 {
+  height: 362px;
+  display: inline-block;
+  float: left;
+  width: 352px;
+}
+.tile-container-2-6 {
+  height: 362px;
+  display: inline-block;
+  float: left;
+  width: 1056px;
+}
+.tile-container-2-6-2 {
+  display: inline-block;
+  float: left;
+  width: 1056px;
+}
+.tile-container-1-8 {
+    height: 156px;
+    display: inline-block;
+    float: left;
+    width: 1056px;
+}
+.tile-container-1-8-2 {
+    height: 116px;
+    display: inline-block;
+    float: left;
+    width: 1056px;
+}
+.tile-container-1-24 {
+    height: 156px;
+    display: inline-block;
+    float: left;
+    width: 264px;
+}
+.tile-1-24 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: var(--background-color);
+    position: relative;
+    height: 144px;
+    width: 252px;
+}-
+.tile-1-24-transparent {
+  column-gap: 10px;
+  vertical-align: middle;
+  text-align: center;
+  border: 1px solid gainsboro;
+  margin: 5px;
+  float: left;
+  font-size: 16px;
+  position: absolute;
+  height: 144px;
+  width: 252px;
+  z-index: 10;
+  display: inline-block;
+}
+.tile-container-1-8-short {
+  height: 126px;
+  display: inline-block;
+  float: left;
+  width: 1056px;
+}
+.tile-container-1-24-short {
+  height: 86px;
+  display: inline-block;
+  float: right;
+  width: 264px;
+}
+.tile-1-24-short {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: var(--background-color);
+    position: relative;
+    height: 114px;
+    width: 252px;
+}
+.tile-1-24-short-title {
+  column-gap: 10px;
+  vertical-align: middle;
+  text-align: center;
+  float: right;
+  font-size: 16px;
+  position: absolute;
+  height: 74px;
+  width: 252px;
+}
+.tile-1-24-transparent-short {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: var(--background-color);
+    position: absolute;
+    height: 74px;
+    width: 252px;
+    z-index: 10;
+    display: inline-block;
+}
+.tile-1-24-2 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: var(--background-color);
+    position: relative;
+    height: 104px;
+    width: 252px;
+}
+.tile-value {
+    font-size: 50px;
+    font-weight: 100;
+}
+.tile-content {
+  height: 100%;
+  width: 100%;
+  display: table;
+}
+.tile-content-inner {
+  display: table-cell;
+  vertical-align: middle;
+  text-align: center;
+}
+.list-2-3 {
+  max-height: 220px;
+}
+.tile-container-1-6 {
+  height: 156px;
+  display: inline-block;
+  float: left;
+  width: 1056px;
+}
+.tile-1-6 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: var(--background-color);
+    position: relative;
+    height: 144px;
+    width: 1044px;
+}

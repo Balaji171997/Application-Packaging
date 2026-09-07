@@ -1,0 +1,103 @@
+﻿<!DOCTYPE html>
+<html ng-app="dashboard">
+
+<head>
+    <meta charset="utf-8" />
+    <title>Office Proplus Readiness Dashboard</title>
+    <meta content="IE=edge" http-equiv="X-UA-Compatible" />
+    <meta name="description" content="O365 Updates Dashboard" />
+    <meta name="keywords" content="Office 365, O365, Dashboard" />
+    
+    <link href="../css/c3.min.css" rel="stylesheet" type="text/css" />
+    <link href="../css/columns.css" rel="stylesheet" type="text/css" />
+    <link href="css/styles.css" rel="stylesheet" type="text/css" />
+
+
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="../js/utility.js" type="text/javascript"></script>
+    <script src="../js/d3.min.js" type="text/javascript"></script>
+    <script src="../js/c3.min.js" type="text/javascript"></script>
+    <script src="../js/external.js" type="text/javascript"></script>
+    <script src="js/controller.js" type="text/javascript"></script>
+    <noscript>Javascript is not enabled</noscript>
+</head>
+
+<body ng-controller="dashboardController">
+
+      
+    <div class="tile-container-2-6-short" tabindex="1">
+        <div class="tile-container-2-2-short" ng-if="collectionsData == ChartState.DataReady">
+            <label for="SMS_DeviceCollections" ng-bind="strings.DeviceCollection"></label>
+            <select name="SMS_DeviceCollections" id="SMS_DeviceCollectionsSelector"
+                ng-options="collection as collection.Name for collection in SMS_DeviceCollections.All"
+                ng-model="SMS_DeviceCollections.Selected" ng-change="SMS_DeviceCollectionChanged()" tabindex="1"
+                aria-label="{{strings.DeviceCollection}}"></select>
+            <button type="button" ng-click="LaunchWizardCollectionPicker()" ng-bind="strings.Browse"
+                tabindex="1"></button>
+        </div>
+        <div class="tile-container-2-2-short">
+            <label for="TargetArchitecture" ng-bind="strings.O365Architecture"></label>
+            <select name="TargetArchitecture" ng-options="x for x in OfficeProPlus" ng-change="select_OfficeProArch()"
+                ng-model="TargetArchitecture" aria-label="{{strings.O365Architecture}}" tabindex="1"> </select>
+        </div>
+    </div>
+    <br class="clear">
+    <br class="clear">
+    <div class="tile-container-2-6 " ng-if="ProplusReadiness == ChartState.DataReady">
+        <div class="tile tile-2-3">
+            <h1 tabindex="1" ng-bind="strings.GaugeTitle"></h1>
+            <div id="proplusDevicesChart" tabindex="1" style="margin-top:40px"
+                aria-label="{{strings.AriaDeploymentLabel}}"></div>
+        </div>
+        <div class="tile tile-2-3">
+            <h1 tabindex="1" ng-bind="strings.DeviceReadinessTitle"></h1>
+            <div id="readinessChart" tabindex="1" aria-label="{{strings.AriaDeviceReadiness}}"
+                ng-keypress="keyPressToggle($event, 'readinessChart')"></div>
+            <h2 tabindex="1"><a href="https://go.microsoft.com/fwlink/?linkid=2070364" target="_blank"
+                    ng-bind="strings.O365ProLink"></a>{{strings.O365ProText}}</h2>
+        </div>
+    </div>
+    <br class="clear">
+    <div class="tile-container-2-6">
+        <div class="tile tile-2-3">
+            <h1 tabindex="1" ng-bind="strings.AddinReadiness"></h1>
+            <div id="addinReadinessChart" tabindex="1" aria-label="{{strings.AriaAddInReadiness}}"
+                ng-keypress="keyPressToggle($event, 'addinReadinessChart')"></div>
+        </div>
+        <div class="tile tile-2-3">
+            <h1 tabindex="1" ng-bind="strings.AddinSupport"></h1>
+            <div id="addinSupportChart" tabindex="1" aria-label="{{strings.AriaAddinSupport}}"
+                ng-keypress="keyPressToggle($event, 'addinSupportChart')"></div>
+        </div>
+    </div>
+    <br class="clear">
+    <div class="tile-container-2-6">
+        <div class="tile tile-2-6">
+            <h1 tabindex="1" ng-bind="strings.AddinChartTitle"></h1>
+            <div id="topAddinVersionChart" tabindex="1" aria-label="{{strings.AriaTopAddinsVersion}}"
+                ng-keypress="keyPressToggle($event, 'topAddinVersionChart')"></div>
+        </div>
+    </div>
+    <br class="clear">
+    <div class="tile-container-2-6">
+        <div class="tile tile-2-3">
+            <h1 tabindex="1" ng-bind="strings.DevicesWithMacros"></h1>
+            <div id="devicesWithMacrosChart" tabindex="1" aria-label="{{strings.AriaDevicesWithMacros}}"
+                ng-keypress="keyPressToggle($event, 'devicesWithMacrosChart')">></div>
+        </div>
+        <div class="tile tile-2-3">
+            <h1 tabindex="1" ng-bind="strings.MacroReadiness"></h1>
+            <div id="macroReadinessChart" tabindex="1" aria-label="{{strings.AriaMacroReadiness}}"
+                ng-keypress="keyPressToggle($event, 'macroReadinessChart')">></div>
+        </div>
+    </div>
+    <div class="tile-container-2-6">
+        <div class="tile tile-2-6">
+            <h1 tabindex="1" ng-bind="strings.MacroAdvisories"></h1>
+            <div id="macroAdvisoryChart" tabindex="1" aria-label="{{strings.AriaMacroAdvisories}}"
+                ng-keypress="keyPressToggle($event, 'macroAdvisoryChart')"></div>
+        </div>
+    </div>
+</body>
+
+</html>

@@ -547,6 +547,64 @@ function Get-AudiDocumentText {
     return $text
 }
 
+function Get-AudiProcessName {
+    <#  The process names out of one PSADT assignment, whatever shape it is in.
+
+        A real package writes these four ways, and all four appear in the wild:
+
+            @()                                     nothing to close
+            @('firefox', 'plugin-container')        plain names
+            @('firefox=Mozilla Firefox')            name and a friendly label
+            @{ Name = 'firefox'; Description = .. } PSADT 4 process objects
+
+        and one that is not a list at all:
+
+            $adtSession.AppProcessesToClose         a pointer to the hashtable
+
+        The pointer is why this takes the whole field table rather than one
+        string: VWG_ProcToClose usually holds no names of its own, it points at
+        AppProcessesToClose further up the file. Following it is the difference
+        between reading a package's real process list and reading none.
+
+        Returns process names only - never the friendly labels, which are
+        sentences and would end up in the Software Center description.  #>
+    [CmdletBinding()]
+    param([string]$Raw, $Fields)
+
+    if ([string]::IsNullOrWhiteSpace($Raw)) { return @() }
+    $value = $Raw.Trim()
+
+    # Follow a pointer into the session hashtable, once. A second hop would mean
+    # a package pointing at a pointer, which none do and which could loop.
+    $pointer = [regex]::Match($value, '^\$(?:Global:)?(?:adtSession|adtsession)\.(\w+)\s*$')
+    if ($pointer.Success) {
+        $target = $pointer.Groups[1].Value
+        if ($Fields -and $Fields.Contains($target)) { $value = [string]$Fields[$target] }
+        else { return @() }
+    }
+
+    # An explicitly empty list is a real answer: this package closes nothing.
+    if ($value -match '^@\(\s*\)$') { return @() }
+
+    # PSADT 4 process objects name the process in a property; take that and
+    # leave the description behind.
+    $named = @([regex]::Matches($value, '(?i)\b(?:ProcessName|Name)\s*=\s*[''"]([^''"]+)[''"]') |
+               ForEach-Object { $_.Groups[1].Value })
+
+    if ($named.Count -eq 0) {
+        # Otherwise every quoted string in the list is a process.
+        $named = @([regex]::Matches($value, '[''"]([^''"]+)[''"]') | ForEach-Object { $_.Groups[1].Value })
+    }
+    if ($named.Count -eq 0) {
+        # Last shape: a bare comma list with no quotes at all.
+        $named = @($value -replace '^@\(', '' -replace '\)$', '' -split ',')
+    }
+
+    return @($named |
+             ForEach-Object { ($_ -split '=')[0] } |       # 'firefox=Mozilla Firefox'
+             ForEach-Object { $_.Trim().Trim("'", '"').Trim() } |
+             Where-Object { $_ -and $_ -notmatch '^\$' })  # a variable is not a process name
+}
 function Read-AudiPackageDetail {
     <#  Fills in what the packager would otherwise retype, by reading the
         package's own PSADT script and the install instruction document.
@@ -673,17 +731,18 @@ function Read-AudiPackageDetail {
     # NonUI first, plain ProcToClose as the fallback. If the package closes
     # nothing, neither line appears - an empty "will be closed:" sentence is
     # worse than no sentence.
-    $processes = ''
-    foreach ($candidate in 'ProcToCloseNonUI', 'ProcToClose') {
-        if (-not $processes -and $fields.Contains($candidate)) { $processes = [string]$fields[$candidate] }
+    # NonUI first, then the interactive list, then the session hashtable itself.
+    # Each is resolved through Get-AudiProcessName, which follows the
+    # $adtSession.AppProcessesToClose pointer a real package uses.
+    $names = @()
+    foreach ($candidate in 'ProcToCloseNonUI', 'ProcToClose', 'AppProcessesToClose') {
+        if ($names.Count -gt 0) { continue }
+        if (-not $fields.Contains($candidate)) { continue }
+        $names = @(Get-AudiProcessName -Raw ([string]$fields[$candidate]) -Fields $fields)
     }
-    if ($processes) {
-        # PSADT writes these as a comma list, sometimes with spaces or a trailing
-        # comma, and sometimes as 'name=Friendly Name' pairs - only the process
-        # name is wanted.
-        $names = @($processes -split ',' |
-                   ForEach-Object { ($_ -split '=')[0].Trim() } |
-                   Where-Object { $_ })
+    # Every list empty - @() in the script - means the package closes nothing,
+    # and the description is the description on its own.
+    if ($true) {
         if ($names.Count -gt 0) {
             $list    = $names -join ','
             $format  = $defaults.DescriptionFormat

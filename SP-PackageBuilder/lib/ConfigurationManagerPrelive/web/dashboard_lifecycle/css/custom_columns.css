@@ -1,0 +1,115 @@
+/*
+    .tile-y-x
+    height: (y * 144) + ((y - 1) * 12) = 144y + 12y - 12 = 156y - 12
+    width:  (x * 164) + ((x - 1) * 12) = 164x + 12x - 12 = 176x - 12
+*/
+
+.chart-tile {
+    display: inline-block;
+    float: left;
+    height: 420px;
+    max-height: 420px;
+    width: 528px;
+    max-width: 528px;
+    padding-bottom: 20px;
+}
+
+.chart-with-title {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: white;
+    position: relative;
+    height: 408px; /* 420-12 */
+    max-height: 408px; /* 420-12 */
+    width: 516px;
+    max-width: 516px;
+}
+
+.chart-title {
+    height: 50px;
+    max-height: 50px;
+    display: block;
+    overflow: hidden;
+    font-weight: bold;
+    font-size: 15px;
+}
+
+.chart-container {
+    height: 358px; /* 408-50 */
+    max-height: 358px; /* 408-50 */
+    width: 516px;
+    max-width: 516px;
+    display: block;
+    overflow: hidden;
+}
+
+.tile-container-y-6 {
+    display: inline-block;
+    float: left;
+    width: 1056px;
+    max-width: 1056px;
+}
+
+.tile-y-6 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: white;
+    position: relative;
+    width: 1044px;
+    max-width: 1044px;
+}
+
+.tile-y-6-size {
+    width: 1044px;
+    max-width: 1044px;
+}
+
+.tile-title-y-6 {
+    height: 40px;
+    max-height: 40px;
+    display: block;
+    overflow: hidden;
+    font-weight: bold;
+    font-size: 15px;
+}
+
+.tile-content-inner {
+    display: table-cell;
+    vertical-align: middle;
+    text-align: center;
+}
+
+.tile-container-1-6 {
+    display: inline-block;
+    float: left;
+    height: 156px;
+    max-height: 156px;
+    width: 1056px;
+    max-width: 1056px;
+}
+
+.tile-1-6 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: white;
+    position: relative;
+    height: 144px;
+    max-height: 144px;
+    width: 1044px;
+    max-width: 1044px;
+}

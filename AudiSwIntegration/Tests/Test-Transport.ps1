@@ -594,6 +594,66 @@ try {
 finally { Remove-Item -LiteralPath $tidy -Recurse -Force -ErrorAction SilentlyContinue }
 
 Write-Host ''
+# ------------------------------------------------- machines over the drop folder
+Write-Host ''
+Write-Host 'Machines through the drop folder' -ForegroundColor Cyan
+
+$memPkg = $package
+$memCol = "GY1-$memPkg"
+
+# A machine change has to survive the trip out...
+$memDoc = New-AudiSwJobFile -PackageName $memPkg -EnvironmentCode 'INA' -Rfc 'RFC0012345' -Action 'Change' `
+              -MemberChanges @(
+                  [pscustomobject]@{ Collection = $memCol; Machine = 'AUDIPC-04417'; Action = 'Add' }
+                  [pscustomobject]@{ Collection = $memCol; Machine = 'AUDIPC-09982'; Action = 'Remove' })
+$memPath = Join-Path $paths.New 'members.xml'; New-AudiJobFolder -Path $memPath
+$memDoc.Save($memPath)
+$memRead = Read-AudiSwJobFile -Path $memPath
+
+Assert-True  'a job carrying machine changes is accepted by the schema' $memRead.Ok ($memRead.Errors -join '; ')
+Assert-Equal 'both machine changes survive' 2 (@($memRead.Job.MemberChanges).Count)
+Assert-Equal 'the machine name survives'   'AUDIPC-04417' (@($memRead.Job.MemberChanges)[0].Machine)
+Assert-Equal 'the collection survives'     $memCol        (@($memRead.Job.MemberChanges)[0].Collection)
+Assert-Equal 'and the action'              'Add'          (@($memRead.Job.MemberChanges)[0].Action)
+Remove-Item -LiteralPath $memPath -Force
+
+# An action the server does not implement must be refused by the SCHEMA, before
+# any code sees it - a hand-edited job file is the case this guards.
+$evilPath = Join-Path $paths.New 'evil.xml'; New-AudiJobFolder -Path $evilPath
+$evilDoc  = New-AudiSwJobFile -PackageName $memPkg -EnvironmentCode 'INA' -Rfc 'RFC0012345' -Action 'Change' `
+                -MemberChanges @([pscustomobject]@{ Collection = $memCol; Machine = 'PC-1'; Action = 'Add' })
+$evilDoc.Save($evilPath)
+$raw = (Get-Content -LiteralPath $evilPath -Raw).Replace('action="Add"', 'action="Destroy"')
+Set-Content -LiteralPath $evilPath -Value $raw -Encoding UTF8
+Assert-True 'a made-up machine action is rejected by the schema' (-not (Read-AudiSwJobFile -Path $evilPath).Ok)
+Remove-Item -LiteralPath $evilPath -Force
+
+# ...and the machines have to come BACK, or the window cannot show who is in what.
+$memPlan2 = Get-AudiIntegrationPlan -PackageName $memPkg -EnvironmentCode 'INA' -Rfc 'RFC0012345'
+$realCol  = $memPlan2.Collections[0].Name
+$memProv2 = New-AudiSccmDryRunProvider -ExistingApplications @($memPlan2.ApplicationName) `
+                -ExistingCollections @($realCol) -Members @{ $realCol = @('AUDIPC-04417', 'AUDIPC-09982') }
+$memState2 = Get-AudiSwPackageState -Plan $memPlan2 -Provider $memProv2 -DryRun
+
+$memResult = [pscustomobject]@{
+    Ok = $true; JobId = 'mem-1'; Environment = 'INA'; Package = $memPkg
+    Executor = 'svc-swint'; DryRun = $true; Message = $memState2.Message
+    Steps = @(); RolledBack = @(); State = $memState2; LogPath = ''
+}
+$memResPath = Join-Path $paths.Done 'mem-1.result.xml'
+New-AudiJobFolder -Path $memResPath
+Write-AudiSwJobResult -Path $memResPath -Executor 'svc-swint' -Result $memResult -Job ([pscustomobject]@{
+    JobId = 'mem-1'; Environment = 'INA'; PackageName = $memPkg; Rfc = 'RFC0012345' })
+
+$memBack = Wait-AudiSwJobResult -TimeoutMinutes 1 -PollSeconds 1 -Submission ([pscustomobject]@{
+    JobId = 'mem-1'; Path = $memResPath; ResultPath = $memResPath; FailedPath = "$memResPath.none" })
+$backRow = @($memBack.State | Where-Object { $_.Name -eq $realCol })[0]
+Assert-True  'a result carrying machines is read back' $memBack.Found $memBack.Message
+Assert-Equal 'the machines survive the trip back to the window' 'AUDIPC-04417,AUDIPC-09982' `
+    (@($backRow.Members) -join ',')
+Remove-Item -LiteralPath $memResPath -Force
+
+Write-Host ''
 if ($script:Fail -eq 0) { Write-Host ("All {0} checks passed." -f $script:Pass) -ForegroundColor Green }
 else                    { Write-Host ("{0} passed, {1} FAILED." -f $script:Pass, $script:Fail) -ForegroundColor Red }
 Write-Host ''

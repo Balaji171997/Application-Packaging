@@ -427,6 +427,55 @@ Assert-Equal 'a clean template passes' 0 `
 
 # ---------------------------------------------------------------- summary
 Write-Host ''
+# --------------------------------------------- processes the package closes
+Write-Host ''
+Write-Host 'Reading the process list out of a PSADT script' -ForegroundColor Cyan
+
+# A real Audi package writes this five different ways. The one that matters most
+# is the POINTER: VWG_ProcToClose usually holds no names of its own, it points
+# at AppProcessesToClose in the session hashtable further up the file. Reading
+# the line literally gives '$adtSession.AppProcessesToClose' and no processes.
+$procFields = @{ AppProcessesToClose = "@('firefox', 'plugin-container', 'plugin-hang-ui')" }
+
+Assert-Equal 'an empty list means the package closes nothing' 0 `
+    (@(Get-AudiProcessName -Raw '@()' -Fields $procFields).Count)
+Assert-Equal 'plain names are read in order' 'plugin-container,plugin-hang-ui,firefox' `
+    ((@(Get-AudiProcessName -Raw "@('plugin-container', 'plugin-hang-ui', 'firefox')" -Fields $procFields)) -join ',')
+Assert-Equal 'a friendly label is dropped, the process name kept' 'firefox,notepad' `
+    ((@(Get-AudiProcessName -Raw "@('firefox=Mozilla Firefox', 'notepad=Notepad')" -Fields $procFields)) -join ',')
+Assert-Equal 'PSADT 4 process objects give up their names' 'firefox,thunderbird' `
+    ((@(Get-AudiProcessName -Raw "@(@{ Name = 'firefox'; Description = 'Mozilla Firefox' }, @{ Name = 'thunderbird'; Description = 'Mail' })" -Fields $procFields)) -join ',')
+Assert-Equal 'a pointer into the session hashtable is followed' 'firefox,plugin-container,plugin-hang-ui' `
+    ((@(Get-AudiProcessName -Raw '$adtSession.AppProcessesToClose' -Fields $procFields)) -join ',')
+Assert-Equal 'a bare comma list still parses' 'firefox,chrome' `
+    ((@(Get-AudiProcessName -Raw '@(firefox, chrome)' -Fields $procFields)) -join ',')
+
+# A variable this tool cannot resolve must give NOTHING, never the variable name
+# itself - '$SomethingElse' in a Software Center description would be visible to
+# every user of the package.
+Assert-Equal 'an unresolvable variable yields no processes' 0 `
+    (@(Get-AudiProcessName -Raw '$SomethingElse' -Fields $procFields).Count)
+
+# ---- the sentence, exactly as Audi specified it
+$fmt  = (Get-AudiDefaults).DescriptionFormat
+$made = ($fmt.processPrefixEn.Replace('{processes}', 'plugin-container,plugin-hang-ui,firefox') +
+         'Mozilla Firefox is a free and open source web browser which is made by the Mozilla Foundation and its subsidiary, the Mozilla Corporation.').Trim()
+Assert-Equal 'the description reads exactly as Audi specified' `
+    'The following applications will be closed for installation: plugin-container,plugin-hang-ui,firefox. Mozilla Firefox is a free and open source web browser which is made by the Mozilla Foundation and its subsidiary, the Mozilla Corporation.' `
+    $made
+
+# ---- against the real package Audi supplied
+$realPkg = 'C:\temp\INA_Microsoft_WindowsDesktopRuntime_x86_10.0.9.50000-0001_ZXX'
+if (Test-Path -LiteralPath $realPkg) {
+    $realDetail = Read-AudiPackageDetail -PackagePath $realPkg
+    Assert-Equal 'the real package gives up its install title' `
+        'Microsoft WindowsDesktopRuntimeRuntime 10.0.9.50000' $realDetail.Fields['InstallTitle']
+    # Its lists are all @(), so no sentence is added at all.
+    Assert-True 'and closes nothing, so no prefix is added' `
+        (-not $realDetail.Fields.Contains('ProcessesClosed'))
+}
+
+Write-Host ''
 if ($script:Fail -eq 0) { Write-Host ("All {0} checks passed." -f $script:Pass) -ForegroundColor Green }
 else                    { Write-Host ("{0} passed, {1} FAILED." -f $script:Pass, $script:Fail) -ForegroundColor Red }
 Write-Host ''

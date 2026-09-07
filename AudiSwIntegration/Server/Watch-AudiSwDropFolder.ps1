@@ -185,7 +185,8 @@ foreach ($entry in $jobs) {
             'Change'  {
                 Invoke-AudiSwChange -Plan $plan -DryRun:$wantsDryRun -OnProgress $onProgress `
                                     -Add $job.AddCollections -Remove $job.RemoveCollections `
-                                    -SettingChanges $job.SettingChanges
+                                    -SettingChanges $job.SettingChanges `
+                                    -MemberChanges $job.MemberChanges
             }
 
             default   { Invoke-AudiSwIntegration  -Plan $plan -DryRun:$wantsDryRun -OnProgress $onProgress }

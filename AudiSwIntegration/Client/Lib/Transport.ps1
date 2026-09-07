@@ -171,6 +171,8 @@ function New-AudiSwJobFile {
         # the audit trail only - the server never trusts it, it re-reads the
         # site itself.
         [object[]]$SettingChanges = @(),
+        # Machines to put into or take out of this package's collections.
+        [object[]]$MemberChanges = @(),
         [string]$Rfc = '',
         [string]$NameEn = '', [string]$NameDe = '',
         [string]$DescriptionEn = '', [string]$DescriptionDe = '',
@@ -210,7 +212,8 @@ function New-AudiSwJobFile {
 
     # The collections a packager ticked in the Modify tab. Written before Detail
     # to match the order the schema declares.
-    if (@($AddCollections).Count -gt 0 -or @($RemoveCollections).Count -gt 0 -or @($SettingChanges).Count -gt 0) {
+    if (@($AddCollections).Count -gt 0 -or @($RemoveCollections).Count -gt 0 -or
+        @($SettingChanges).Count -gt 0 -or @($MemberChanges).Count -gt 0) {
         $changesNode = $doc.CreateElement('Changes')
         foreach ($name in @($AddCollections))    { $e = $doc.CreateElement('Add');    $e.InnerText = $name; $null = $changesNode.AppendChild($e) }
         foreach ($name in @($RemoveCollections)) { $e = $doc.CreateElement('Remove'); $e.InnerText = $name; $null = $changesNode.AppendChild($e) }
@@ -219,6 +222,13 @@ function New-AudiSwJobFile {
             $e.SetAttribute('key', [string]$change.Key)
             $e.SetAttribute('from', [string]$change.From)
             $e.SetAttribute('to',   [string]$change.To)
+            $null = $changesNode.AppendChild($e)
+        }
+        foreach ($change in @($MemberChanges)) {
+            $e = $doc.CreateElement('Member')
+            $e.SetAttribute('collection', [string]$change.Collection)
+            $e.SetAttribute('machine',    [string]$change.Machine)
+            $e.SetAttribute('action',     [string]$change.Action)
             $null = $changesNode.AppendChild($e)
         }
         $null = $job.AppendChild($changesNode)
@@ -314,6 +324,8 @@ function Read-AudiSwJobFile {
         # the collections a packager ticked in the Modify tab
         AddCollections    = @($result.Document.SelectNodes('/Job/Changes/Add')    | ForEach-Object { $_.InnerText })
         RemoveCollections = @($result.Document.SelectNodes('/Job/Changes/Remove') | ForEach-Object { $_.InnerText })
+        MemberChanges     = @($result.Document.SelectNodes('/Job/Changes/Member') | ForEach-Object {
+                                [pscustomobject]@{ Collection = $_.collection; Machine = $_.machine; Action = $_.action } })
         SettingChanges    = @($result.Document.SelectNodes('/Job/Changes/Setting') | ForEach-Object {
                                 [pscustomobject]@{ Key = $_.key; From = $_.from; To = $_.to } })
         Created       = $j.created
@@ -396,6 +408,18 @@ function Write-AudiSwJobResult {
             $e.SetAttribute('wanted',        $(if ($collection.Wanted) { 'true' } else { 'false' }))
             $e.SetAttribute('exists',        $(if ($collection.Exists) { 'true' } else { 'false' }))
             $e.SetAttribute('hasDeployment', $(if ($collection.HasDeployment) { 'true' } else { 'false' }))
+            # The machines in it. Without these the window can list collections
+            # but not who is in them, which is most of what Modify is for.
+            if (Test-AudiResultMember -Result $collection -Name 'MemberNote') {
+                $e.SetAttribute('memberNote', [string]$collection.MemberNote)
+            }
+            if (Test-AudiResultMember -Result $collection -Name 'Members') {
+                foreach ($machine in @($collection.Members)) {
+                    $m = $doc.CreateElement('Machine')
+                    $m.InnerText = [string]$machine
+                    $null = $e.AppendChild($m)
+                }
+            }
             $null = $stateNode.AppendChild($e)
         }
         foreach ($scope in @($Result.State.SecurityScopes)) {
@@ -605,6 +629,8 @@ function Wait-AudiSwJobResult {
                                             Wanted        = [bool]::Parse($_.wanted)
                                             Exists        = [bool]::Parse($_.exists)
                                             HasDeployment = [bool]::Parse($_.hasDeployment)
+                                            Members       = @($_.SelectNodes('Machine') | ForEach-Object { $_.InnerText })
+                                            MemberNote    = $(if ($_.HasAttribute('memberNote')) { $_.memberNote } else { '' })
                                         } })
                         Scopes     = @($doc.SelectNodes('/JobResult/State/Scope') | ForEach-Object { $_.InnerText })
                         # NewValue starts at the current value, so a row nobody

@@ -87,6 +87,33 @@ function Get-AudiSwPackageState {
             }
         })
 
+        # ---- who is IN each collection ---------------------------------------
+        # Read for collections that exist, in the same round trip - the window
+        # needs the machines and the collections together to be any use, and a
+        # second job to fetch them would double the wait for no benefit.
+        foreach ($row in $collections + $extra) {
+            $members = @()
+            $note    = ''
+            if ($row.Exists) {
+                try {
+                    $members = @(& $Provider.GetCollectionMember @{ CollectionName = $row.Name })
+                    $rules = & $Provider.GetCollectionRuleSummary @{ CollectionName = $row.Name }
+                    if ($rules -and ($rules.QueryRules -gt 0 -or $rules.IncludeRules -gt 0)) {
+                        # A machine that arrives through a query rule is a member
+                        # too, but removing it here would be undone at the next
+                        # evaluation. Say so rather than offer something that
+                        # does not stick.
+                        $note = "This collection also fills itself from $($rules.QueryRules) query rule(s) and $($rules.IncludeRules) include rule(s). Machines that arrive that way are not listed and cannot be removed here."
+                    }
+                }
+                catch {
+                    $note = "The members could not be read: $($_.Exception.Message)"
+                }
+            }
+            $row | Add-Member -NotePropertyName 'Members'    -NotePropertyValue $members -Force
+            $row | Add-Member -NotePropertyName 'MemberNote' -NotePropertyValue $note    -Force
+        }
+
         $missing = @($collections | Where-Object { -not $_.Exists } | ForEach-Object { $_.Name })
         $scopes  = @(& $Provider.GetObjectSecurityScope @{ ApplicationName = $Plan.ApplicationName })
 
@@ -195,6 +222,9 @@ function Invoke-AudiSwChange {
         # them is ignored: the catalogue on THIS side decides which parameter is
         # called and what value is legal, never the window.
         [object[]]$SettingChanges = @(),
+        # Machines to put into, or take out of, this package's collections.
+        # Objects carrying Collection, Machine and Action (Add|Remove).
+        [object[]]$MemberChanges = @(),
         $Provider,
         [switch]$DryRun,
         [switch]$AllowUnverifiedEnvironment,
@@ -289,6 +319,22 @@ function Invoke-AudiSwChange {
         }
     }
 
+    # A machine may only be put into a collection that belongs to THIS package.
+    # The list comes from a window, and a window can be wrong; a typo must not be
+    # able to add a machine to somebody else's collection - which would install
+    # software on it.
+    $strayMember = @(@($MemberChanges) |
+                     Where-Object { $_ -and ([string]$_.Collection) -notlike "*$($Plan.PackageName)*" } |
+                     ForEach-Object { "$($_.Machine) -> $($_.Collection)" })
+    if ($strayMember.Count -gt 0) {
+        return & $finish $false ("Refused: {0}. A machine can only be added to a collection named for '{1}'." -f `
+                                 ($strayMember -join ', '), $Plan.PackageName)
+    }
+    $badAction = @(@($MemberChanges) | Where-Object { $_ -and ([string]$_.Action) -notin @('Add', 'Remove') })
+    if ($badAction.Count -gt 0) {
+        return & $finish $false "Refused: a machine change must say Add or Remove."
+    }
+
     $connection = Connect-AudiSccm -Plan $Plan -DryRun:$DryRun
     if (-not $connection.Ok) { return & $finish $false $connection.Message }
     Write-AudiLog -Context $log -Message $connection.Message
@@ -345,6 +391,41 @@ function Invoke-AudiSwChange {
             catch {
                 $reason = Get-AudiErrorText -ErrorRecord $_ -Context "Adding $name failed."
                 $results.Add([pscustomobject]@{ Step = 'Add'; Name = $name; Ok = $false; Message = $reason }) | Out-Null
+                return & $finish $false "$reason Stopped there - $($changed.Count) change(s) had already been made: $($changed -join '; ')."
+            }
+        }
+
+        # Machines go in AFTER any collection has been added, so a machine can be
+        # put straight into a collection created by the same job.
+        foreach ($change in @($MemberChanges)) {
+            $verb = [string]$change.Action
+            if ($OnProgress) { & $OnProgress "$verb $($change.Machine)" }
+            try {
+                if ($verb -eq 'Add') {
+                    if (-not (& $Provider.TestDevice @{ MachineName = $change.Machine })) {
+                        throw "SCCM does not know a machine called '$($change.Machine)'. Check the name, or wait for it to be discovered."
+                    }
+                    $already = @(& $Provider.GetCollectionMember @{ CollectionName = $change.Collection })
+                    if ($already -contains $change.Machine) {
+                        $results.Add([pscustomobject]@{ Step = 'Machine'; Name = $change.Machine; Ok = $true
+                            Message = "$($change.Machine) was already in $($change.Collection)." }) | Out-Null
+                        continue
+                    }
+                    & $Provider.AddCollectionMember @{ CollectionName = $change.Collection; MachineName = $change.Machine }
+                    $results.Add([pscustomobject]@{ Step = 'Machine'; Name = $change.Machine; Ok = $true
+                        Message = "$($change.Machine) added to $($change.Collection)." }) | Out-Null
+                    $changed.Add("$($change.Machine) added to $($change.Collection)") | Out-Null
+                }
+                else {
+                    & $Provider.RemoveCollectionMember @{ CollectionName = $change.Collection; MachineName = $change.Machine }
+                    $results.Add([pscustomobject]@{ Step = 'Machine'; Name = $change.Machine; Ok = $true
+                        Message = "$($change.Machine) removed from $($change.Collection)." }) | Out-Null
+                    $changed.Add("$($change.Machine) removed from $($change.Collection)") | Out-Null
+                }
+            }
+            catch {
+                $reason = Get-AudiErrorText -ErrorRecord $_ -Context "$verb $($change.Machine) failed."
+                $results.Add([pscustomobject]@{ Step = 'Machine'; Name = $change.Machine; Ok = $false; Message = $reason }) | Out-Null
                 return & $finish $false "$reason Stopped there - $($changed.Count) change(s) had already been made: $($changed -join '; ')."
             }
         }

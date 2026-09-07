@@ -173,8 +173,8 @@
 
        {processes} is the only placeholder. -->
   <DescriptionFormat
-      processPrefixEn="The following processes will be closed for installation: {processes}. "
-      processPrefixDe="Folgende Prozesse werden fuer die Installation geschlossen: {processes}. "/>
+      processPrefixEn="The following applications will be closed for installation: {processes}. "
+      processPrefixDe="Folgende Anwendungen werden fuer die Installation geschlossen: {processes}. "/>
 
   <!-- Package name layout.
 
@@ -219,12 +219,26 @@
       <Field name="ScriptAuthor" pattern="AppScriptAuthor\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
       <!-- The title a user sees in Software Center. The package name is a
            filing code, not something to show somebody. -->
-      <Field name="InstallTitle"  pattern="AppScriptFriendlyName\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
-      <Field name="InstallTitle"  pattern="InstallTitle\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <!-- The title a user sees in Software Center. PSADT 4 writes it inside the
+           $adtSession hashtable; older packages used the friendly name. -->
+      <Field name="InstallTitle"  pattern="InstallTitle\s*=\s*['\x22]([^'\x22]+)['\x22]" lastMatchWins="false"/>
+      <Field name="InstallTitle"  pattern="AppScriptFriendlyName\s*=\s*['\x22]([^'\x22]+)['\x22]" lastMatchWins="false"/>
       <!-- Processes PSADT closes before installing. NonUI is preferred; plain
            ProcToClose is the fallback. -->
-      <Field name="ProcToCloseNonUI" pattern="VWG_ProcToCloseNonUI\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
-      <Field name="ProcToClose"      pattern="VWG_ProcToClose\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <!-- THE WHOLE RIGHT-HAND SIDE IS CAPTURED, NOT A QUOTED STRING.
+           A real package writes these as PowerShell, in three shapes:
+
+             AppProcessesToClose = @()
+             AppProcessesToClose = @(''firefox'', ''plugin-container'')
+             $Global:VWG_ProcToClose = $adtSession.AppProcessesToClose
+
+           The last is an INDIRECTION - the names are in the session hashtable,
+           not on that line - so the line is captured raw and the tool resolves
+           what it points at. \b after ProcToClose stops it matching
+           ProcToCloseNonUI, which starts with the same letters. -->
+      <Field name="AppProcessesToClose" pattern="(?m)^\s*AppProcessesToClose\s*=\s*(.+?)\s*$" lastMatchWins="false"/>
+      <Field name="ProcToCloseNonUI"    pattern="(?m)^.*VWG_ProcToCloseNonUI\s*=\s*(.+?)\s*$" lastMatchWins="false"/>
+      <Field name="ProcToClose"         pattern="(?m)^.*VWG_ProcToClose\b\s*=\s*(.+?)\s*$" lastMatchWins="false"/>
 
       <!-- lastMatchWins (the default) is what makes SoftIdent correct.
            VWG_SoftIdent is declared twice: once in the standard block and again

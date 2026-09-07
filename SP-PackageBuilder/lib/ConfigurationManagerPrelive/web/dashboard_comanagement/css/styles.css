@@ -1,0 +1,130 @@
+#comgmtFunnelChart,
+#win10VersionsChart,
+#coMgmtEnrollStateChart,
+#workloadTransitionChart {
+    max-height: 300px;
+    position: relative;
+    height: 280px;
+}
+
+.c3-tooltip-container {
+    max-width: 200px;
+    max-height: 10px;
+}
+
+.tile-2-3 {
+    height: 350px;
+    width: 516px;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+.trans_tile {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    position: relative;
+    width: 518px;
+}
+
+h1 {
+    font-size: 15px;
+    font-weight: normal;
+    text-align: center;
+}
+
+div.scroll {
+    overflow-y: auto;
+}
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+}
+
+th {
+    border: 1px solid #ddd;
+    padding: 8px;
+    padding-top: 12px;
+    padding-bottom: 10px;
+    text-align: left;
+    background-color: #63707E;
+    color: var(--foreground-color);
+}
+
+#errorList tr:nth-child(even) {
+    background-color: #f2f2f2;
+}
+
+#errorList tr:nth-child(odd) {
+    background-color: white;
+}
+
+.table-format-noborder {
+    border: none;
+    width: 100%;
+}
+
+.table-element {
+    padding-left: 10px;
+    padding-right: 10px;
+    border-bottom: 1px solid #ddd;
+}
+
+.table-element-noborder {
+    padding-left: 10px;
+    padding-right: 10px;
+    padding-bottom: 5px;
+    padding-top: 5px;
+}
+
+.left {
+    text-align: left;
+}
+
+.errorTblBoby tr {
+    cursor: pointer;
+}
+
+.labelStyle2 {
+    margin-bottom: 0px;
+    position: relative;
+    font-size: 15px;
+    font-weight: normal;
+    text-align: center;
+}
+
+.client-version-table {
+    width: 300px;
+    display: none;
+    margin-left: auto;
+    margin-right: auto;
+    margin-top: 20px;
+}
+
+.cell {
+    border: .5px solid gainsboro;
+    display: table-cell;
+    vertical-align: middle;
+}
+
+.client-version-table > .row > .cell {
+    padding-left: 15px;
+    padding-right: 15px;
+    width: 100px;
+}
+
+.row {
+    height: 30px;
+    display: table-row
+}
+
+.linkbutton {
+    margin-top: 0px;
+    border: none;
+    color: #0000ff;
+    background-color: #ffffff;
+}

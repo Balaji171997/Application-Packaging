@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html ng-app="dashboard">
+<head>
+	<title>Security Dashboard</title>
+	<meta charset="UTF-8">
+	<meta content="IE=edge" http-equiv="X-UA-Compatible">
+	<meta name="description" content="Software Updates Dashboard">
+	<meta name="keywords" content="Updates, Dashboard">
+
+	<link href="../css/c3.min.css" rel="stylesheet" type="text/css">
+    <link href="../css/columns.css" rel="stylesheet" type="text/css">
+	<link href="css/columns.css" rel="stylesheet" type="text/css">
+	<link href="css/styles.css" rel="stylesheet" type="text/css">
+
+	<script src="../js/angular.min.js" type="text/javascript"></script>
+	<script src="../js/utility.js" type="text/javascript"></script>
+	<script src="../js/external.js" type="text/javascript"></script>
+	<script src="../js/d3.min.js" type="text/javascript"></script>
+	<script src="../js/c3.min.js" type="text/javascript"></script>
+	<script src="js/controller.js" type="text/javascript"></script>
+	<noscript>Javascript is not enabled</noscript>
+</head>
+
+<body id="dashboardBody" ng-controller="dashboardController">
+	<script>
+        function handleSliderChange() {
+            var controllerElement = document.getElementById('dashboardBody');
+            var scope = angular.element(controllerElement).scope();
+            scope.handleSliderChange();
+        }
+	</script>
+  <div class="tile-container-2-6">
+  
+	<div class="tile-container-2-2 ng-cloak">
+		
+		<div class="tile-2-2-transparent" ng-hide="showForm">
+			<div class="tile-content">
+			  <button class="btn" ng-click="toggle('showForm')">X</button>
+			  <h1 style="padding-left: 44px;" ng-bind="getString('filterLabel')" tabindex="1"></h1>
+			  <div class="form">
+				<div class="form-row">
+				  <span class="form-label" ng-bind="getString('categoryLabel')"></span>
+				</div>
+				<div class="form-row-list" ng-repeat="cat in categories">
+				  <label class="label-list">
+					  <input
+						type="checkbox"
+						name="selectedCats[]"
+						value="{{cat.name}}"
+						ng-model="cat.selected"
+					  > {{cat.name}}
+				  </label>
+				</div>
+				<div class="form-row">
+					<span class="form-label" ng-bind="getString('olderThanLabel')"></span>
+					<div id="sliderContainer">
+						<label for="older-than-label-slider" id="slider-value-label"></label>
+						<input id="older-than-label-slider" type="range" name="points" min="0" max="30" value="15" aria-valuemin="0" aria-valuemax="30" aria-valuenow="15" onchange="handleSliderChange()" class="slider" tabindex="1">
+					</div>
+				</div>
+				
+				<div class="form-row">
+				  <button ng-bind="getString('applyLabel')" type="button" ng-click="applyFilters(); toggle('showForm')"></" tabindex="1"></button>
+				  <button ng-bind="getString('cancelLabel')" ng-click="toggle('showForm')" type="button" tabindex="1"></button>
+				</div>
+				
+			  </div>
+			</div>
+		</div>
+		
+		<div class="tile-2-2" ng-style="{'opacity' : showForm ? 1 : 0.05}">
+			<div class="tile-content">
+			  <button class="btn" ng-click="toggle('showForm')">...</button>
+			  <h1 ng-bind="getString('winUpdatesDonutTitle')" tabindex="1" style="padding-left: 44px;" >
+			  </h1> 
+			  <div id="updatesComplianceDonut">
+			  </div>
+			</div>
+		</div>
+		
+	</div>
+  
+    <div class="tile-2-2">
+      <h1 ng-bind="getString('missingUpdatesByCategoryTitle')" tabindex="1">
+      </h1> 
+      <div id="missingUpdatesByCategoryChart">
+      </div>
+    </div>
+	
+	<div class="tile-1-2" ng-repeat="tile in tiles">
+        <div class="tile-content">
+          <div class="tile-content-inner" tabindex="1">
+            <span ng-bind="tile.headerText"></span>
+            <div>
+              <span id="tile-value" ng-bind="tile.value" ng-click="tile.active && alertClick()" ng-style="{'text-decoration': tile.active ? 'underline' : 'none', 'cursor': tile.active ? 'pointer' : 'auto'}"></span>
+              <img class="icon" alt="Status Icon" ng-if="tile.tileType != ''" ng-src="../dashboard/img/{{getTileImage(tile.tileType)}}">
+            </div>
+          </div>
+        </div>
+    </div>
+
+  </div>
+  
+  <br class="clear">
+  
+  <div class="tile-container-2-6">
+    <div class="tile-2-6">
+        <h1 ng-bind="getString('topMissingUpdatesTitle')" tabindex="1">
+        </h1>
+        <div id="topMissingUpdatesChart">
+        </div>
+    </div>
+  </div>
+</body>
+</html>

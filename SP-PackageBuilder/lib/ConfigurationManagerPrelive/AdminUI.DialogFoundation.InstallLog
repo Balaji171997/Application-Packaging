@@ -1,0 +1,12 @@
+﻿Installing assembly 'C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.DialogFoundation.dll'.
+Affected parameters are:
+   showcallstack = 
+   logfile = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.DialogFoundation.InstallLog
+   assemblypath = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.DialogFoundation.dll
+   logtoconsole = 
+Committing assembly 'C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.DialogFoundation.dll'.
+Affected parameters are:
+   showcallstack = 
+   logfile = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.DialogFoundation.InstallLog
+   assemblypath = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.DialogFoundation.dll
+   logtoconsole = 

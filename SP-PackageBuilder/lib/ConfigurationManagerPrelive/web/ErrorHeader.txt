@@ -1,0 +1,41 @@
+<head>
+  <title>Configuration Manager Web</title>
+  <meta charset="UTF-8">
+  <meta content="IE=edge" http-equiv="X-UA-Compatible">
+
+  <style>
+    body {
+      background: #F4F7FC;
+      font-family: 'Segoe UI';
+    }
+    .tile-content {
+      height: 100%;
+      width: 100%;
+      display: table;
+    }
+    .tile-content-inner {
+      display: table-cell;
+      vertical-align: middle;
+      text-align: center;
+    }
+    .tile-container-1-6 {
+      height: 156px;
+      display: inline-block;
+      float: left;
+      width: 1056px;
+    }
+    .tile-1-6 {
+      column-gap: 10px;
+      vertical-align: middle;
+      text-align: center;
+      border: 1px solid gainsboro;
+      margin: 5px;
+      float: left;
+      font-size: 16px;
+      background: white;
+      position: relative;
+      height: 144px;
+      width: 1044px;
+    }
+  </style>
+</head>

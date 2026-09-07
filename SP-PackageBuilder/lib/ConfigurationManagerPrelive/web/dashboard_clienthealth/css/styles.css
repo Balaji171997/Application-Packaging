@@ -1,0 +1,352 @@
+﻿.tile-2-6-placeholder-text {
+  font-size: 30px;
+  vertical-align: middle;
+}
+.btn {
+  background-color: transparent;
+  border: none;
+  float: right;
+  color: #000000;
+  font-size: 12px;
+  line-height: 8px;
+  padding-top: 6px;
+  width: 0px;
+  font-weight: bold;
+  display: inline-block;
+}
+#tile-value {
+  font-size: 50px;
+  font-weight: 100;
+}
+.percentage {
+  font-size: 50px;
+  font-weight: 100;
+}
+.percentage span {
+  font-size: 25px;
+}
+.plus {
+  width: 40px;
+  height: 40px;
+}
+.icon {
+  width: 16px;
+  height: 16px;
+  margin-left: 5px;
+}
+.form {
+  padding: 0 10px;
+  font-size: 12px;
+  line-height: 30px;
+}
+.form-label {
+  float: left;
+  padding-top: 5px;
+}
+.form-row {
+  width: 100%;
+  display: inline-block;
+}
+.form-row > input
+{
+  width: 220px;
+  float: right;
+}
+
+.form-row > select {
+  width: 150px;
+  float: right;
+}
+.form-row > input[type="number"],
+.form-row > select[type="number"] {
+  width: 40px;
+}
+.c3-tooltip-container {
+  max-width: 200px;
+  max-height: 10px;
+}
+.selected {
+  background-color: #D3D3D3;
+  color: #000000;
+}
+[ng\:cloak], [ng-cloak], [data-ng-cloak], [x-ng-cloak], .ng-cloak, .x-ng-cloak { 
+    display: none !important; 
+}
+h1 {
+  font-size: 15px;
+  font-weight: normal;
+  text-align: center;
+  margin-bottom: 0px;
+}
+p, a {
+  font-size: 11px;
+  font-weight: normal;
+  text-align: center;
+}
+select {
+  padding: 2px;
+  font-size: 12px;
+}
+button {
+  line-height: 14px;
+  float: center;
+  margin-top: 25px;
+  margin-left: 5px;
+  padding: 3px 18px 3px 18px;
+  border: 2px solid #555555;
+  color: #ffffff;
+  background-color: #707070;
+}
+li {
+  list-style-type: none;
+  text-align: left;
+  font-size: 12px;
+}
+nav ul {
+  overflow: auto;
+  overflow-y: auto;
+}
+#selectWidth {
+    width: 232px;
+}
+#clientFont {
+    font-size: 30px;
+    font-weight: 100;
+}
+.table-bordered {
+    border:1px solid #dee2e6
+}
+.table-bordered td,.table-bordered th {
+    border:1px solid #dee2e6
+}
+.table-bordered thead td,.table-bordered thead th {
+    border-bottom-width:2px
+}
+.table-striped tbody tr:nth-of-type(odd) {
+    background-color:rgba(0,0,0,.05)
+}
+.table {
+    width:100%;
+    max-width:100%;
+    margin-bottom:1rem;
+    background-color:transparent
+}
+.table td,.table th {
+    padding:.75rem;
+    vertical-align:top;
+    border-top:1px solid #dee2e6
+}
+.table thead th {
+    vertical-align:bottom;
+    border-bottom:2px solid #dee2e6
+}
+.table tbody+tbody {
+    border-top:2px solid #dee2e6
+}
+.table .table {
+    background-color:#fff
+}
+.table-sm td,.table-sm th {
+    padding:.3rem
+}
+.inner-addon {
+    position: relative;
+    width: 95%;
+}
+#searchIcon {
+    background: white url("../img/search.png") 0.5% no-repeat;
+    background-size: 25px 25px;
+    margin-left: auto;
+}
+.inner {
+    position:absolute;
+    bottom: 20px;
+    left: 0;
+    right: 0;
+    margin: auto;
+}
+.pointer {
+    cursor: pointer;
+    text-align: left;
+    padding-left: 10px;
+}
+.pointer-mid {
+    cursor: pointer;
+}
+.searchFilter {
+    display:block;
+    width:100%;
+    height:34px;
+    padding:6px 12px;
+    font-size:14px;
+    line-height:1.42857143;
+    color:#555;
+    font-size: 16px;
+    padding-left: 35px;
+}
+.normalLabel {
+    font-weight:normal;
+}
+.button {
+    position: relative;
+}
+.center {
+    position:absolute;
+    bottom: 5px;
+    left: 0;
+    right: 0;
+}
+.trueCenter {
+    display: flex;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: space-between;
+}
+.biggerText {
+    font-size: 14px;
+    position: relative;
+    font-weight: bold;
+    margin: 0;
+}
+#scenarioText {
+    margin-left: 10px;
+    font-size: 16px;
+    font-weight: bold;
+}
+.labelStyle {
+    position: relative;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.labelStyle2 {
+    margin-bottom: 0px;
+    position: relative;
+    font-size: 15px;
+    font-weight: normal;
+    text-align: center;
+}
+
+.client-version-table {
+    width: 300px;
+    display: none;
+    margin-left: auto;
+    margin-right: auto;
+    margin-top: 20px;
+}
+
+.cell {
+    border: .5px solid gainsboro;
+    display: table-cell;
+    vertical-align: middle;
+}
+
+.client-version-table > .row > .cell {
+    padding-left: 15px;
+    padding-right: 15px;
+    width: 100px;
+}
+
+.row {
+    height: 30px;
+    display: table-row
+}
+
+.linkbutton {
+    margin-top: 0px;
+    border: none;
+    color: #0000ff;
+    background-color: #ffffff;
+}
+
+#filterCheckboxes {
+    width: 90%;
+    display: flex;
+    flex-flow: column nowrap;
+    align-items: flex-start;
+    padding-top: 20px;
+    margin-left: 40px;
+}
+
+#collectionPicker {
+    width: 95%;
+    padding-bottom: 30px;
+}
+#clientCollectionAria {
+    width: 300px;
+    margin-left:15px;
+    text-wrap: normal;
+}
+#sliderContainer {
+    padding-top: 20px;
+    padding-bottom: 0;
+    margin-bottom: 0;
+    display: flex;
+    flex-flow: row nowrap;
+    justify-content: center;
+}
+
+#buttonContainer #evalButton #PolicyBtn #softwareBtn #hardwareBtn #DDRBtn #statusBtn {
+    padding-top: 5px;
+}
+
+#summarization {
+    padding-top: 0;
+    margin-top: 0;
+}
+
+.slider {
+    height: 17.67px;
+    width: 150px;
+    padding-top: 3px;
+    padding-left: 10px;
+}
+
+input[type="range"]::-ms-fill-lower {
+    background-color: #43e5f7;
+}
+
+input[type="range"]::-ms-fill-upper {
+    background-color: #d3d3d3;
+}
+
+input[type="range"]::-ms-track {
+    border-color: transparent;
+    color: transparent;
+    height: 6px;
+}
+
+input[type="range"]::-ms-thumb {
+    width: 14px;
+    height: 14px;
+    border: none;
+    border-radius: 14px;
+}
+
+input[type="range"]::-ms-thumb:active {
+    background-color: #808080;
+}
+
+@media screen and (-ms-high-contrast: active) {
+    .c3-gauge-value {
+        stroke: WindowText !important;
+        fill: WindowText !important;
+    }
+
+    .c3-axis .domain {
+        stroke: WindowText !important;
+    }
+
+    .c3-axis line {
+        stroke: WindowText !important;
+    }
+
+    .c3-axis text {
+        stroke: WindowText !important;
+    }
+
+    .c3-legend-item text {
+        stroke: WindowText !important;
+    }
+}

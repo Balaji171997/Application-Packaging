@@ -136,6 +136,8 @@ $defaults = Get-AudiDefaults
 # handlers that can fire before the package has been read.
 $script:DocOperatingSystems = @()   # Windows versions the instruction document ticked
 $script:SettingsBaseline    = @{}   # setting values as the site reported them
+$script:CollectionMembers   = @{}   # collection name -> machines the site reported
+$script:MemberChanges       = @()   # queued Add/Remove, sent only on Apply
 
 function Set-Status { param([string]$Text, [string]$Colour = '#FF16242A')
     $ui.txtStatus.Text = $Text
@@ -840,7 +842,7 @@ function Submit-AudiAction {
         The same road as Integrate: a file into the drop folder, the server does
         the work, the result comes back. The window still touches no site.  #>
     param([string]$Action, $Plan, [string[]]$Add = @(), [string[]]$Remove = @(),
-          [object[]]$SettingChanges = @(), [string]$Description)
+          [object[]]$SettingChanges = @(), [object[]]$MemberChanges = @(), [string]$Description)
 
     $code = [string]$ui.cboEnvironment.SelectedItem
     $drop = Get-ActiveDropFolder
@@ -863,6 +865,7 @@ function Submit-AudiAction {
         Add         = $Add
         Remove      = $Remove
         SettingChanges = $SettingChanges
+        MemberChanges  = $MemberChanges
     } -Body {
         try {
             . (Join-Path $toolRoot 'Load.ps1')
@@ -870,7 +873,8 @@ function Submit-AudiAction {
             $doc = New-AudiSwJobFile -PackageName $jobArgs.PackageName -EnvironmentCode $jobArgs.Environment `
                                      -Action $jobArgs.Action -Rfc $jobArgs.Rfc -Detail $jobArgs.Detail `
                                      -AddCollections $jobArgs.Add -RemoveCollections $jobArgs.Remove `
-                                     -SettingChanges $jobArgs.SettingChanges
+                                     -SettingChanges $jobArgs.SettingChanges `
+                                     -MemberChanges $jobArgs.MemberChanges
 
             $submission = Submit-AudiSwJob -DropFolder $jobArgs.DropFolder -Job $doc
             $state.JobId = $submission.JobId
@@ -884,6 +888,105 @@ function Submit-AudiAction {
         catch { $state.Error = $_.Exception.Message }
         finally { $state.Waiting = $false; $state.Done = $true; $state.Running = $false }
     }
+}
+
+function Show-CollectionMembers { param([string]$CollectionName)
+    <#  The machines in one collection, plus anything queued for it.
+
+        A queued change appears as a row with an Action, exactly like the
+        collection rows above, so the same "tick it, then Apply" habit works for
+        machines too. Nothing is sent until Apply.  #>
+    $ui.txtMemberOf.Text = $(if ($CollectionName) { $CollectionName } else { '- pick a collection above -' })
+
+    if (-not $CollectionName) {
+        $ui.lstMembers.ItemsSource = @()
+        $ui.txtMembersNote.Text = ''
+        return
+    }
+
+    $rows = New-Object System.Collections.Generic.List[object]
+
+    $onSite = @()
+    if ($script:CollectionMembers.ContainsKey($CollectionName)) {
+        $onSite = @($script:CollectionMembers[$CollectionName].Members)
+    }
+    foreach ($machine in $onSite) {
+        # Already queued for removal - do not offer the same machine twice.
+        $queued = @($script:MemberChanges | Where-Object { $_.Collection -eq $CollectionName -and $_.Machine -eq $machine })
+        if ($queued.Count -gt 0) { continue }
+        $rows.Add([pscustomobject]@{ Selected = $false; Action = 'Remove'; Machine = $machine }) | Out-Null
+    }
+
+    foreach ($change in @($script:MemberChanges | Where-Object { $_.Collection -eq $CollectionName })) {
+        $rows.Add([pscustomobject]@{ Selected = $true; Action = $change.Action; Machine = $change.Machine }) | Out-Null
+    }
+
+    $ui.lstMembers.ItemsSource = $rows.ToArray()
+
+    $note = ''
+    if ($script:CollectionMembers.ContainsKey($CollectionName)) {
+        $note = [string]$script:CollectionMembers[$CollectionName].MemberNote
+    }
+    if (-not $note -and $onSite.Count -eq 0) { $note = 'No machines are directly in this collection yet.' }
+    $ui.txtMembersNote.Text = $note
+}
+
+function Get-SelectedCollectionName {
+    $row = $ui.lstModify.SelectedItem
+    if (-not $row) { return '' }
+    return [string]$row.Name
+}
+
+function Add-QueuedMachine {
+    <#  Queues one or more machines for the selected collection.
+
+        The collection has to EXIST on the site: a machine cannot go into one
+        that has not been created yet, and queueing it would fail on the server
+        minutes later rather than here.  #>
+    $collection = Get-SelectedCollectionName
+    if (-not $collection) { Set-Status 'Pick a collection first, then add a machine to it.' '#FF8A5300'; return }
+
+    $row = $ui.lstModify.SelectedItem
+    if ($row -and [string]$row.State -eq 'not there') {
+        Set-Status "$collection is not on the site yet. Tick it to be added and Apply first, then put machines in it." '#FF8A5300'
+        return
+    }
+
+    $typed = $ui.txtAddMachine.Text.Trim()
+    if (-not $typed) { Set-Status 'Type a machine name first.' '#FF8A5300'; $ui.txtAddMachine.Focus() | Out-Null; return }
+
+    # However the list was separated - pasted straight out of a mail or a ticket.
+    $machines = @($typed -split '[,;\s]+' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
+    $added = 0
+    foreach ($machine in $machines) {
+        $already = @($script:MemberChanges | Where-Object { $_.Collection -eq $collection -and $_.Machine -eq $machine })
+        if ($already.Count -gt 0) { continue }
+        $script:MemberChanges += [pscustomobject]@{ Collection = $collection; Machine = $machine; Action = 'Add' }
+        $added++
+    }
+
+    $ui.txtAddMachine.Text = ''
+    Show-CollectionMembers -CollectionName $collection
+    Set-Status "$added machine(s) queued for $collection. Nothing is sent until Apply."
+}
+
+function Get-QueuedMemberChange {
+    <#  What Apply sends: everything queued, plus every ticked removal.  #>
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($c in @($script:MemberChanges)) { $out.Add($c) | Out-Null }
+
+    $collection = Get-SelectedCollectionName
+    if ($collection -and $ui.lstMembers.ItemsSource) {
+        foreach ($row in @($ui.lstMembers.ItemsSource)) {
+            if (-not $row.Selected) { continue }
+            if ($row.Action -ne 'Remove') { continue }
+            $dup = @($out | Where-Object { $_.Collection -eq $collection -and $_.Machine -eq $row.Machine })
+            if ($dup.Count -gt 0) { continue }
+            $out.Add([pscustomobject]@{ Collection = $collection; Machine = $row.Machine; Action = 'Remove' }) | Out-Null
+        }
+    }
+    return $out.ToArray()
 }
 
 function Show-PackageState { param($State)
@@ -919,6 +1022,18 @@ function Show-PackageState { param($State)
                 Why = 'In place and as the environment file asks. Tick only if you want it gone.' }) | Out-Null
         }
     }
+
+    # Keep what each collection reported, so clicking a row shows its machines
+    # without another trip to the server.
+    $script:CollectionMembers = @{}
+    $script:MemberChanges     = @()
+    foreach ($collection in @($State)) {
+        $script:CollectionMembers[[string]$collection.Name] = [pscustomobject]@{
+            Members    = @($(if (Test-HasValue $collection 'Members')    { $collection.Members }    else { @() }))
+            MemberNote =   $(if (Test-HasValue $collection 'MemberNote') { $collection.MemberNote } else { '' })
+        }
+    }
+    Show-CollectionMembers -CollectionName ''
 
     $ui.lstModify.ItemsSource = $rows.ToArray()
     $actionable = @($rows | Where-Object { $_.Actionable }).Count
@@ -994,9 +1109,22 @@ function Start-Inspect {
 function Start-ApplyChanges {
     $rows     = @($ui.lstModify.ItemsSource | Where-Object { $_.Selected -and $_.Action -ne '-' })
     $settings = @(Get-ChangedSettings)
+    $members  = @(Get-QueuedMemberChange)
 
-    if ($rows.Count -eq 0 -and $settings.Count -eq 0) {
-        Set-Status 'Nothing to apply. Change a setting, or tick a collection row.' '#FF8A5300'; return
+    if ($rows.Count -eq 0 -and $settings.Count -eq 0 -and $members.Count -eq 0) {
+        Set-Status 'Nothing to apply. Change a setting, tick a collection, or add a machine.' '#FF8A5300'; return
+    }
+
+    # Machines are the one change here that reaches real computers - software
+    # installs on them - so they are confirmed by name, not by count.
+    if ($members.Count -gt 0) {
+        $lines = @($members | ForEach-Object { "{0,-8} {1}   ({2})" -f $_.Action, $_.Machine, $_.Collection })
+        $touched = @(@($members | ForEach-Object { $_.Collection }) | Sort-Object -Unique).Count
+        $answer = [System.Windows.MessageBox]::Show(
+            ("This changes which machines are in {0} collection(s):`r`n`r`n{1}`r`n`r`nA machine added to an install collection will install this software. Continue?" -f `
+                $touched, ($lines -join "`r`n")),
+            'Change machines', 'YesNo', 'Warning')
+        if ($answer -ne 'Yes') { Set-Status 'Nothing was submitted.'; return }
     }
 
     $add    = @($rows | Where-Object { $_.Action -eq 'Add' }    | ForEach-Object { $_.Name })
@@ -1025,7 +1153,8 @@ function Start-ApplyChanges {
 
     try   { $plan = New-PlanFromForm } catch { Set-Status $_.Exception.Message '#FF8A5300'; return }
     Submit-AudiAction -Action 'Change' -Plan $plan -Add $add -Remove $remove -SettingChanges $settings `
-                      -Description ("Applying {0} change(s)" -f ($add.Count + $remove.Count + $settings.Count))
+                      -MemberChanges $members `
+                      -Description ("Applying {0} change(s)" -f ($add.Count + $remove.Count + $settings.Count + $members.Count))
 }
 
 # ------------------------------------------------------------------ copying
@@ -1059,6 +1188,10 @@ $ui.mnuCopyRows.Add_Click({
 $ui.mnuCopyAll.Add_Click({
     Copy-ToClipboard (Format-ResultRows @($ui.lstResults.ItemsSource)) 'Every row'
 })
+
+$ui.lstModify.Add_SelectionChanged({ Show-CollectionMembers -CollectionName (Get-SelectedCollectionName) })
+$ui.btnAddMachine.Add_Click({ Add-QueuedMachine })
+$ui.txtAddMachine.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Return') { Add-QueuedMachine } })
 
 $ui.btnInspect.Add_Click({ Start-Inspect })
 $ui.btnApplyChanges.Add_Click({ Start-ApplyChanges })

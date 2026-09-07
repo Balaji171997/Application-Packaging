@@ -758,6 +758,69 @@ Assert-True 'a loaded form does write the name and description' `
     ($fullSet[0].Detail -like '*name*' -and $fullSet[0].Detail -like '*descEn*') $fullSet[0].Detail
 
 Write-Host ''
+# ------------------------------------------- machines in and out of collections
+Write-Host ''
+Write-Host 'Machines in collections' -ForegroundColor White
+
+$memPlan = New-TestPlan
+$memCol  = $memPlan.Collections[0].Name
+function New-MemberProvider { param($Members = @{}, $Known = @(), $Fail = '')
+    New-AudiSccmDryRunProvider -ExistingApplications @((New-TestPlan).ApplicationName) `
+        -ExistingCollections @((New-TestPlan).Collections[0].Name) -Members $Members -KnownMachines $Known -FailOn $Fail
+}
+
+# Inspect must bring the machines back with the collections. Without them the
+# window can list collections but not who is in them, which is most of the point.
+$memProv  = New-MemberProvider -Members @{ $memCol = @('PC-0001', 'PC-0002') }
+$memState = Get-AudiSwPackageState -Plan $memPlan -Provider $memProv -DryRun
+$memRow   = @($memState.Collections | Where-Object { $_.Name -eq $memCol })[0]
+Assert-Equal 'Inspect reports the machines in a collection' 'PC-0001,PC-0002' (@($memRow.Members) -join ',')
+
+# ---- adding and removing
+$memRun = Invoke-AudiSwChange -Plan $memPlan -Provider $memProv -DryRun -MemberChanges @(
+              [pscustomobject]@{ Collection = $memCol; Machine = 'PC-0003'; Action = 'Add' }
+              [pscustomobject]@{ Collection = $memCol; Machine = 'PC-0001'; Action = 'Remove' })
+Assert-True  'a machine change succeeds' $memRun.Ok $memRun.Message
+Assert-Equal 'one machine was added'   1 (@($memRun.Provider.Log | Where-Object Operation -eq 'AddCollectionMember').Count)
+Assert-Equal 'and one removed'         1 (@($memRun.Provider.Log | Where-Object Operation -eq 'RemoveCollectionMember').Count)
+Assert-Equal 'the collection now holds the right machines' 'PC-0002,PC-0003' `
+    ((@(& $memProv.GetCollectionMember @{ CollectionName = $memCol })) -join ',')
+
+# ---- adding one that is already there is not an error, and not a second add
+$dupProv = New-MemberProvider -Members @{ $memCol = @('PC-0001') }
+$dupRun  = Invoke-AudiSwChange -Plan $memPlan -Provider $dupProv -DryRun -MemberChanges @(
+              [pscustomobject]@{ Collection = $memCol; Machine = 'PC-0001'; Action = 'Add' })
+Assert-True  'adding a machine that is already there succeeds' $dupRun.Ok $dupRun.Message
+Assert-Equal 'and does not add it twice' 0 (@($dupRun.Provider.Log | Where-Object Operation -eq 'AddCollectionMember').Count)
+Assert-True  'and says it was already there' `
+    ((@($dupRun.Steps | Where-Object { $_.Step -eq 'Machine' })[0].Message) -like '*already*')
+
+# ---- REFUSALS. A machine going into the wrong collection installs software on
+#      it, so these matter more than any other check in this file.
+$strayRun = Invoke-AudiSwChange -Plan $memPlan -Provider (New-MemberProvider) -DryRun -MemberChanges @(
+                [pscustomobject]@{ Collection = 'SM1-SomebodyElsesPackage'; Machine = 'PC-9999'; Action = 'Add' })
+Assert-True 'a collection belonging to another package is refused' (-not $strayRun.Ok)
+Assert-True 'and the refusal names the package it is allowed to touch' `
+    ($strayRun.Message -like "*$($memPlan.PackageName)*") $strayRun.Message
+Assert-Equal 'and nothing at all was done' 0 `
+    (@($strayRun.Provider.Log | Where-Object { $_.Operation -like '*CollectionMember' }).Count)
+
+$unknownRun = Invoke-AudiSwChange -Plan $memPlan -Provider (New-MemberProvider -Known @('PC-0001')) -DryRun `
+                  -MemberChanges @([pscustomobject]@{ Collection = $memCol; Machine = 'NOT-A-REAL-PC'; Action = 'Add' })
+Assert-True 'a machine SCCM does not know is refused' (-not $unknownRun.Ok)
+Assert-True 'and the message says so plainly' ($unknownRun.Message -like '*does not know a machine*') $unknownRun.Message
+
+$badActionRun = Invoke-AudiSwChange -Plan $memPlan -Provider (New-MemberProvider) -DryRun `
+                    -MemberChanges @([pscustomobject]@{ Collection = $memCol; Machine = 'PC-1'; Action = 'Destroy' })
+Assert-True 'an action that is not Add or Remove is refused' (-not $badActionRun.Ok)
+
+# ---- a failure part way says how far it got, and undoes nothing
+$failRun = Invoke-AudiSwChange -Plan $memPlan -Provider (New-MemberProvider -Fail 'AddCollectionMember') -DryRun `
+               -MemberChanges @([pscustomobject]@{ Collection = $memCol; Machine = 'PC-0005'; Action = 'Add' })
+Assert-True 'a failed machine change reports failure' (-not $failRun.Ok)
+Assert-Equal 'and claims no rollback' 0 $failRun.RolledBack.Count
+
+Write-Host ''
 if ($script:Fail -eq 0) { Write-Host ("All {0} checks passed." -f $script:Pass) -ForegroundColor Green }
 else                    { Write-Host ("{0} passed, {1} FAILED." -f $script:Pass, $script:Fail) -ForegroundColor Red }
 Write-Host ''

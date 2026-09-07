@@ -14,8 +14,8 @@
 
   <!-- CONFIRM: the machine that runs the collector task (Zone: Global). -->
   <Runner host="AUDIINSC0002.audi.vwg"/>
-  <Service account="MN-MAN\AW140"
-           allowedGroup="MN-MAN\AW140"/>
+  <Service account="AUDI\svc-swint"
+           allowedGroup="AUDI\SW-Packaging"/>
 
   <Transport mode="DropFolder"
              dropFolder="C:\AudiSwIntegration\DropFolder\INA"

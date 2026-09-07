@@ -1,0 +1,100 @@
+﻿<!DOCTYPE html>
+<html ng-app="dashboard">
+<head>
+    <title>Co-management reporting Dashboard</title>
+    <meta charset="UTF-8">
+    <meta content="IE=edge" http-equiv="X-UA-Compatible">
+    <meta name="description" content="Dashboard showing co-management reports">
+    <meta name="keywords" content="CoManagement, CoMgmt, Reporting, Dashboard">
+
+    <link href="../css/c3.min.css" rel="stylesheet" type="text/css">
+    <link href="../css/columns.css" rel="stylesheet" type="text/css">
+    <link href="css/styles.css" rel="stylesheet" type="text/css">
+
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="../js/utility.js" type="text/javascript"></script>
+    <script src="../js/d3.min.js" type="text/javascript"></script>
+    <script src="../js/c3.min.js" type="text/javascript"></script>
+    <script src="../js/external.js" type="text/javascript"></script>
+    <script src="js/controller.js" type="text/javascript"></script>
+    <noscript>Javascript is not enabled</noscript>
+</head>
+
+<body ng-controller="dashboardController">
+    <div id="memacContainer" class="tile-content-inner"></div>
+    <div class="tile-container-2-6" tabindex="1">
+        <div class="tile tile-2-3" tabindex="10">
+            <h1 ng-bind="strings.WinOSChartTitle" tabindex="11"></h1>
+
+            <button class="linkbutton" id="showWin10VersionDistributionChartButton" ng-click="toggleWin10VersionDistributionChart()" tabindex="12" ng-bind="strings.ShowTable"></button>
+            <div id="win10VersionsTable" class="client-version-table" tabindex="13">
+                <div class="row">
+                    <div class="cell" tabindex="14">Version</div>
+                    <div class="cell" tabindex="15">Count</div>
+                </div>
+            </div>
+
+            <div id="win10VersionsChart"></div>
+        </div>
+        <div class="tile tile-2-3" tabindex="20">
+            <h1 ng-bind="strings.CoMgmtStatusChartTitle" tabindex="21"></h1>
+            <div id="funnel" style="text-align:left ; padding-left:-20px" tabindex="23">
+                <table class="table-format-noborder" tabindex="24">
+                    <tr style="text-align:left; padding-left:-20px">
+                        <td class="table-element-noborder left">
+                            <table class="table-format-noborder">
+                                <tr>
+                                    <td class="table-element-noborder left">
+                                        <a href="#" ng-click="openCoMgmtEligibleDevicesCollection()" tabindex="25">{{strings.EligibleDevices}}</a>
+                                    </td>
+                                </tr>
+                                <tr><td class="table-element-noborder left">{{strings.Scheduled}}</td></tr>
+                                <tr><td class="table-element-noborder left">{{strings.Enrolling}}</td></tr>
+                                <tr><td class="table-element-noborder left">{{strings.Enrolled}}</td></tr>
+                            </table>
+                        </td>
+                        <td colspan="5"><div id="comgmtFunnelChart" style="text-align:right; padding-bottom:10px"> </div></td>
+                    </tr>
+                </table>
+            </div>
+            <div ng-show="userHasPermissionToConfigCoMgmt">
+                <button class="linkbutton" ng-click="launchCoMgmtWizard()" ng-bind="strings.EnrollEligibleDevices" tabindex="29" style="margin: auto; text-align: center; cursor: pointer;"></button>
+            </div>
+        </div>
+    </div>
+
+    <div class="tile-container-2-6" tabindex="30">
+        <div class="tile tile-2-3" tabindex="31">
+            <h1 ng-bind="strings.CoMgmtEnrollStateChartTitle" tabindex="32"></h1>
+
+            <button class="linkbutton" id="showEnrollmentStatusChartButton" ng-click="toggleEnrollmentStatusChart()" tabindex="33" ng-bind="strings.ShowTable"></button>
+            <div id="enrollmentStatusTable" class="client-version-table" tabindex="34">
+                <div class="row">
+                    <div class="cell" tabindex="35">Version</div>
+                    <div class="cell" tabindex="36">Count</div>
+                </div>
+            </div>
+
+            <div id="coMgmtEnrollStateChart"></div>
+        </div>
+        <div class="trans_tile tile-2-3 scroll" tabindex="50">
+            <table id="errorList">
+                <thead>
+                    <tr>
+                        <th ng-bind="strings.Count" tabindex="51"></th>
+                        <th ng-bind="strings.Error" tabindex="52"></th>
+                    </tr>
+                </thead>
+            </table>
+        </div>
+    </div>
+
+    <div class="tile-container-2-6">
+        <div class="tile tile-2-6">
+            <h1 id="workloadTransitionAriaLbl" ng-bind="strings.WorkloadTransitionChartTitle" tabindex="71" aria-label=""></h1>
+            <div id="workloadTransitionChart">
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,50 @@
+.tile-container-1-4-1 {
+    height: 156px;
+    display: inline-block;
+    float: left;
+    width: 704px;
+}
+
+.tile-container-1-4-2 {
+    height: 312px;
+    display: inline-block;
+    float: left;
+    width: 704px;
+    margin-top: 8px;
+}
+
+.tile-2-1 {
+    height: 100%;
+    width: 164px;
+}
+
+.c3-chart-arc .c3-gauge-value {
+    fill: var(--foreground-color);
+}
+
+.c3-legend-item {
+    fill: var(--foreground-color);
+}
+
+@media screen and (-ms-high-contrast: active) {
+    .c3-gauge-value {
+        stroke: WindowText !important;
+        fill: WindowText !important;
+    }
+
+    .c3-axis .domain {
+        stroke: WindowText !important;
+    }
+
+    .c3-axis line {
+        stroke: WindowText !important;
+    }
+
+    .c3-axis text {
+        stroke: WindowText !important;
+    }
+
+    .c3-legend-item text {
+        stroke: WindowText !important;
+    }
+}

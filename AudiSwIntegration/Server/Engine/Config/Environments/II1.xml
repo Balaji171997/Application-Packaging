@@ -24,8 +24,8 @@
   <Site code="II1" server="AUDIINSA1299.audi.vwg5t"/>
 
   <Runner host="AUDIINSA1299.audi.vwg5t"/>
-  <Service account="MN-MAN\AW140"
-           allowedGroup="MN-MAN\AW140"/>
+  <Service account="AUDI\svc-swint"
+           allowedGroup="AUDI\SW-Packaging"/>
 
   <Transport mode="DropFolder"
              dropFolder="C:\AudiSwIntegration\DropFolder\II1"

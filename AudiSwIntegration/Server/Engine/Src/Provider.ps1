@@ -339,6 +339,49 @@ function New-AudiSccmProvider {
             @(Get-CMDeviceCollection -Name "*$($c.PackageName)*" -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
         }
 
+        # ---- collection membership -------------------------------------------
+        #
+        # Which machines are in a collection, as DIRECT members only.
+        #
+        # A collection can also fill itself from a query rule, and those machines
+        # are members just as much - but they are not ours to remove, and a
+        # window offering to remove one would be offering something that silently
+        # comes back on the next evaluation. So direct rules are what is listed
+        # and what can be changed; a query-filled collection reports none and
+        # says why.
+        GetCollectionMember = { param($c)
+            $collection = Get-CMDeviceCollection -Name $c.CollectionName -ErrorAction SilentlyContinue
+            if (-not $collection) { return @() }
+            @(Get-CMDeviceCollectionDirectMembershipRule -CollectionName $c.CollectionName -ErrorAction SilentlyContinue |
+              ForEach-Object { [string]$_.RuleName })
+        }
+
+        # Every rule, not just direct - so the window can say "12 machines, 4 of
+        # them from a query rule" rather than showing 8 and looking wrong.
+        GetCollectionRuleSummary = { param($c)
+            $query = @(Get-CMDeviceCollectionQueryMembershipRule -CollectionName $c.CollectionName -ErrorAction SilentlyContinue)
+            $include = @(Get-CMDeviceCollectionIncludeMembershipRule -CollectionName $c.CollectionName -ErrorAction SilentlyContinue)
+            return [pscustomobject]@{ QueryRules = $query.Count; IncludeRules = $include.Count }
+        }
+
+        # Does SCCM know this machine at all? Checked BEFORE adding, because
+        # Add-CMDeviceCollectionDirectMembershipRule with an unknown name fails
+        # with a binding error that says nothing about the machine.
+        TestDevice = { param($c)
+            [bool](Get-CMDevice -Name $c.MachineName -Fast -ErrorAction SilentlyContinue)
+        }
+
+        AddCollectionMember = { param($c)
+            $device = Get-CMDevice -Name $c.MachineName -Fast -ErrorAction Stop | Select-Object -First 1
+            if (-not $device) { throw "SCCM does not know a machine called '$($c.MachineName)'." }
+            Add-CMDeviceCollectionDirectMembershipRule -CollectionName $c.CollectionName `
+                -ResourceId $device.ResourceID -ErrorAction Stop | Out-Null
+        }
+
+        RemoveCollectionMember = { param($c)
+            Remove-CMDeviceCollectionDirectMembershipRule -CollectionName $c.CollectionName `
+                -ResourceName $c.MachineName -Force -ErrorAction Stop | Out-Null
+        }
         # What security scopes an application really carries. Used to report the
         # truth after attaching them, and by Get-AudiSwPackageState.
         GetObjectSecurityScope = { param($c)
@@ -763,7 +806,12 @@ function New-AudiSccmDryRunProvider {
         [string[]]$Missing = @(),
         # deployments already on the site, as 'CollectionName'
         [string[]]$ExistingDeployments  = @(),
-        [string[]]$ExistingScopes       = @()
+        [string[]]$ExistingScopes       = @(),
+        # collection name -> machines already in it
+        [hashtable]$Members             = @{},
+        # machines SCCM knows about. Empty means "knows every machine asked for",
+        # so a test only lists these when it is checking the unknown-machine path.
+        [string[]]$KnownMachines        = @()
     )
 
     $log = New-Object System.Collections.Generic.List[object]
@@ -821,6 +869,32 @@ function New-AudiSccmDryRunProvider {
     $provider.SetDeploymentType = { param($c) & $record 'SetDeploymentType' $c.DeploymentTypeName }.GetNewClosure()
     $provider.TestDeployment    = { param($c) $ExistingDeployments -contains $c.CollectionName }.GetNewClosure()
     $provider.GetPackageCollections = { param($c) @($ExistingCollections) }.GetNewClosure()
+
+    # Membership is kept in a live table so a test can add a machine and then
+    # read it back - a stand-in that always answers the same thing would let a
+    # broken add look like a working one.
+    $provider.Members = $Members
+    $provider.GetCollectionMember = { param($c)
+        if ($provider.Members.ContainsKey($c.CollectionName)) { return @($provider.Members[$c.CollectionName]) }
+        return @()
+    }.GetNewClosure()
+    $provider.GetCollectionRuleSummary = { param($c)
+        [pscustomobject]@{ QueryRules = 0; IncludeRules = 0 }
+    }.GetNewClosure()
+    $provider.TestDevice = { param($c) ($KnownMachines.Count -eq 0) -or ($KnownMachines -contains $c.MachineName) }.GetNewClosure()
+    $provider.AddCollectionMember = { param($c)
+        if ($FailOn -contains 'AddCollectionMember') { throw "dry run: forced failure adding $($c.MachineName)" }
+        if (-not $provider.Members.ContainsKey($c.CollectionName)) { $provider.Members[$c.CollectionName] = @() }
+        $provider.Members[$c.CollectionName] = @($provider.Members[$c.CollectionName]) + @($c.MachineName)
+        & $record 'AddCollectionMember' "$($c.MachineName) -> $($c.CollectionName)"
+    }.GetNewClosure()
+    $provider.RemoveCollectionMember = { param($c)
+        if ($FailOn -contains 'RemoveCollectionMember') { throw "dry run: forced failure removing $($c.MachineName)" }
+        if ($provider.Members.ContainsKey($c.CollectionName)) {
+            $provider.Members[$c.CollectionName] = @($provider.Members[$c.CollectionName] | Where-Object { $_ -ne $c.MachineName })
+        }
+        & $record 'RemoveCollectionMember' "$($c.MachineName) removed from $($c.CollectionName)"
+    }.GetNewClosure()
     # "Name (ID)", the same shape the real provider reports - a stand-in that
     # answers in a different shape lets a test pass on something production
     # never produces.

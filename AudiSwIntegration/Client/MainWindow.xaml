@@ -610,6 +610,8 @@
                 <Grid.RowDefinitions>
                   <RowDefinition Height="Auto"/>
                   <RowDefinition Height="*"/>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
                 <TextBlock Grid.Row="0" Text="COLLECTIONS AND DEPLOYMENTS" FontSize="10" FontWeight="SemiBold"
                            Foreground="{StaticResource InkMuted}" Margin="0,0,0,5"/>
@@ -687,6 +689,81 @@
                 </DataGridTextColumn>
                 </DataGrid.Columns>
               </DataGrid>
+
+              <!-- MACHINES IN THE SELECTED COLLECTION.
+                   Click a collection above and its machines appear here. Only
+                   DIRECT members are listed: a machine that arrives through a
+                   query rule would come straight back after being removed, so
+                   offering to remove it would be offering something that does
+                   not stick. txtMembersNote says so when that applies. -->
+              <Grid Grid.Row="2" Margin="0,14,0,5">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="MACHINES IN" FontSize="10" FontWeight="SemiBold"
+                           Foreground="{StaticResource InkMuted}" VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="1" x:Name="txtMemberOf" Text="- pick a collection above -"
+                           FontSize="10" FontWeight="SemiBold" Margin="6,0,0,0"
+                           Foreground="{StaticResource Teal}" TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center"/>
+              </Grid>
+
+              <Grid Grid.Row="3">
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="*"/>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <DataGrid Grid.Row="0" x:Name="lstMembers" Style="{StaticResource GridStyle}"
+                          CanUserAddRows="False" IsReadOnly="False" MinHeight="90">
+                  <DataGrid.Columns>
+                    <DataGridTemplateColumn Header="Do it" Width="55" CanUserSort="False">
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                          <CheckBox IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTextColumn Header="Action" Width="72" Binding="{Binding Action}" IsReadOnly="True">
+                      <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                          <Style.Triggers>
+                            <DataTrigger Binding="{Binding Action}" Value="Remove">
+                              <Setter Property="Foreground" Value="{StaticResource Danger}"/>
+                              <Setter Property="FontWeight" Value="SemiBold"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding Action}" Value="Add">
+                              <Setter Property="Foreground" Value="{StaticResource Teal}"/>
+                              <Setter Property="FontWeight" Value="SemiBold"/>
+                            </DataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                    <DataGridTextColumn Header="Machine" Width="*" Binding="{Binding Machine}" IsReadOnly="True"/>
+                  </DataGrid.Columns>
+                </DataGrid>
+
+                <TextBlock Grid.Row="1" x:Name="txtMembersNote" Text="" TextWrapping="Wrap"
+                           FontSize="11" Foreground="{StaticResource Amber}" Margin="0,5,0,0"/>
+
+                <Grid Grid.Row="2" Margin="0,6,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <!-- One or many: comma or semicolon separated, so a list can be
+                       pasted straight out of a mail or a ticket. -->
+                  <TextBox Grid.Column="0" x:Name="txtAddMachine" Margin="0"
+                           ToolTip="Machine name, or several separated by a comma."/>
+                  <Button Grid.Column="1" x:Name="btnAddMachine" Style="{StaticResource BtnGhost}"
+                          Content="Add machine" Margin="8,0,0,0" MinWidth="118"
+                          ToolTip="Queues the machine to be added. Nothing happens until Apply."/>
+                </Grid>
+              </Grid>
               </Grid>
             </Grid>
 

@@ -1,0 +1,353 @@
+﻿<!DOCTYPE html>
+<html ng-app="dashboard">
+<head>
+    <title>Cloud Management Dashboard</title>
+    <meta charset="UTF-8">
+    <meta content="IE=edge" http-equiv="X-UA-Compatible">
+    <meta name="description" content="Cloud Management Dashboard">
+    <meta name="keywords" content="Cloud Management, Dashboard">
+
+    <link href="../css/c3.min.css" rel="stylesheet" type="text/css">
+    <link href="../css/columns.css" rel="stylesheet" type="text/css">
+    <link href="css/styles.css" rel="stylesheet" type="text/css">
+    <link href="css/cloudcostestimator.css" rel="stylesheet" type="text/css">
+
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="../js/utility.js" type="text/javascript"></script>
+    <script src="../js/d3.min.js" type="text/javascript"></script>
+    <script src="../js/c3.min.js" type="text/javascript"></script>
+    <script src="js/controller.js" type="text/javascript"></script>
+
+    <noscript>Javascript is not enabled</noscript>
+</head>
+
+<body ng-controller="dashboardController">
+  <!-- Start of Cost estimator section -->
+    <div ng-class="'stat on'" ng-if="isCloudCostEstimatorFeatureExposed && isCloudCostEstimatorInitialized">
+        <div class="toggle" ng-click="toggle($event)" ng-keypress="keyPressToggle($event)" tabindex="1">
+            <p class="statTitle" ng-bind="getString('CloudCostEstimatorSectionTitle')">  </p>
+            <hr />
+        </div>
+        
+        <!-- Cloud Estimator Main Container -->
+        <div class="cloud-estimator-main-container">
+          <!-- Main menu -->
+          <div class="tile-container-2-4-cloud-estimator">
+
+              <!-- Background for options menu extension animation -->
+              <div class="tile-2-4-cost-estimator-options-menu-divider-background" ng-style="{'width' : showCostEstimatorMainForm ? '701px' : '703px'}"></div>
+              <div class="tile-2-4-cost-estimator-options-menu-divider-up" ng-style="{'height' : showCostEstimatorMainForm ? '285px' : '270px'}"></div>
+              <div class="tile-2-4-cost-estimator-options-menu-divider-down" ng-style="{'height' : showCostEstimatorMainForm ? '285px' : '270px'}"></div>
+
+              <!-- Main panel -->
+              <div class="tile-2-4-cost-estimator">
+                  <div class="form">
+                      <h1 style="text-align: center; font-weight: 500" ng-bind="getString('CloudUsageEstimation')" tabindex="1"></h1>
+                      <hr />
+
+                      <!-- Sliders -->  
+                      <div class="form-row form-row-main-panel">
+                          <div class="form-row form-row-main-panel">
+                            <span class="form-label" ng-bind="getString('ClientsLeveragingCloudServices')"></span>
+
+                            <div class="form-label-on-premise-based-estimation">
+                                <div class="form-label-on-premise-based-estimation-text">
+                                  <span ng-bind="getString('EstimatedDevicesEstimation')"> </span>
+                                  <span> {{estimations.clientCount}} </span>
+                                </div>
+                                <img class="form-label-on-premise-based-estimation-tooltip" src="img/info.ico" title="{{devices.estimatedDevicesTooltipText}}">
+                            </div>
+                          </div>
+                      
+                          <!-- Devices slider -->
+                          <div class="form-row-slider">
+                            <div class="estimation-input-box">
+                              <input class="estimation-input" ng-model="devices.count" name="{{getString('ClientsLeveragingCloudServices')}}" title="{{getString('ClientsLeveragingCloudServices')}}" tabindex="1" type="text" ng-blur="devicesCountOnBlur()">
+                              <b><span class="estimation-input-name-devices" ng-bind="getString('Devices')"></span></b>
+                            </div>
+                            
+                            <slider class="estimation-input-slider" min="{{devices.countMinValue}}" max="{{devices.countMaxValue}}" ng-model="devices.count" tabindex="1" name="{{getString('ClientsLeveragingCloudServices')}}" title="{{getString('ClientsLeveragingCloudServices')}}"></slider>
+                            <b><label class="estimation-input-min-value">{{devices.countMinValue}}</label></b>
+                            <b><label class="estimation-input-max-value">{{devices.countMaxValue}}</label></b>
+                          </div>
+                    
+                          <div class="form-row form-row-main-panel">
+                            <span class="form-label" ng-bind="getString('ClientDataConsumption')"></span>
+                        
+                            <div class="form-label-on-premise-based-estimation">
+                                <div class="form-label-on-premise-based-estimation-text">
+                                <span ng-bind="getString('EstimatedUsage')"> </span> 
+                                <span> {{estimations.clientDataConsumption}} </span> 
+                                </div>
+                                <img class="form-label-on-premise-based-estimation-tooltip" src="img/info.ico" title="{{getString('DataConsumptionToolTip')}}">
+                            </div>
+                          </div>
+
+                          <!-- Consumption slider -->
+                          <div class="form-row-slider">
+                            <div class="estimation-input-box">
+                              <input class="estimation-input" ng-model="clientData.consumption" type="text" ng-blur="clientDataConsumptionOnBlur()" tabindex="1" name="{{getString('ClientDataConsumption')}}" title="{{getString('ClientDataConsumption')}}">
+                              <b><span class="estimation-input-name-usage" ng-bind="getString('MBPerDevice')"></span></b>
+                            </div> 
+
+                            <slider class="estimation-input-slider" ng-model="clientData.consumption" type="range" name="points" min="{{clientData.consumptionMinValue}}" max="{{clientData.consumptionMaxValue}}" tabindex="1" name="{{getString('ClientDataConsumption')}}" title="{{getString('ClientDataConsumption')}}"></slider>
+                            <b><label class="estimation-input-min-value" ng-model="clientData.consumptionMinValue">{{clientData.consumptionMinValue}}MB</label></b>
+                            <b><label class="estimation-input-max-value" ng-model="clientData.consumptionMaxValue">{{clientData.consumptionMaxValue}}MB</label></b>
+                          </div>
+                      </div>
+
+                      <!-- Prices Texts -->
+                      <div class="form-row form-row-main-panel">
+                        <div class="form-label-actual-estimation">
+                          <span class="form-label-actual-estimation-monthly" ng-bind="getString('MonthlyCostEstimation')"></span><br>
+                          <span class="form-label-actual-estimation-cost">{{monthlyCostEstimate}}</span><br>
+                        </div>
+
+                        <div class="form-label-actual-estimation">
+                          <span class="form-label-actual-estimation-devices" ng-bind="getString('PerDevice')"></span><br>
+                          <span class="form-label-actual-estimation-cost">{{perDeviceCostEstimation}}</span>
+                        </div>
+                      </div>
+                  </div>
+                  
+                  <!-- Buttons -->
+                  <div class="form-row form-row-buttons">
+                    <div class="form-row-buttons-cost-estimator-information">
+                      <a class="cost-estimator-link cost-estimator-deploy-cmg-link" href="https://go.microsoft.com/fwlink/?linkid=2082379" target="_blank" ng-bind="getString('DeployCMG')" tabindex="1"></a>
+                      <br>
+                      <a class="cost-estimator-link " href="https://go.microsoft.com/fwlink/?linkid=2082239" target="_blank" ng-bind="getString('LearnAboutUsage')" tabindex="1"></a>
+                    </div>
+
+                    <div class="form-row-buttons-cost-estimator-customization">
+                      <button class="cost-estimator-button" type="button" ng-click="resetDefaults();" ng-bind="getString('Reset')" tabindex="1"></button>
+                      <button class="cost-estimator-button" type="button" ng-click="backupCurrentConfig(); toggleAdvancedOptions('showCostEstimatorMainForm')" type="button" tabindex="1"> {{customizeMenuText}} </button>
+                    </div>
+                  </div>
+              </div>
+          </div>
+
+          <!-- Customization Panel -->
+          <div class="tile-container-2-2-cloud-estimator cost-estimator-options-menu" ng-style="{'margin-left' : showCostEstimatorMainForm ? '-357px' : '-1px'}">
+                  <div class="tile-content">
+                      <div class="form">
+                          <h1 style="text-align: center; font-weight: 500" ng-disabled="showCostEstimatorMainForm" tabindex="1" ng-bind="getString('Options')"></h1>
+                          <hr />
+
+                          <!-- Includes -->
+                          <div class="form-row form-row-options-menu">
+                            <span class="form-label" ng-bind="getString('OptionsMenuConfigCheckboxTitle')"> </span>
+
+                            <!-- 
+                                NOTE: We use ng-change instead of watchers for the checkboxes because they get triggered by UI events(corresponds to user actions) and 
+                                      not by internal JS state change. (We dont manipulate the values on the JS side.) 
+                            -->
+                            <div class="form-row-list">
+                              <label class="label-list">
+                                <ul>
+                                  <li>
+                                    <input type="checkbox" ng-disabled="showCostEstimatorMainForm" ng-model="devicesIncluded.laptops" ng-change="applyAdvancedOptionsDevicesChanges()" tabindex="1" name="{{ getString('Laptops') }}" title="{{ getString('Laptops') }}"/></input>
+                                    <label class="cloud-estimator-options-menu-checkbox-label" ng-bind="getString('Laptops')"> </label>
+                                  </li>
+                                  <li>
+                                    <input type="checkbox" ng-disabled="showCostEstimatorMainForm" ng-model="devicesIncluded.desktops" ng-change="applyAdvancedOptionsDevicesChanges()" tabindex="1" name="{{ getString('Desktops') }}" title="{{ getString('Desktops') }}"/></input>
+                                    <label class="cloud-estimator-options-menu-checkbox-label" ng-bind="getString('Desktops')"> </label>
+                                  </li>
+                                  <li>
+                                    <input type="checkbox" ng-disabled="showCostEstimatorMainForm" ng-model="devicesIncluded.servers" ng-change="applyAdvancedOptionsDevicesChanges()" tabindex="1" name="{{ getString('Servers') }}" title="{{ getString('Servers') }}"/></input>
+                                    <label class="cloud-estimator-options-menu-checkbox-label" ng-bind="getString('Servers')"></label>
+                                  </li>
+                                  <li>
+                                    <input type="checkbox" ng-disabled="showCostEstimatorMainForm" ng-model="dataConsumption.includeContent" ng-change="applyAdvancedOptionsContentChanges()" tabindex="1" name="{{ getString('Content') }}" title="{{ getString('Content') }}"></input>
+                                    <label class="cloud-estimator-options-menu-checkbox-label" ng-bind="getString('Content')"> </label>
+                                  </li>
+                                </ul>
+                              </label>
+                            </div>
+                          </div>
+
+                          <hr class="options-menu-divider">
+
+                          <!-- CMG recomendations -->
+                          <div class="form-row form-row-options-menu">
+                              <span style="padding-right: 5px" class="form-label" ng-bind="getString('CMGInstancesEstimation')"></span>
+
+                              <div class="form-label cost-estimator-CMG-input" >
+                                <input 
+                                  class="cost-estimator-CMG-instances-input" 
+                                  type="text" 
+                                  ng-disabled="showCostEstimatorMainForm" 
+                                  ng-model="CMGInstances.amount" 
+                                  ng-blur="CMGInstancesOnBlur()" 
+                                  title="{{ getString('CMGInstancesEstimation') }}" 
+                                  name="{{ getString('CMGInstancesEstimation') }}" 
+                                  tabindex="1"
+                                />
+
+                                <div class="cost-estimator-CMG-input-box">
+                                  <img class="cost-estimator-CMG-instances-input-spinner-up"   src="img/spinner-up.png"   ng-disabled="showCostEstimatorMainForm" ng-click="addCMGInstance()" tabindex="1">
+                                  <img class="cost-estimator-CMG-instances-input-spinner-down" src="img/spinner-down.png" ng-disabled="showCostEstimatorMainForm" ng-click="removeCMGInstance()" tabindex="1">
+                                </div>
+
+                                <div class="cost-estimator-CMG-recomended">
+                                  <label ng-bind="getString('RecomendedCMGInstances')"> </label>
+                                  <span> {{estimations.CMGInstances}} </span>
+                                </div>
+                              </div>
+                          </div>
+
+                          <hr class="options-menu-divider">
+
+                          <!-- Recurrent Roaming clients -->
+                          <div class="form-row form-row-options-menu">
+                              <span style="padding-right: 5px" class="form-label" ng-bind="getString('RoamingClientsPercentage')"></span>
+
+                              <div class="form-label cost-estimator-CMG-input" >
+                                  <input 
+                                    class="cost-estimator-CMG-instances-input" 
+                                    type="text" 
+                                    ng-disabled="showCostEstimatorMainForm" 
+                                    ng-model="devices.roamingClientsPercentage" 
+                                    ng-blur="roamingClientsPercentageOnBlur()" 
+                                    title="{{ getString('RoamingClientsPercentage') }}" 
+                                    name="{{ getString('RoamingClientsPercentage') }}" 
+                                    tabindex="1"
+                                  />
+
+                                  <div class="cost-estimator-CMG-input-box">
+                                    <img class="cost-estimator-CMG-instances-input-spinner-up"   src="img/spinner-up.png"   ng-disabled="showCostEstimatorMainForm" ng-click="addRoamingClientsPercentage()"    tabindex="1">
+                                    <img class="cost-estimator-CMG-instances-input-spinner-down" src="img/spinner-down.png" ng-disabled="showCostEstimatorMainForm" ng-click="removeRoamingClientsPercentage()" tabindex="1">
+                                  </div>
+                              </div>
+                          </div>
+
+                          <hr class="options-menu-divider">
+
+                          <!-- Region and Currency selection -->
+                          <div class="cost-estimator-currency-and-region">
+                            <div class="form-row form-row-options-menu">
+                                <span class="form-label" ng-bind="getString('Region')"> </span>
+                                <!-- As this is a user based action, we use ng-change instead of watchers -->
+                                <select class="cost-estimator-options-dropdown" ng-model="selectedRegion" ng-change="regionChanged(selectedRegion, '{{selectedRegion}}')" ng-disabled="availableRegions.length < 2 || showCostEstimatorMainForm" ng-options="region as region for region in availableRegions track by region" tabindex="1" name="{{getString('Region')}}"title="{{getString('Region')}}"></select>
+                            </div>
+
+                            <div class="form-row form-row-options-menu">
+                                <span class="form-label" ng-bind="getString('Currency')"></span>
+                                <select class="cost-estimator-options-dropdown" ng-model="selectedCurrency" ng-disabled="true" ng-options="currency as currency for currency in availableCurrecies track by currency" tabindex="1" name="{{getString('Currency')}}" title="{{getString('Currency')}}"></select>
+                            </div>
+                          </div>
+                      </div>
+                  </div>
+          </div>
+        </div>
+        <div style="clear: both;"></div>
+    </div>
+
+    <!-- End of Cost estimator section -->
+
+    <div ng-class="'stat on'">
+        <div class="toggle" ng-click="toggle($event)" ng-keypress="keyPressToggle($event)" tabindex="2">
+            <p class="statTitle" ng-bind="getString('AADOnboardStatsMessage')" />
+            <hr />
+        </div>
+        <div>
+            <ul>
+                <li ng-class="bullet" ng-bind="getString('AADTenantsOnboardMessage')" tabindex="2"/>
+                <li ng-class="bullet" ng-bind="getString('TotalAADUsersDiscoveredMessage')" tabindex="2"/>
+                <li ng-class="bullet" ng-bind="getString('TotalAADJoinedClientsMessage')" tabindex="2"/>
+                <li ng-class="bullet" ng-bind="getString('TotalAADApprovedClientsMessage')" tabindex="2"/>
+            </ul>
+            <div class="tile-container-6-6">
+                <div class="tile tile-2-2">
+                    <h1 ng-bind="getString('AzureADusersChartTitle')" tabindex="2"></h1>
+                    <div id="azureActiveDirectoryUsersAria" tabindex="2">
+                        <div id="AADDiscoveredUsersDonut">
+                        </div>
+                    </div>
+                </div>
+                <div class="tile tile-2-4">
+                    <h1 ng-bind="getString('AzureADusersTrendChartTitle')" tabindex="2"></h1>
+                    <div id="azureActiveDirectoryUsersTrendAria" tabindex="2">
+                        <div id="AADDiscoveredUsersArea">
+                        </div>
+                    </div>
+                </div>
+                <div class="tile tile-2-2">
+                    <h1 ng-bind="getString('AzureADDevicesChartTitle')" tabindex="2"></h1>
+                    <div id="azureActiveDirectoryDevicesAria" tabindex="2">
+                        <div id="AADDiscoveredDevicesDonut">
+                        </div>
+                    </div>
+                </div>
+                <div class="tile tile-2-4">
+                    <h1 ng-bind="getString('AzureADDevicesTrendChartTitle')" tabindex="2"></h1>
+                    <div id="azureActiveDirectoryDevicesTrendAria" tabindex="2">
+                        <div id="AADDiscoveredDevicesArea">
+                        </div>
+                    </div>
+                </div>
+                <div class="tile tile-2-2">
+                    <h1 ng-bind="getString('ApprovedAzureADClientsChart')" tabindex="2"></h1>
+                    <div id="azureActiveDirectoryRegisteredClientsAria" tabindex="2">
+                        <div id="AADRegisteredClientsGauge">
+                        </div>
+                    </div>
+                </div>
+                <div class="tile tile-2-4">
+                    <h1 ng-bind="getString('ApprovedAzureADClientsTrendChart')" tabindex="2"></h1>
+                    <div id="azureActiveDirectoryRegisteredClientsTrendAria" tabindex="2">
+                        <div id="AADRegisteredClientsArea">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div style="clear: both;"></div>
+        </div>
+    </div>
+
+    <div ng-class="'stat on'">
+        <div class="toggle" ng-click="toggle($event)" ng-keypress="keyPressToggle($event)" tabindex="2">
+            <p class="statTitle" ng-bind="getString('CMGStatsMessage')"/>
+            <hr />
+        </div>
+        <div>
+            <ul>
+                <li ng-class="bullet" ng-bind="getString('CMGServiceMessage')" tabindex="2"/>
+                <li ng-class="bullet" ng-bind="getString('CMGTotalProcessedRequestsMessage')" tabindex="2"/>
+                <li ng-class="bullet" ng-bind="getString('CMGTotalProcessedRequestSizesMessage')" tabindex="2"/>
+                <li ng-class="bullet" ng-bind="getString('CMGTotalProcessedResponseSizesMessage')" tabindex="2"/>
+            </ul>
+            <div class="tile-container-4-6">
+                <div class="tile tile-2-2">
+                    <h1 ng-bind="getString('CMGIdentitiesChartTitle')" tabindex="2"></h1>
+                    <div id="cloudManagementGatewayManagedIdentitiesAria" tabindex="2">
+                        <div id="CMGManagedIdentitiesDonut">
+                        </div>
+                    </div>
+                </div>
+                <div class="tile tile-2-4">
+                    <h1 ng-bind="getString('CMGTrafficTrendChartTitle')" tabindex="2"></h1>
+                    <div id="azureActiveDirectoryCMGTrafficTrendAria" tabindex="2">
+                        <div id="CMGTrafficArea">
+                        </div>"
+                    </div>
+                </div>
+                <div class="tile tile-2-2">
+                    <h1 ng-bind="getString('BGBOnlineClientsChart')" tabindex="2"></h1>
+                    <div id="cloudManagementGatewayOnlineClientsAria" tabindex="2">
+                        <div id="CMGOnlineClientsDonut">
+                        </div>
+                    </div>
+                </div>
+                <div class="tile tile-2-4">
+                    <h1 ng-bind="getString('BGBOnlineClientsTrendChart')" tabindex="2"></h1>
+                    <div id="azureActiveDirectoryOnlineClientsTrendAria" tabindex="2">
+                        <div id="CMGOnlineClientsArea">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div style="clear: both;"></div>
+        </div>
+    </div>
+</body>
+</html>

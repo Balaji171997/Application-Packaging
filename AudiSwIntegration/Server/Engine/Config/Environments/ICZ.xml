@@ -18,8 +18,8 @@
 
   <!-- CONFIRM: the machine that runs the collector task (Zone: Global). -->
   <Runner host="AUDIINSA1298.audi.vwg5t"/>
-  <Service account="MN-MAN\AW140"
-           allowedGroup="MN-MAN\AW140"/>
+  <Service account="AUDI\svc-swint"
+           allowedGroup="AUDI\SW-Packaging"/>
 
   <!-- Direct today. Switch mode to DropFolder and fill in dropFolder to use flow 2. -->
   <Transport mode="DropFolder"

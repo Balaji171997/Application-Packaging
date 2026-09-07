@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Configuration xmlns="http://schemas.microsoft.com/IDE/Configuration">
+  <WindowTitle>Configuration Manager OneTrace</WindowTitle>
+  <UseMEFCache>false</UseMEFCache>
+  <MefComponents>
+    <Component Name="Microsoft.Ide.Application" />
+    <Component Name="Microsoft.Ide.CommandSystem" />
+    <Component Name="Microsoft.Ide.Common" />
+    <Component Name="Microsoft.Ide.Composition" />
+    <Component Name="Microsoft.Ide.Shell" />
+    <Component Name="Microsoft.Ide.Shell.ViewManager" />
+    <Component Name="CMOneTrace.mef" Assembly="CMOneTrace" />
+    <Component Name="ConfigMgrSupportCenter.Controls.mef" Assembly="ConfigMgrSupportCenter.Controls" />
+    <Component Name="ConfigMgrSupportCenter.LogViewer.mef" Assembly="ConfigMgrSupportCenter.LogViewer" />
+  </MefComponents>
+  <UIComponents>
+    <Component Name="CMOneTrace.ui" Assembly="CMOneTrace" />
+    <Component Name="ConfigMgrSupportCenter.Controls.ui" Assembly="ConfigMgrSupportCenter.Controls" />
+    <Component Name="ConfigMgrSupportCenter.LogViewer.ui" Assembly="ConfigMgrSupportCenter.LogViewer" />
+  </UIComponents>
+</Configuration>

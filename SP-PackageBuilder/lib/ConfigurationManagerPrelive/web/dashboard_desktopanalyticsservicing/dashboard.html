@@ -1,0 +1,122 @@
+﻿<!DOCTYPE html>
+<html ng-app="dashboard">
+    <head>
+        <title>Desktop Analytics Servicing</title>
+        <meta charset="UTF-8">
+        <meta content="IE=edge" http-equiv="X-UA-Compatible">
+        <meta name="description" content="Dashboard showing M365 reports">
+        <meta name="keywords" content="M365, Landing, Reporting, Dashboard">
+
+        <link href="../css/columns.css" rel="stylesheet" type="text/css">
+        <link href="css/styles.css" rel="stylesheet" type="text/css">
+
+        <script src="../js/angular.min.js" type="text/javascript"></script>
+        <script src="../js/utility.js" type="text/javascript"></script>
+        <script src="js/controller.js" type="text/javascript"></script>
+        <noscript>Javascript is not enabled</noscript>
+    </head>
+
+    <body ng-controller="dashboardController">
+        <div class="tile-container-1-6 setup-da-section">
+            <div class="tile tile-1-6 boxed">
+                <h1 tabindex="4" style="text-align:left">
+                    <b>{{strings.desktopAnalyticsRetirementTitle}}</b>
+                    <br />
+                    <br />
+                    <span>{{strings.desktopAnalyticsRetirementDescription}}</span>
+                    <br />
+                    <span>
+                        <a ng-href="{{desktopAnalyticsDeprecationUrl}}"
+                           target="_blank"
+                           tabindex="1">
+                            {{strings.desktopAnalyticsRetirementLink}}
+                        </a>
+                    </span>
+                </h1>
+            </div>
+        </div>
+        <br class="clear">
+        <div class="tile-container-1-6 setup-da-section">
+            <div class="tile tile-1-6 setup-da-section-bg">
+                <div class="container-tile">
+                    <div class="container-title" tabindex="1">{{strings.newDesktopAnalyticsTitle}}</div>
+                    <div class="blank-row-large"></div>
+                    <div class="desktop-analytics-container">
+                        <span class="desktop-analytics-container-number" tabindex="1">{{strings.signIntoDesktopAnalyticsNumberLabel}}</span>
+                        <span class="desktop-analytics-container-text">
+                            <a ng-href="{{desktopAnalyticsPortalUrl}}"
+                               target="_blank"
+                               tabindex="1">
+                                {{strings.signIntoDesktopAnalyticsLinkLabel}}
+                            </a>
+                            {{strings.signIntoDesktopAnalyticsLabel}}
+                        </span>
+                    </div>
+                    <div class="desktop-analytics-container desktop-analytics-container-padding">
+                        <span class="desktop-analytics-container-number" tabindex="1">{{strings.connectConfigManagerNumberLabel}}</span>
+                        <span class="desktop-analytics-container-text">
+                            <a href="#"
+                               ng-click="isDesktopAnalyticsServiceEnabled ? navigateToNode('AzureCloudServicesNodeAlias') : launchAzureServicesWizard()"
+                               tabindex="1">
+                                {{strings.connectConfigManagerLinkLabel}}
+                            </a>
+                            {{strings.connectConfigManagerLabel}}
+                        </span>
+                    </div>
+                    <div class="desktop-analytics-container">
+                        <span class="desktop-analytics-container-number" tabindex="1">{{strings.monitorConfigManagerNumberLabel}}</span>
+                        <span class="desktop-analytics-container-text">
+                            <a href="#"
+                               ng-click="navigateToNode('M365ConnectionHealthNodeAlias')"
+                               tabindex="1">
+                                {{strings.monitorConfigManagerLinkLabel}}
+                            </a>
+                            {{strings.monitorConfigManagerLabel}}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="tile-container-1-6" style="height: 40px;">
+        </div>
+        <div class="tile-container-2-6">
+            <div class="tile tile-2-4">
+                <div class="container-tile">
+                    <div class="container-title" tabindex="1">{{strings.stayWithWindowsTitle}}</div>
+                    <div class="blank-row"></div>
+                    <div>
+                        <span tabindex="1">{{strings.stayWithWindowsDescription}}</span>
+                        <a ng-href="{{learnMoreUrl}}" target="_blank" tabindex="1">{{strings.stayWithWindowsDescriptionLink}}</a>
+                    </div>
+                    <div class="desktop-analytics-container-list">
+                        <ul>
+                            <li tabindex="1">{{strings.prioritizeAssetsLabel}}</li>
+                            <li tabindex="1">{{strings.dataDrivenLabel}}</li>
+                            <li tabindex="1">{{strings.monitorDeploymentLabel}}</li>
+                        </ul>
+                    </div>
+                    <div class="blank-row"></div>
+                    <div>
+                        <button class="button"
+                                ng-click="navigateToUrl(desktopAnalyticsPortalUrl)"
+                                tabindex="1">
+                            {{strings.planDeploymentButtonLabel}}
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="tile tile-2-2">
+                <div class="container-tile">
+                    <div class="container-title" tabindex="1">{{strings.additionalResourcesTitle}}</div>
+                    <div class="blank-row"></div>
+                    <div><a ng-href="{{appCompatibilityUrl}}" target="_blank" tabindex="1">{{strings.appCompatibilityLinkLabel}}</a></div>
+                    <div tabindex="1">{{strings.appCompatibilityLabel}}</div>
+                    <div class="blank-row"></div>
+                    <div><a ng-href="{{troubleshootingUrl}}" target="_blank" tabindex="1">{{strings.troubleshootingLinkLabel}}</a></div>
+                    <div class="blank-row"></div>
+                    <div><a ng-href="{{privacyUrl}}" target="_blank" tabindex="1">{{strings.privacyLinkLabel}}</a></div>
+                </div>
+            </div>
+        </div>
+    </body>
+</html>

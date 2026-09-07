@@ -507,6 +507,23 @@
                    whether it may be written. 'from' is the value the operator
                    saw, kept for the audit trail - the server does not trust it
                    and re-reads the site itself. -->
+              <!-- A machine going into, or coming out of, one of this package's
+                   collections. The server checks the collection really belongs
+                   to the package before it touches anything. -->
+              <xs:element name="Member" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="collection" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="machine"    type="NonEmptyString" use="required"/>
+                  <xs:attribute name="action"     use="required">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="Add"/>
+                        <xs:enumeration value="Remove"/>
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                </xs:complexType>
+              </xs:element>
               <xs:element name="Setting" minOccurs="0" maxOccurs="unbounded">
                 <xs:complexType>
                   <xs:attribute name="key"  type="NonEmptyString" use="required"/>
@@ -582,6 +599,10 @@
             <xs:sequence>
               <xs:element name="Collection" minOccurs="0" maxOccurs="unbounded">
                 <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Machine" type="NonEmptyString" minOccurs="0" maxOccurs="unbounded"/>
+                  </xs:sequence>
+                  <xs:attribute name="memberNote"    type="xs:string" use="optional" default=""/>
                   <xs:attribute name="name"          type="NonEmptyString" use="required"/>
                   <xs:attribute name="wanted"        type="xs:boolean"     use="required"/>
                   <xs:attribute name="exists"        type="xs:boolean"     use="required"/>
@@ -595,6 +616,23 @@
                    client and the server are different machines, and a stale
                    Defaults.xml on the client would otherwise offer choices the
                    site will not accept. -->
+              <!-- A machine going into, or coming out of, one of this package's
+                   collections. The server checks the collection really belongs
+                   to the package before it touches anything. -->
+              <xs:element name="Member" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="collection" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="machine"    type="NonEmptyString" use="required"/>
+                  <xs:attribute name="action"     use="required">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="Add"/>
+                        <xs:enumeration value="Remove"/>
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                </xs:complexType>
+              </xs:element>
               <xs:element name="Setting" minOccurs="0" maxOccurs="unbounded">
                 <xs:complexType>
                   <xs:sequence>

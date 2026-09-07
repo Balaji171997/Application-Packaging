@@ -1,0 +1,200 @@
+﻿body {
+    background: #F4F7FC;
+    font-family: 'Segoe UI';
+}
+
+h1 {
+    font-size: 15px;
+    font-weight: normal;
+    text-align: center;
+}
+
+h2 {
+    font-size: 13px;
+    font-weight: normal;
+    text-align: center;
+}
+
+select {
+    padding: 2px;
+    font-size: 12px;
+    width: 150px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+select option {
+    width: 150px;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+
+.inner {
+    position: absolute;
+    bottom: 20px;
+    left: 0;
+    right: 0;
+    margin: auto;
+}
+
+.clear {
+    clear: both;
+}
+
+.tile-content {
+    height: 100%;
+    width: 100%;
+    display: table;
+}
+
+.tile-1-1 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: white;
+    position: relative;
+    height: 300px;
+    height: 144px;
+    width: 164px;
+}
+
+.tile-1-3 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: white;
+    position: relative;
+    height: 94px;
+    width: 214px;
+}
+
+.tile-1-5 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: inherit;
+    font-size: 16px;
+    background: white;
+    position: relative;
+    height: 194px;
+    width: 214px;
+}
+
+.tile-1-2 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: white;
+    position: relative;
+    height: 144px;
+    width: 340px;
+}
+
+.tile-2-3 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: left;
+    font-size: 16px;
+    background: white;
+    position: relative;
+    height: 300px;
+    width: 290px;
+}
+
+.tile-2-6 {
+    column-gap: 10px;
+    vertical-align: middle;
+    text-align: center;
+    border: 1px solid gainsboro;
+    margin: 5px;
+    float: right;
+    font-size: 16px;
+    background: white;
+    position: relative;
+    height: 300px;
+    width: 340px;
+}
+
+tile-content-inner-top {
+    padding: 10px;
+    vertical-align: top;
+}
+
+.tile-content-inner-middle {
+    padding: 10px;
+    padding-top: 80px;
+    vertical-align: middle;
+}
+
+.clickable:hover {
+    background: #fafafa;
+    cursor: pointer;
+}
+
+.clickable:active {
+    background: transparent;
+}
+
+.tile-container-2-6-short {
+    height: 50px;
+    display: inline-block;
+    float: left;
+    width: 1056px;
+}
+
+.tile-container-2-2-short {
+    height: 50px;
+    display: inline-block;
+    float: left;
+    width: 400px;
+}
+
+.tile-container-2-1 {
+    height: 312px;
+    display: inline-block;
+    float: left;
+    width: 170px;
+}
+
+.generate-pilot-text {
+    display: block;
+    width: 100%;
+}
+
+@media screen and (-ms-high-contrast: active) {    
+    .c3-axis .domain {
+        stroke: WindowText !important;
+    }
+
+    .c3-axis line {
+        stroke: WindowText !important;
+    }
+
+    .c3-axis text {
+        stroke: WindowText !important;
+    }
+
+    .c3-legend-item text {
+        stroke: WindowText !important;
+    }
+}
+}
+

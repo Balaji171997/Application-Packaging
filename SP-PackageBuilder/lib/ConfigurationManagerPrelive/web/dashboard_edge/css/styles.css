@@ -1,0 +1,58 @@
+﻿h1 {
+  font-size: 15px;
+  font-weight: normal;
+  text-align: center;
+}
+h2 {
+    font-size: 13px;
+    font-weight: normal;
+    text-align: center;
+}
+select {
+  padding: 2px;
+  font-size: 12px;
+}
+.inner {
+    position: absolute;
+    bottom: 20px;
+    left: 0;
+    right: 0;
+    margin: auto;
+}
+.clear {
+  clear: both;
+}
+.tile-content-inner {
+  padding: 10px;
+  vertical-align: middle;
+}
+.clickable:hover {
+   background: #fafafa;
+   cursor: pointer;
+}
+.clickable:active {
+   background: transparent;
+}
+
+@media screen and (-ms-high-contrast: active) {
+    .c3-gauge-value {
+        stroke: WindowText !important;
+        fill: WindowText !important;
+    }
+
+    .c3-axis .domain {
+        stroke: WindowText !important;
+    }
+
+    .c3-axis line {
+        stroke: WindowText !important;
+    }
+
+    .c3-axis text {
+        stroke: WindowText !important;
+    }
+
+    .c3-legend-item text {
+        stroke: WindowText !important;
+    }
+}

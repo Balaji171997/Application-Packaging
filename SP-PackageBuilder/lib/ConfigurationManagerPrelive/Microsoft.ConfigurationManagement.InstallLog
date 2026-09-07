@@ -1,0 +1,13 @@
+﻿Installing assembly 'C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\Microsoft.ConfigurationManagement.exe'.
+Affected parameters are:
+   showcallstack = 
+   logfile = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\Microsoft.ConfigurationManagement.InstallLog
+   assemblypath = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\Microsoft.ConfigurationManagement.exe
+   logtoconsole = 
+Creating performance counter category ConfigMgr 2012 Console.
+Committing assembly 'C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\Microsoft.ConfigurationManagement.exe'.
+Affected parameters are:
+   showcallstack = 
+   logfile = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\Microsoft.ConfigurationManagement.InstallLog
+   assemblypath = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\Microsoft.ConfigurationManagement.exe
+   logtoconsole = 
