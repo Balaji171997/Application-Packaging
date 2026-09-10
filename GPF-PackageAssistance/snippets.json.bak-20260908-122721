@@ -1,0 +1,250 @@
+{
+    "version":  "1.0",
+    "categories":  [
+                       {
+                           "name":  "Shortcuts",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "Desktop",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Delete a shortcut from every user's Desktop",
+                                                                          "code":  "# Delete a shortcut from EVERY user's Desktop (matched by name pattern)\r\n$ProfilePaths = Get-ADTUserProfiles | Select-Object -ExpandProperty 'ProfilePath'\r\nforeach ($PPath in $ProfilePaths) {\r\n    if (Test-Path -Path \"$PPath\\Desktop\") {\r\n        $ShortcutsToDelete = Get-ChildItem -Path \"$PPath\\Desktop\" -Filter \"<AppName>*.lnk\"\r\n        foreach ($shortcut in $ShortcutsToDelete) {\r\n            Remove-ADTFile -Path $shortcut.FullName\r\n        }\r\n    }\r\n}"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Certificates",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "Manage",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Import a certificate (LocalMachine)",
+                                                                          "code":  "Import-Certificates -Cert $certificate -StoreNames my -StoreType LocalMachine"
+                                                                      },
+                                                                      {
+                                                                          "name":  "Remove a certificate by thumbprint",
+                                                                          "code":  "Remove-Certificate -Thumbprint \"F10484EBE454F98F42C846C3885AFCAAC8842F96\",\"BAE19AB8365E8E08A17DF2B42852A4AFD81BE504\""
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Uninstall",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "By name",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Find product code by name and uninstall an MSI",
+                                                                          "code":  "$products = Get-ADTApplication -Name '<application name>'\r\n$productcode = $products.ProductCode\r\n\r\n#Uninstalling MSI\r\nStart-ADTMsiProcess -Action 'Uninstall' -ProductCode \"$productcode\""
+                                                                      },
+                                                                      {
+                                                                          "name":  "Find product by name and uninstall an EXE",
+                                                                          "code":  "#Declare silent parameters in $args variable\r\n$products = Get-ADTApplication -Name <application_name>\r\nif ($products){\r\n    $exePath = ($products.UninstallString -replace '^([\"'']?.*?\\.exe)[\"'']?.*$', '$1').Trim('\"')\r\n    Start-ADTProcess -FilePath $exePath -ArgumentList \"$args\" -WindowStyle Hidden\r\n}"
+                                                                      },
+                                                                      {
+                                                                          "name":  "Uninstall several MSI product codes in a loop",
+                                                                          "code":  "##Uninstall several MSI product codes in a loop\r\n$products = Get-ADTApplication -Name '<application name>'\r\n\r\nforeach($product1 in $products)\r\n{\r\n   $productcode = $product1.ProductCode\r\n\r\n   #Uninstalling MSI\r\n   Start-ADTMsiProcess -Action 'Uninstall' -ProductCode \"$productcode\"\r\n}"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Files & Folders",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "Create",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Create a folder if it doesn't exist",
+                                                                          "code":  "if(!(Test-Path -Path \"<Path of folder that need to create>\"))\r\n{\r\n\r\n  New-ADTFolder -Path \"<Path of folder that need to create>\"\r\n\r\n}"
+                                                                      }
+                                                                  ]
+                                                 },
+                                                 {
+                                                     "name":  "Cleanup",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Remove empty folder",
+                                                                          "code":  "If(Test-Path -Path \"path_to_the_folder\")\r\n    {\r\n        If((Get-ChildItem -Path \"path_to_the_folder\" -Force | Measure-Object).Count -eq 0)\r\n        {\r\n            Remove-ADTFolder -Path \"path_to_the_folder\"\r\n        }\r\n    }"
+                                                                      },
+                                                                      {
+                                                                          "name":  "Remove leftover .tmp files then empty folders",
+                                                                          "code":  "$folders = Get-ChildItem -Path \"<Path of Folder>\" -File -Filter '*.tmp'\r\nforeach($dir in $folders)\r\n{\r\n    if(Test-Path -Path \"<Path of Folder>\\<uninque folder>\")\r\n    {\r\n        Remove-ADTFolder -Path \"<Path of Folder>\"\r\n    }\r\n}"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Registry",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "Values",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Remove a value only when it equals X",
+                                                                          "code":  "$regKey = \"<path of registry>\"\r\nif((Test-Path -Path $regKey) -and ((Get-ADTRegistryKey -Key $regKey -Name \"<name of value need to check>\") -eq \"<check if euqal to X>\"))\r\n{\r\n    Remove-ADTRegistryKey -Key $regKey -Name \"<name of value need to check>\"\r\n}"
+                                                                      }
+                                                                  ]
+                                                 },
+                                                 {
+                                                     "name":  "ARP",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Set ARP DisplayVersion and Publisher",
+                                                                          "code":  "Set-ADTRegistryKey -Key \"HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\<GUID>\" -Name \"DisplayVersion\" -Value \"<Display version need to update>\" -Type String\r\nSet-ADTRegistryKey -Key \"HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\<GUID>\" -Name \"Publisher\" -Value \"<publisher name need to update>\" -Type String"
+                                                                      }
+                                                                  ]
+                                                 },
+                                                 {
+                                                     "name":  "Backup",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Back up a registry key by renaming it",
+                                                                          "code":  "If(Test-Path -Path \"<Registry hive of extension>\")\r\n    {\r\n        Rename-Item -Path \"<Registry hive of extension>\" -NewName \"<extension name>_<application name>_<application version>\"\r\n\r\n        Write-ADTLogEntry -Message \"Rename the extension <extension name> successful.\" -Severity 2 -Source $adtSession.DeployAppScriptFriendlyName\r\n    }"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Services",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "Manage",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Stop and remove a service",
+                                                                          "code":  "$Service= \"Service-Name\"\r\nIf (Test-ADTServiceExists -Name $Service)\r\n{\r\n\r\n    $serviceStatus = Get-Service -Name $Service\r\n\r\n    # If service is not running start it\r\n    If ($serviceStatus.Status -eq \"Running\")\r\n    {\r\n\r\n        Write-ADTLogEntry -Message \"Stoping service '$Service'\" -Severity 2 -Source $adtSession.DeployAppScriptFriendlyName\r\n        Stop-ADTServiceAndDependencies -Name $Service\r\n    }\r\n}"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Scheduled Tasks",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "Manage",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Remove a scheduled task",
+                                                                          "code":  "#Removing schedule task\r\nForEach ($scheduledTaskName in $TasksToRemove)\r\n{\r\n    if (Get-ScheduledTask -TaskName $scheduledTaskName -ErrorAction SilentlyContinue)\r\n    {\r\n        Write-ADTLogEntry -Message \"Removing scheduled task [$($scheduledTaskName)].\" -Severity 2 -Source $adtSession.DeployAppScriptFriendlyName\r\n        Start-ADTProcess -FilePath \"schtasks.exe\" -ArgumentList \"/delete /tn \"\"$($scheduledTaskName)\"\" /f\" -WindowStyle 'Hidden'\r\n        Start-Sleep -Seconds 5\r\n    }\r\n    else\r\n    {\r\n        Write-ADTLogEntry -Message \"Scheduled task [$($scheduledTaskName)] does not exist or already removed.\" -Severity 2 -Source $adtSession.DeployAppScriptFriendlyName\r\n    }\r\n}"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "DLL Registration",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "Register",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Register / unregister a DLL",
+                                                                          "code":  "If (Test-Path -Path \"dll_file_location\")\r\n{\r\n    Register-ADTDll -FilePath \"dll_file_location\"\r\n}\r\nIf(Test-Path -Path \"dll_file_location\")\r\n{\r\n    Unregister-ADTDll -FilePath \"dll_file_location\"\r\n}"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Branding",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "VWG",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Remove branding using key value",
+                                                                          "code":  "Remove-Branding -InstanceName \"Branding_name\" -AdditionalRegPaths \"HKLM:\\Software\\$($VWG_CurrentRegWow)VWG\\InstalledProducts\",\"HKLM:\\Software\\$($VWG_CurrentRegWow)VWG\\CM\""
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Per-user configuration",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "All users (registry)",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Apply HKCU settings to all users (Invoke-ADTAllUsersRegistryAction)",
+                                                                          "code":  "##Setting HKCU extension registries\r\n[scriptblock]$HKCURegistrySettings = {\r\n    Set-ADTRegistryKey -LiteralPath \"HKCU_registry_key\" -Name \"DisplayName\" -Value \"\" -Type 'String' -SID $_.SID\r\n}\r\nInvoke-ADTAllUsersRegistryAction -ScriptBlock $HKCURegistrySettings"
+                                                                      }
+                                                                  ]
+                                                 },
+                                                 {
+                                                     "name":  "Active Setup",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Active Setup - install",
+                                                                          "code":  "#Setting HKCU:\\Software\\Autodesk\\Inventor registry\r\nCopy-ADTFile -Path \"$($adtSession.dirSupportFiles)\\Activesetup_Install.ps1\" -Destination \"Install_dir\\ActiveSetup\"\r\nCopy-ADTFile -Path \"$($adtSession.dirSupportFiles)\\Activesetup_Install.reg\" -Destination \"Install_dir\\ActiveSetup\"\r\nSet-ADTActiveSetup -StubExePath \"$envSystem32Directory\\WindowsPowerShell\\v1.0\\powershell.exe\" -Arguments \"-ExecutionPolicy Bypass -NoProfile -File `\"Install_dir\\ActiveSetup\\Activesetup_Install.ps1`\"\" -Description \"users settings registries\" -Key $VWG_appFullName"
+                                                                      },
+                                                                      {
+                                                                          "name":  "Active Setup - uninstall",
+                                                                          "code":  "#Removing ActiveSetup\r\nSet-ADTActiveSetup -Key \"$VWG_appFullName\" -PurgeActiveSetupKey\r\n\r\n#Removing HKCU Registries\r\n[scriptblock]$HKCURegistrySettings =\r\n{\r\n    Remove-ADTRegistryKey -LiteralPath \"HKCU:\\SOFTWARE\\Microsoft\\Active Setup\\Installed Components\\Application_ActiveSetup_name\" -SID $_.SID\r\n}\r\nInvoke-ADTAllUsersRegistryAction -ScriptBlock $HKCURegistrySettings"
+                                                                      }
+                                                                  ]
+                                                 },
+                                                 {
+                                                     "name":  "User profile files",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Copy file(s) from SupportFiles into every user profile (Get-ADTUserProfiles)",
+                                                                          "code":  "#Copying files to every user\r\n[string[]]$ProfilePaths = Get-ADTUserProfiles | Select-Object -ExpandProperty 'ProfilePath'\r\nForEach ($ProfilePath in $ProfilePaths)\r\n{\r\n    Copy-ADTFile -Path \"$($adtSession.dirSupportFiles)\\Copy_files\" -Destination \"$ProfilePath\\Destination_folders\"\r\n}"
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       },
+                       {
+                           "name":  "Installers",
+                           "subcategories":  [
+                                                 {
+                                                     "name":  "Response file",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Record a response file",
+                                                                          "code":  "# RECORD a fresh response file when packaging a NEW version (response files embed the old version/paths, so regenerate):\r\n#   1) On a clean test machine:  setup.exe /r /f1\"C:\\Temp\\setup.iss\"\r\n#   2) Stage the generated setup.iss in Files, then use the silent  /s /f1\"...\"  line."
+                                                                      },
+                                                                      {
+                                                                          "name":  "Install with an InstallShield response file (.iss)",
+                                                                          "code":  "setup.exe /s /f1\"C:\\Temp\\setup.iss\" /f2\"log_location\""
+                                                                      }
+                                                                  ]
+                                                 },
+                                                 {
+                                                     "name":  "Fonts",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Install fonts from Files",
+                                                                          "code":  "## Install Fonts\r\nAdd-Font -Path \"$($adtSession.dirFiles)\\Font_file\""
+                                                                      }
+                                                                  ]
+                                                 },
+                                                 {
+                                                     "name":  "Drivers",
+                                                     "snippets":  [
+                                                                      {
+                                                                          "name":  "Install a driver (.inf)",
+                                                                          "code":  "Start-ADTProcess -FilePath \"$env:WinDir\\System32\\pnputil.exe\" -ArgumentList \"add-driver `\"$InfFile`\" /install\" -WindowStyle Hidden"
+                                                                      },
+                                                                      {
+                                                                          "name":  "Remove a driver (.inf)",
+                                                                          "code":  "Remove-PnPDrivers -Delinflist \"inf_name\""
+                                                                      }
+                                                                  ]
+                                                 }
+                                             ]
+                       }
+                   ]
+}

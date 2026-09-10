@@ -719,21 +719,85 @@ function Add-ToChangeLog {
     Write-Log "Recorded $($changes.Count) change(s)."
 }
 
-# Real version transitions only - no synthetic "current version" row.
+# Audit "Changes" is a flat string: "Prop: Old -> New | Prop2: Old2 -> New2". Split it back into real
+# property changes so history can be shown as fields instead of a dumped log line.
+function ConvertFrom-AuditChanges {
+    param([string]$Changes)
+    $out = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($seg in ("$Changes" -split '\s\|\s')) {
+        if ("$seg".Trim() -eq '') { continue }
+        if ($seg -match '^\s*(?<p>[^:]+?)\s*:\s*(?<o>.*?)\s*->\s*(?<n>.*?)\s*$') {
+            [void]$out.Add([pscustomobject]@{ Property = $Matches.p.Trim(); Old = $Matches.o.Trim(); New = $Matches.n.Trim() })
+        }
+    }
+    return ,@($out.ToArray())
+}
+
+# Raw Graph property names mean nothing to a packager.
+function Get-FriendlyFieldName {
+    param([string]$Property)
+    switch -Regex ("$Property") {
+        '^(?i)displayVersion$' { return 'Version' }
+        '^(?i)contentVersion$' { return 'Content version' }
+        '^(?i)displayName$'    { return 'Name' }
+        '^(?i)notes$'          { return 'Notes' }
+        '^(?i)description$'    { return 'Description' }
+        '^(?i)owner$'          { return 'Owner' }
+        '^(?i)developer$'      { return 'Developer' }
+        '^(?i)publisher$'      { return 'Publisher' }
+        default                { return "$Property" }
+    }
+}
+
+# VERSION HISTORY - one row per real version transition.
+# Two sources describe the SAME change: the Intune audit (knows WHO, but only as flat text) and our own
+# snapshot diff (knows the exact old -> new, but never who). Emitting both is why every version showed up
+# twice - once with a name, once without. They are merged here on field+old+new, keeping the audit's Who.
 function Get-VersionHistory {
     param($App, [object[]]$ChangeLog)
     $rows = New-Object 'System.Collections.Generic.List[object]'
+
+    # 1. Intune audit - parse the flat text into real property changes. This is where WHO comes from.
+    foreach ($e in (AsArray $App.AuditEvents)) {
+        foreach ($ch in (ConvertFrom-AuditChanges "$($e.Changes)")) {
+            if ("$($ch.Property)" -notmatch '(?i)version') { continue }
+            [void]$rows.Add([pscustomobject]@{
+                When = "$($e.When)"; Field = (Get-FriendlyFieldName $ch.Property)
+                From = "$($ch.Old)"; To = "$($ch.New)"; Who = "$($e.Who)"
+                Action = "$($e.What)"; Source = 'Intune audit'
+            })
+        }
+    }
+
+    # 2. Our own snapshot diff - exact values, but no author.
     foreach ($c in (AsArray $ChangeLog)) {
         if ("$($c.AppId)" -ne "$($App.Id)") { continue }
         if ("$($c.Property)" -ne 'DisplayVersion' -and "$($c.Property)" -ne 'ContentVersion') { continue }
-        [void]$rows.Add([pscustomobject]@{ When = "$($c.When)"; Field = "$($c.Property)"; From = "$($c.Old)"; To = "$($c.New)"; Who = ''; Source = 'Snapshot diff' })
+        [void]$rows.Add([pscustomobject]@{
+            When = "$($c.When)"; Field = (Get-FriendlyFieldName $c.Property)
+            From = "$($c.Old)"; To = "$($c.New)"; Who = ''
+            Action = 'Seen by sync'; Source = 'Snapshot diff'
+        })
     }
-    foreach ($e in (AsArray $App.AuditEvents)) {
-        if ("$($e.Changes)" -match '(?i)version') {
-            [void]$rows.Add([pscustomobject]@{ When = "$($e.When)"; Field = 'Version'; From = ''; To = "$($e.Changes)"; Who = "$($e.Who)"; Source = 'Intune audit' })
+
+    # 3. Merge: same field and same old -> new is ONE transition, however many sources noticed it.
+    $merged = [ordered]@{}
+    foreach ($r in $rows) {
+        $key = ("{0}|{1}|{2}" -f $r.Field, $r.From, $r.To).ToLower()
+        if (-not $merged.Contains($key)) { $merged[$key] = $r; continue }
+        $keep = $merged[$key]
+        if (-not "$($keep.Who)".Trim() -and "$($r.Who)".Trim()) {
+            $r.Source = 'Intune audit + sync'      # the named one wins, but record that both saw it
+            if ("$($keep.When)" -and "$($keep.When)" -lt "$($r.When)") { $r.When = "$($keep.When)" }
+            $merged[$key] = $r
+        } else {
+            if ("$($r.Who)".Trim() -eq '') { $keep.Source = 'Intune audit + sync' }
+            # keep the EARLIER stamp: when it actually happened, not when we noticed
+            if ("$($r.When)" -and "$($r.When)" -lt "$($keep.When)") { $keep.When = "$($r.When)" }
         }
     }
-    return ,@($rows.ToArray() | Sort-Object { "$($_.When)" } -Descending)
+
+    return ,@(@($merged.Values) | Sort-Object { "$($_.When)" } -Descending)
 }
 
 # Everything that ever happened to this app, newest first, from all three sources.

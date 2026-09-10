@@ -63,6 +63,22 @@ if ($script:PBEngineSource -and (Test-NetworkPath "$root") -and ($env:PB_LOCALRU
 Initialize-Log
 Initialize-Config (Join-Path $root 'settings.json')
 
+# ---- SHAREPOINT SIGN-IN: do it HERE, at startup ---------------------------------------------------------------
+# This must happen while we are still plain linear script, BEFORE the WPF window exists and its dispatcher starts
+# pumping. Calling an interactive sign-in later from a button handler blocks the dispatcher, so the auth window
+# never renders and the tool just sits there; calling it in a background runspace hangs for the same reason (no UI
+# thread at all). Running it here behaves exactly like the console, which is where it was proven to work.
+# The token is cached and handed to every worker runspace afterwards (see Invoke-PBAsync -> sptoken).
+if (Get-Command Get-SPWorkerToken -ErrorAction SilentlyContinue) {
+    try {
+        $spCfg = Get-SPConfig
+        if ($spCfg.Enabled) {
+            Write-Log 'SharePoint is enabled - signing in before the window opens...' Info
+            $null = Get-SPWorkerToken
+        }
+    } catch { Write-Log "SharePoint startup sign-in failed: $($_.Exception.Message)" Warning }
+}
+
 # ---- AvalonEdit (Step 3 editor) - load defensively: if missing, the wizard still
 #      runs and Step 3 shows a message instead of the editor. Same unblock + load-
 #      from-bytes trick the standalone Editor.ps1 proved (avoids Mark-of-the-Web lock).
@@ -4211,7 +4227,21 @@ function Invoke-PBAsync {
     param([Parameter(Mandatory)][scriptblock]$Work, [hashtable]$Arg = @{}, [Parameter(Mandatory)][scriptblock]$Done)
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState = 'STA'; $rs.ThreadOptions = 'ReuseThread'; $rs.Open()
     $ps = [PowerShell]::Create(); $ps.Runspace = $rs
-    $payload = @{ engine = $script:PBEngineSource; root = "$root"; work = $Work.ToString(); arg = $Arg }
+    # SharePoint sign-in MUST happen here, on the UI thread - an interactive auth window cannot appear inside the
+    # worker runspace, so doing it there just hangs. Grab a token now and let the worker connect silently with it.
+    # Returns $null instantly when SharePoint is disabled, so non-SharePoint builds are unaffected.
+    $spToken = $null
+    if (Get-Command Get-SPWorkerToken -ErrorAction SilentlyContinue) {
+        try { $spToken = Get-SPWorkerToken }
+        catch { Write-Log "Could not get a SharePoint token for the background job: $($_.Exception.Message)" Warning }
+        # No token is normal for an interactive connection and harmless: source/predecessor lookups run on the
+        # UI thread. Only note it once, and only as information - it is not a failure.
+        if (-not $spToken -and -not $script:SPTokenNoticeShown -and (Get-SPConfig).Enabled) {
+            $script:SPTokenNoticeShown = $true
+            Write-Log 'No reusable SharePoint token for background jobs - they will use the shares if they need one.' Info
+        }
+    }
+    $payload = @{ engine = $script:PBEngineSource; root = "$root"; work = $Work.ToString(); arg = $Arg; sptoken = $spToken }
     [void]$ps.AddScript({
         param($p)
         try {
@@ -4220,8 +4250,16 @@ function Invoke-PBAsync {
                 . "$($p.root)\Core.ps1"; . "$($p.root)\Predecessor.ps1"; . "$($p.root)\Build.ps1"; . "$($p.root)\Source.ps1"
                 . "$($p.root)\Snippets.ps1"; . "$($p.root)\MstBuilder.ps1"; . "$($p.root)\Sccm.ps1"; . "$($p.root)\Intune.ps1"
                 . "$($p.root)\PSADT_V3toV4_Mappings.ps1"
+                # Find-SourceFolder / Get-PredecessorCandidates RUN IN HERE. Without this the DEV build silently
+                # uses the ORIGINAL (UNC-only) versions - the tool looks like it is ignoring SharePoint entirely.
+                # Must be LAST: it captures the originals from Source.ps1 / Predecessor.ps1 above and overrides them.
+                # Test-Path guard: MTB has no SharePoint.ps1, so this line is a harmless no-op there.
+                if (Test-Path "$($p.root)\SharePoint.ps1") { . "$($p.root)\SharePoint.ps1" }
             }
             Initialize-Config (Join-Path $p.root 'settings.json')
+            # Reuse the UI thread's SharePoint token so this runspace never tries to prompt for sign-in.
+            if (Get-Command Set-SPWorkerNoPrompt -ErrorAction SilentlyContinue) { Set-SPWorkerNoPrompt }
+            if ($p.sptoken -and (Get-Command Set-SPAccessToken -ErrorAction SilentlyContinue)) { Set-SPAccessToken $p.sptoken }
             @{ Ok = $true; Result = (& ([scriptblock]::Create($p.work)) $p.arg) }
         } catch { @{ Ok = $false; Error = "$($_.Exception.Message)" } }
     }).AddArgument($payload)

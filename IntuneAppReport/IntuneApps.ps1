@@ -35,7 +35,26 @@ if (Test-Path $cfgPath) {
     } catch { [void][Windows.MessageBox]::Show("settings.json is not valid JSON:`n$($_.Exception.Message)", 'IntuneApps') }
 }
 
-$script:DataDir   = $(if ($cfg.DataPath) { $cfg.DataPath } else { Join-Path $script:Root 'Data' })
+# --- path resolution --------------------------------------------------------------------------------
+# Everything is resolved RELATIVE TO THE TOOL unless settings.json gives an absolute path. An absolute path
+# baked into settings.json breaks the moment the folder is moved or the tool is copied to another machine -
+# which is exactly what happened: ModulePath pointed at Downloads\files\lib after that folder moved, so the
+# modules could not be imported at all. The tool ships its own lib\PowerShell Module, so that is the default.
+function Resolve-ToolPath {
+    param([string]$Path, [string]$Fallback)
+    $p = "$Path".Trim()
+    if (-not $p) { return $Fallback }
+    if ([IO.Path]::IsPathRooted($p)) {
+        if (Test-Path -LiteralPath $p) { return $p }
+        Write-Host "settings.json path not found, using the tool's own copy instead: $p" -ForegroundColor Yellow
+        return $Fallback
+    }
+    return (Join-Path $script:Root $p)      # relative -> relative to the tool folder
+}
+
+$script:ModuleDir = Resolve-ToolPath -Path $cfg.ModulePath -Fallback (Join-Path $script:Root 'lib\PowerShell Module')
+$cfg.ModulePath   = $script:ModuleDir
+$script:DataDir   = Resolve-ToolPath -Path $cfg.DataPath   -Fallback (Join-Path $script:Root 'Data')
 $script:SnapDir   = Join-Path $script:DataDir 'Snapshots'
 $script:CacheDir  = Join-Path $script:DataDir 'ModuleCache'
 $script:LogPath   = Join-Path $script:DataDir 'ChangeLog.json'

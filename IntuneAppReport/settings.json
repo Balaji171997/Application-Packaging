@@ -1,6 +1,8 @@
 {
     "TenantId": "m365.man",
-    "ModulePath": "C:\\Users\\AW140\\Downloads\\files\\lib\\PowerShell Module",
+
+    "_comment_paths": "Leave ModulePath/DataPath EMPTY to use the tool's own folders (lib\\PowerShell Module, Data). A relative path resolves against the tool folder. An absolute path is used only if it actually exists, otherwise the bundled copy is used - so moving or copying the tool never breaks it. This used to be an absolute path into Downloads\\files\\lib, which broke when that folder moved.",
+    "ModulePath": "",
     "DataPath": "",
 
     "_comment_stats": "installSummary returned HTTP 400 for every one of the 801 apps in this tenant - that per-app endpoint is not usable here, and it costs one wasted call per app. Left OFF. Device/user install counts would need the reports API (deviceManagement/reports/getDeviceInstallStatusReport) instead.",

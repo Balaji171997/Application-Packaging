@@ -15,16 +15,25 @@
     "RepositoryPath": "\\\\mndemucfsm01\\SEC-EQS-Lib-Gate\\EQS_SEC\\EQS\\Packages\\Incoming",
     "OutgoingPath": "\\\\mndemucfsm01\\SEC-EQS-Lib-Gate\\EQS_SEC\\EQS\\Packages\\Outgoing",
     "SharePointPath": "",
+    "_SharePoint_help": [
+        "Enabled=false makes this tool behave EXACTLY like the normal Package Builder (shares only).",
+        "SiteUrl + Library are the only two you normally change; SitePath is derived from SiteUrl automatically.",
+        "Fallbacks are the shares this tool already used: RepositoryPath for source, PredecessorPath(s) for predecessors.",
+        "UseSourceRepo=false / UsePredecessorRepo=false turn off SharePoint for just that one thing."
+    ],
     "SharePoint": {
         "Enabled": true,
         "SiteUrl": "https://manonlineservices.sharepoint.com/sites/SWPackaging",
-        "SitePath": "/sites/SWPackaging",
         "Library": "PackageSources",
         "ClientId": "28bf2c22-437c-42e7-a4be-e8a0f44a8264",
         "ModulePath": "Lib\\PnP.PowerShell\\1.12.0\\PnP.PowerShell.psd1",
         "UseSourceRepo": true,
+        "UseUncSourceFallback": true,
         "UsePredecessorRepo": true,
-        "AlsoSearchUnc": true
+        "AlsoSearchUnc": true,
+        "UncProbeTimeoutMs": 1500,
+        "SourceSkipFolders": [ "EQS", "SCCM" ],
+        "StagingRetentionDays": 7
     },
     "SnippetsPath": "\\\\mndemucfsm01\\SEC-EQS-Lib-Gate\\EQS_SEC\\EQS\\Script Repository\\VWITS Team\\Balaji\\PackageBuilder\\snippets.json",
     "Sccm": {

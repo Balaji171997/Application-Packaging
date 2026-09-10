@@ -32,6 +32,19 @@ if (-not (Select-String -Path (Join-Path $root 'Pack-Engine.ps1') -Pattern "'Sha
     throw "Pack-Engine.ps1 does not include SharePoint.ps1 - the release would have NO SharePoint support."
 }
 
+# Guard: the exe MUST be the thin Loader that reads PackageBuilder.pak at runtime. The other exe in this repo is
+# a ps2exe build with a July engine baked INSIDE it - it ignores the .pak completely, so repacking changes nothing
+# and the tool silently behaves like the old UNC-only build. That shipped in two releases before it was caught.
+$exe = Join-Path $root 'PackageBuilder.exe'
+if (-not (Test-Path -LiteralPath $exe)) { throw "PackageBuilder.exe not found at $exe" }
+$exeBytes = [IO.File]::ReadAllBytes($exe)
+$exeText  = [Text.Encoding]::Unicode.GetString($exeBytes) + [Text.Encoding]::ASCII.GetString($exeBytes)
+if ($exeText -notmatch 'PackageBuilder\.pak') {
+    throw ("PackageBuilder.exe ({0:N0} KB) does not reference PackageBuilder.pak - it looks like a ps2exe build " -f ((Get-Item $exe).Length/1KB)) +
+          "with the engine baked in, which would IGNORE the .pak. Copy the thin Loader exe (~54 KB) over it first."
+}
+Write-Host ("Loader exe verified ({0:N0} KB, reads the .pak)." -f ((Get-Item $exe).Length/1KB)) -ForegroundColor Green
+
 # ---- 2. assemble a clean distribution folder --------------------------------------------------
 $name  = "PackageBuilder-SharePoint-$Version" + $(if ($NoSccm) { '-nosccm' } else { '' })
 $stage = Join-Path $OutDir $name

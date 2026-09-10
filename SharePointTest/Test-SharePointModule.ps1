@@ -39,6 +39,11 @@ $preRead = (Get-Command Read-PredecessorModel -ErrorAction SilentlyContinue).Scr
 . (Join-Path $PBRoot 'SharePoint.ps1')
 Say "Loaded SharePoint.ps1 on top (from $PBRoot)." 'DarkGray'
 
+# GUI.ps1 does this at startup. WITHOUT it Get-Setting returns nothing, so PredecessorPath is empty and only
+# the hardcoded 2nd repo is ever searched - i.e. the test would exercise a config the real tool never runs in.
+Initialize-Config (Join-Path $PBRoot 'settings.json')
+Say "Config loaded - PredecessorPath = $(Get-Setting PredecessorPath)" 'DarkGray'
+
 Write-Host "`n=== Stage: $Stage ===" -ForegroundColor Cyan
 
 if ($Stage -eq 'Off') {
@@ -57,11 +62,18 @@ if ($Stage -eq 'Off') {
     $nowFind = (Get-Command Find-SourceFolder).ScriptBlock
     if ("$nowFind" -ne "$preFind") { Pass 'Find-SourceFolder is now the override' } else { Fail 'override did not take effect' }
 
-    # 4. feature OFF by default
-    $cfg = Get-SPConfig
-    if (-not $cfg.Enabled) { Pass "feature is OFF by default (Enabled=$($cfg.Enabled))" } else { Fail 'feature is ON by default - unsafe' }
+    # 4. the CODE default must be off (so dropping SharePoint.ps1 into a tool changes nothing until asked).
+    #    This tool's shipped settings.json then deliberately turns it ON - report both, they are different things.
+    if (-not $script:SPDefaults.Enabled) { Pass 'code default is OFF (SharePoint.ps1 is inert unless configured)' }
+    else { Fail 'code default is ON - unsafe for any tool that drops this file in' }
+    Say "      shipped settings.json has Enabled = $((Get-SPConfig).Enabled)  <- intentional for the SP tool" 'DarkGray'
 
-    # 5. with it OFF, calling the override must delegate and NEVER touch SharePoint
+    # 5. with it turned OFF, the overrides must delegate and NEVER touch SharePoint.
+    #    Force it off in-memory (settings.json says on) so we are testing the disabled path itself.
+    $script:SPKillSwitch = $true
+    $script:SPDefaults.Enabled = $false
+    $savedSetting = Get-Setting 'SharePoint'
+    if ($savedSetting) { $savedSetting.Enabled = $false }
     $script:SPConnected = $false
     $null = Find-SourceFolder -PkgName 'Nonexistent_Thing_x64_1.0.0-0001_MUL'
     if (-not $script:SPConnected) { Pass 'OFF: Find-SourceFolder delegated without connecting to SharePoint' }

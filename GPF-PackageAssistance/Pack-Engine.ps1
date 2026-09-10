@@ -1,7 +1,7 @@
 ﻿##############################################################
-# Package Builder - engine packer (MAINTAINER ONLY, never shipped).
+# Package Assistance (GPF) - engine packer (MAINTAINER ONLY, never shipped).
 # Merges ALL tool .ps1 logic, compresses + encrypts it into ONE binary file:
-#     PackageBuilder.pak
+#     PackageAssistance.pak        <- GPF artifact name; NOT PackageBuilder.pak (that is MTB's)
 # The team runs a small, STABLE loader exe (built once from Loader.ps1) that decrypts and
 # executes the pak in memory. UPDATING THE TOOL = run this script, replace the .pak. No
 # recompile, no ps2exe, no touching the exe ever again.
@@ -54,4 +54,5 @@ $aes.Dispose()
 
 [IO.File]::WriteAllBytes($OutFile, $cipher)
 Write-Host ("Packed -> {0}  ({1} KB merged -> {2} KB pak)" -f $OutFile, [math]::Round($raw.Length/1KB), [math]::Round($cipher.Length/1KB)) -ForegroundColor Green
-Write-Host 'Deploy: copy this .pak over the team copy (next to PackageBuilder.exe). Nothing else changes.'
+Write-Host 'Deploy: copy this .pak over the team copy (next to PackageAssistance.exe). Nothing else changes.'
+Write-Host 'Snippet-only changes need NO repack - just copy snippets.json.'

@@ -56,6 +56,16 @@ if ($t -notmatch '\.\s+"\$root\\SharePoint\.ps1"') {
     $changed += 'GUI.ps1 (dot-source)'
 }
 
+# GUI.ps1 has a SECOND, easily-missed loader: the background runspace in Invoke-PBAsync. Find-SourceFolder and
+# Get-PredecessorCandidates actually execute in there, so if its dev-mode list lacks SharePoint.ps1 the tool
+# quietly uses the UNC originals and looks like SharePoint was never wired up at all.
+$t = [IO.File]::ReadAllText($gui)
+if ($t -notmatch 'Test-Path "\$\(\$p\.root\)\\SharePoint\.ps1"') {
+    $t = $t -replace '(\.\s+"\$\(\$p\.root\)\\PSADT_V3toV4_Mappings\.ps1"[^\r\n]*)', "`$1`r`n                if (Test-Path `"`$(`$p.root)\SharePoint.ps1`") { . `"`$(`$p.root)\SharePoint.ps1`" }"
+    [IO.File]::WriteAllText($gui, $t)
+    $changed += 'GUI.ps1 (Invoke-PBAsync runspace)'
+}
+
 # Pack-Engine.ps1 keeps its OWN engine list and is what actually builds the SHIPPED .pak. Miss this one and the
 # release silently ships without SharePoint support - the tool runs UNC-only with no error at all.
 $pe = Join-Path $here 'Pack-Engine.ps1'
