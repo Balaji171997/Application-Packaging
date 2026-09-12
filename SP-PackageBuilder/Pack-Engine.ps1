@@ -1,7 +1,7 @@
 ##############################################################
-# Package Builder - engine packer (MAINTAINER ONLY, never shipped).
+# Package Companion - engine packer (MAINTAINER ONLY, never shipped).
 # Merges ALL tool .ps1 logic, compresses + encrypts it into ONE binary file:
-#     PackageBuilder.pak
+#     PackageCompanion.pak
 # The team runs a small, STABLE loader exe (built once from Loader.ps1) that decrypts and
 # executes the pak in memory. UPDATING THE TOOL = run this script, replace the .pak. No
 # recompile, no ps2exe, no touching the exe ever again.
@@ -11,7 +11,7 @@
 param([string]$OutFile)
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-if (-not $OutFile) { $OutFile = Join-Path $root 'PackageBuilder.pak' }
+if (-not $OutFile) { $OutFile = Join-Path $root 'PackageCompanion.pak' }
 
 # --- 1. Merge (same model Build-Exe.ps1 proved: engine modules embedded, GUI body verbatim).
 $engineFiles = @('Core.ps1','Theme.ps1','Predecessor.ps1','Build.ps1','Source.ps1','MstBuilder.ps1','BundledMsi.ps1',
@@ -30,7 +30,7 @@ foreach ($f in $engineFiles) {
 $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sb.ToString()))
 $gui = ([IO.File]::ReadAllText((Join-Path $root 'GUI.ps1'), [Text.Encoding]::UTF8)).TrimStart([char]0xFEFF)
 $merged = @"
-# Package Builder - packed build $(Get-Date -Format 'yyyy-MM-dd HH:mm')
+# Package Companion - packed build $(Get-Date -Format 'yyyy-MM-dd HH:mm')
 `$script:PBEngineSource = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$b64'))
 . ([scriptblock]::Create(`$script:PBEngineSource))
 $gui
@@ -57,4 +57,4 @@ $aes.Dispose()
 
 [IO.File]::WriteAllBytes($OutFile, $cipher)
 Write-Host ("Packed -> {0}  ({1} KB merged -> {2} KB pak)" -f $OutFile, [math]::Round($raw.Length/1KB), [math]::Round($cipher.Length/1KB)) -ForegroundColor Green
-Write-Host 'Deploy: copy this .pak over the team copy (next to PackageBuilder.exe). Nothing else changes.'
+Write-Host 'Deploy: copy this .pak over the team copy (next to PackageCompanion.exe). Nothing else changes.'

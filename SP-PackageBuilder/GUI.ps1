@@ -1,5 +1,5 @@
 ##############################################################
-# GUI.ps1  -  Package Builder wizard (Step 1 + Step 2 live; 3/4 stubbed)
+# GUI.ps1  -  Package Companion wizard (Step 1 + Step 2 live; 3/4 stubbed)
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -STA -File GUI.ps1
 ##############################################################
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
@@ -44,7 +44,7 @@ if ($script:PBEngineSource) {
 # ---- RUN-FROM-SHARE -> RELAUNCH LOCAL --------------------------------------------------------------------------
 # Launched from a UNC/network share, the process network stack is restricted: SCCM (WMI/DNS to the site server) and
 # Intune (WinHTTP/proxy to Microsoft) FAIL, though the identical tool works copied locally. So mirror the CORE
-# (package-building) files to a LOCAL cache (%LOCALAPPDATA%\PackageBuilder) and relaunch there. The HEAVY SCCM/Intune
+# (package-building) files to a LOCAL cache (%LOCALAPPDATA%\PackageCompanion) and relaunch there. The HEAVY SCCM/Intune
 # modules are NOT copied yet - they come later, on demand, the first time the user publishes (Ensure-PublishModules-
 # Staged), to keep this first launch small + fast. Users only ever use a shortcut. Best-effort: any failure -> fall
 # through and run from the share unchanged. Disable centrally with settings.json -> "LocalRelaunch": false.
@@ -59,6 +59,28 @@ if ($script:PBEngineSource -and (Test-NetworkPath "$root") -and ($env:PB_LOCALRU
         }
     }
 }
+
+# ---- HIGH-DPI ---------------------------------------------------------------------------------------------
+# MUST run before ANY window exists - including the sign-in dialog. Without it the process is DPI-unaware, so
+# Windows bitmap-stretches it on a scaled display: text goes soft and cramped, and every child dialog inherits
+# that, which is why the Microsoft sign-in window rendered badly. Declaring awareness makes Windows hand us real
+# pixels and lets WPF lay out crisply. Newest API first - each is only available from a given Windows version.
+try {
+    if (-not ('PB.Dpi' -as [type])) {
+        Add-Type -Namespace PB -Name Dpi -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr v);
+[DllImport("shcore.dll")] public static extern int  SetProcessDpiAwareness(int v);
+[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+'@ -ErrorAction SilentlyContinue
+    }
+    $dpiOk = $false
+    # -4 = PER_MONITOR_AWARE_V2 (Win10 1703+): per-monitor scaling, and dialogs scale with their parent.
+    try { $dpiOk = [PB.Dpi]::SetProcessDpiAwarenessContext([IntPtr]::new(-4)) } catch {}
+    # 2 = PROCESS_PER_MONITOR_DPI_AWARE (Win8.1+)
+    if (-not $dpiOk) { try { $dpiOk = ([PB.Dpi]::SetProcessDpiAwareness(2) -eq 0) } catch {} }
+    # system-DPI aware (Vista+) - still far better than being stretched
+    if (-not $dpiOk) { try { $dpiOk = [PB.Dpi]::SetProcessDPIAware() } catch {} }
+} catch {}
 
 Initialize-Log
 Initialize-Config (Join-Path $root 'settings.json')
@@ -98,6 +120,9 @@ if (Test-Path $script:AvalonDll) {
 $script:State = @{
     # Step 1 (Info): identity + predecessor + source
     PkgName=''; Parsed=$null; Ritm=''
+    # DIRECT INTUNE: Intune-only package. No repair code is carried from the predecessor (Intune has no repair
+    # action) and every SCCM control is hidden. Set on Step 1; read by the build and by Step 4.
+    DirectIntune=$false
     PredecessorPath=$null; PredecessorModel=$null; AddUninstallPrevious=$false; ReusePkg=$null
     SourceFolder=$null; Resolved=$null; ChosenInstallers=@(); LooseFiles=$false
     SourceNotes=@()     # review notes tied to the source (e.g. MSI extracted from a wrapper EXE)
@@ -144,6 +169,99 @@ $script:Rehydrating = $false
 # the scope they were DEFINED in, so handlers reach the real objects through these instead.
 function Get-PBState { return $script:State }
 function Get-PBMainWindow { return $script:Win }
+
+# CHROME: the header says WHAT is being worked on, the rail footer says WHERE it comes from, and the bottom
+# strip says what is happening RIGHT NOW. Each fact lives in exactly one place - previously the package, the
+# source and the signed-in user were spread across the rail and the bottom bar, which just read as clutter.
+# Refreshed when the underlying thing changes, never on a timer.
+function Update-PBChrome {
+    $pkg = "$($script:State.PkgName)".Trim()
+
+    if ($LblHdrPkg)  { $LblHdrPkg.Text  = $(if ($pkg) { $pkg } else { 'No package yet' })
+                       $LblHdrPkg.Foreground = $(if ($pkg) { '#E7E9ED' } else { '#6B7280' }) }
+    if ($LblHdrRitm) { $LblHdrRitm.Text = "$($script:State.Ritm)".Trim() }
+    if ($LblHdrUser -and -not "$($LblHdrUser.Text)".Trim()) { $LblHdrUser.Text = "$env:USERNAME" }
+
+    # Rail footer: quiet label/value reference, not badges.
+    if ($LblOrigin) {
+        $src = if (Get-Command Get-SPPrimaryLabel -ErrorAction SilentlyContinue) { Get-SPPrimaryLabel -For 'Source' } else { 'the Incoming share' }
+        $tgt = if ([bool]$script:State.DirectIntune) { 'Intune only' } else { 'SCCM + Intune' }
+        $LblOrigin.Text = "Source   $src`nTarget   $tgt"
+    }
+    if ($LblStatusBar -and -not "$($LblStatusBar.Text)".Trim()) { $LblStatusBar.Text = 'Ready' }
+}
+# Kept as the old name so existing call sites continue to work.
+function Update-PBStatusBar { Update-PBChrome }
+
+# DELIVERY TARGET: show only what the chosen target can actually do.
+# Direct Intune hides every SCCM-only control rather than greying it out - a disabled button still invites the
+# question "why can't I click that?", which is exactly the confusion this is meant to remove.
+# NOTE: the Testing and Troubleshoot tabs still MIX both targets (Intune operations live under Testing, and
+# Troubleshoot is CCM-log based). Those are split per target in the Step 4 restructure; until then they stay
+# visible so Intune-only users do not lose the Intune controls that currently live inside them.
+function Apply-DeliveryTarget {
+    $intuneOnly = [bool]$script:State.DirectIntune
+    $vis = $(if ($intuneOnly) { 'Collapsed' } else { 'Visible' })
+
+    # All SCCM work now lives under one parent tab, so Direct Intune hides exactly that: the window is left
+    # showing Review & Create, Publish and Intune, with nothing on screen that cannot work.
+    foreach ($c in @($BtnCreateSccm, $ChkPubAllowInteract, $LblPubRepair, $TxtPubRepair, $TabSccm)) {
+        if ($c) { $c.Visibility = $vis }
+    }
+    # Collapse the Repair grid row too, so hiding its two controls does not leave a blank gap.
+    if ($RowPubRepair) { $RowPubRepair.Height = $(if ($intuneOnly) { New-Object Windows.GridLength(0) } else { New-Object Windows.GridLength(30) }) }
+
+    if ($LblPubCmdHdr) {
+        $LblPubCmdHdr.Text = $(if ($intuneOnly) { 'Commands (Intune)' } else { 'Commands (used by both SCCM and Intune; Repair is SCCM-only)' })
+    }
+    if ($LblDirectIntuneHint) {
+        $LblDirectIntuneHint.Text = $(if ($intuneOnly) {
+            'Intune only: SCCM controls are hidden, and the Repair section of the script is left empty (Intune has no repair action).'
+        } else {
+            'Leave unticked for the normal SCCM + Intune package. Tick it only when this app will never be deployed through SCCM.'
+        })
+    }
+    if (Get-Command Update-PBStatusBar -ErrorAction SilentlyContinue) { Update-PBStatusBar }
+}
+
+# Where the tool is looking RIGHT NOW, in words, straight from the live config. Everything the user reads
+# comes through here so no label can drift out of step with what the code actually does. Falls back to the
+# old share wording if SharePoint.ps1 is not loaded (i.e. the plain MTB build).
+function Get-PBSearchLabel {
+    param([string]$For = 'Source')
+    if (Get-Command Get-SPSearchText -ErrorAction SilentlyContinue) { return (Get-SPSearchText -For $For) }
+    return $(if ($For -eq 'Source') { 'Searching the Incoming share for the source...' } else { 'Searching the live share for predecessors...' })
+}
+function Get-PBOriginLabel {
+    param([string]$For = 'Source')
+    if (Get-Command Get-SPPrimaryLabel -ErrorAction SilentlyContinue) { return (Get-SPPrimaryLabel -For $For) }
+    return $(if ($For -eq 'Source') { 'the Incoming share' } else { 'the live share' })
+}
+
+# ONE honest check for "can I use this share?", used everywhere a share is touched.
+# Two reasons this exists rather than a bare Test-Path:
+#   1) Test-Path on an unreachable UNC BLOCKS for 30-90s on the SMB timeout, so the window appears to hang.
+#      Test-SPUncUsable probes the host with a bounded wait and caches the answer for the session.
+#   2) "not reachable" is not a useful thing to tell someone. The message says which problem it is and what
+#      to do instead, because for the packagers with no share rights this is normal, not an error.
+# Returns $true when the share is usable; otherwise writes the reason to $Label and returns $false.
+function Test-PBShareAvailable {
+    param([string]$Path, [string]$What = 'share', $Label, [string]$Alternative = '')
+    $setMsg = {
+        param($t)
+        if ($Label) { $Label.Text = $t; $Label.Foreground = '#F48771' }
+        Write-Log $t Warning
+    }
+    if (-not "$Path".Trim()) {
+        & $setMsg "No $What is configured (settings.json). $Alternative"
+        return $false
+    }
+    $ok = if (Get-Command Test-SPUncUsable -ErrorAction SilentlyContinue) { Test-SPUncUsable -Path $Path }
+          else { Test-Path -LiteralPath $Path -ErrorAction SilentlyContinue }
+    if ($ok) { return $true }
+    & $setMsg "No access to the $What from this machine: $Path`r`nThis is expected if you have not been granted rights to it. $Alternative"
+    return $false
+}
 
 $script:StepOwns   = @{
     1 = @('PredecessorPath','PredecessorModel','SourceFolder','Resolved','ChosenInstallers','LooseFiles','AddUninstallPrevious','SourceNotes','ReusePkg')
@@ -285,16 +403,38 @@ function Show-InstallerPicker {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Package Builder" Height="640" Width="1040" WindowStartupLocation="CenterScreen" Background="#181A1F">
+        Title="Package Companion" Height="640" Width="1040" WindowStartupLocation="CenterScreen" Background="#181A1F">
   <Grid>
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+
+    <!-- HEADER: identity of the thing being worked on. One row, one place - the package name, its RITM and
+         who is signed in. Context used to be split between the rail and the bottom bar, which read as clutter. -->
+    <Border Grid.Row="0" Background="#1F232B" BorderBrush="#2E3340" BorderThickness="0,0,0,1" Padding="16,9">
+      <Grid>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <TextBlock Grid.Column="0" Text="PACKAGE COMPANION" Foreground="#56C8D6" FontWeight="Bold" FontSize="12" VerticalAlignment="Center" Margin="0,0,14,0"/>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock x:Name="LblHdrPkg" Text="No package yet" Foreground="#E7E9ED" FontFamily="Consolas" FontSize="13"
+                     TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+          <TextBlock x:Name="LblHdrRitm" Text="" Foreground="#6B7280" FontSize="11.5" VerticalAlignment="Center" Margin="12,0,0,0"/>
+        </StackPanel>
+        <TextBlock x:Name="LblHdrUser" Grid.Column="2" Text="" Foreground="#7F8A99" FontSize="11" VerticalAlignment="Center"/>
+      </Grid>
+    </Border>
+
+    <Grid Grid.Row="1">
     <Grid.ColumnDefinitions><ColumnDefinition Width="152"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
     <!-- step rail -->
     <StackPanel Grid.Column="0" Background="#21242B">
-      <TextBlock Text="PACKAGE&#10;BUILDER" Foreground="#56C8D6" FontWeight="Bold" Margin="12,14,0,16" FontSize="12"/>
       <TextBlock x:Name="N1" Text="1  Info" Foreground="White" Margin="14,8" FontSize="13"/>
       <TextBlock x:Name="N2" Text="2  Detection" Foreground="#888" Margin="14,8" FontSize="13"/>
       <TextBlock x:Name="N3" Text="3  Editor" Foreground="#888" Margin="14,8" FontSize="13"/>
       <TextBlock x:Name="N4" Text="4  Create &amp; Publish" Foreground="#888" Margin="14,8" FontSize="13"/>
+      <!-- Rail footer: where this build reads from and where it will go. Read off the live config, so it can
+           never claim SharePoint while actually reading a share. Quiet reference text, not badges. -->
+      <Border BorderBrush="#2E3340" BorderThickness="0,1,0,0" Margin="14,20,10,0" Padding="0,10,0,0">
+        <TextBlock x:Name="LblOrigin" Text="" Foreground="#5E6875" TextWrapping="Wrap" FontSize="10.5" LineHeight="15"/>
+      </Border>
     </StackPanel>
 
     <Grid Grid.Column="1">
@@ -304,11 +444,28 @@ function Show-InstallerPicker {
       <Grid x:Name="P1" Grid.Row="0" Margin="16,12,16,12" Visibility="Visible">
         <StackPanel>
           <TextBlock Text="Target package name" Foreground="#E7E9ED" Margin="0,0,0,4"/>
-          <TextBox x:Name="TxtPkg" Height="26" FontFamily="Consolas"/>
+          <TextBox x:Name="TxtPkg" Height="26" FontFamily="Consolas"
+                   ToolTip="Vendor_App_Arch_Version-Release_Lang. This name drives everything: where the source is looked up, which predecessor is offered, and the folders inside the built package."/>
+          <TextBlock Foreground="#5E6875" FontSize="10.5" TextWrapping="Wrap" Margin="0,3,0,0"
+                     Text="Vendor_App_Arch_Version-Release_Lang    e.g. Mozilla_FirefoxESRMAN_x86_140.15.0-0001_MUL"/>
           <TextBlock Text="RITM ID" Foreground="#E7E9ED" Margin="0,8,0,4"/>
-          <TextBox x:Name="TxtRitm" Height="26" Width="240" HorizontalAlignment="Left" FontFamily="Consolas"/>
+          <TextBox x:Name="TxtRitm" Height="26" Width="240" HorizontalAlignment="Left" FontFamily="Consolas"
+                   ToolTip="The ServiceNow request number. It is written into the generated script and the package documentation."/>
+          <TextBlock Text="e.g. RITM0719393" Foreground="#5E6875" FontSize="10.5" TextWrapping="Wrap" Margin="0,3,0,0"/>
 
           <TextBlock x:Name="LblParsed" Foreground="#6A9955" TextWrapping="Wrap" Margin="0,8,0,8"/>
+
+          <!-- DELIVERY TARGET: decided here because it changes what gets BUILT (no repair code for Intune),
+               not just where it is published. Everything SCCM-only is hidden while this is ticked. -->
+          <Border BorderBrush="#2E3340" BorderThickness="1" CornerRadius="3" Padding="10,7" Margin="0,0,0,12">
+            <StackPanel>
+              <CheckBox x:Name="ChkDirectIntune" Foreground="#E7E9ED"
+                        Content="Direct Intune package (no SCCM)"
+                        ToolTip="Build this package for Intune only. Intune has no repair action, so no repair code is carried over from the predecessor - the Repair section stays in the script but empty. All SCCM controls are hidden."/>
+              <TextBlock x:Name="LblDirectIntuneHint" Foreground="#7F8A99" FontSize="10.5" TextWrapping="Wrap" Margin="22,3,0,0"
+                         Text="Leave unticked for the normal SCCM + Intune package. Tick it only when this app will never be deployed through SCCM."/>
+            </StackPanel>
+          </Border>
 
           <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
             <Button x:Name="BtnPred"  Content="Find predecessor" Padding="10,4" Margin="0,0,8,0"/>
@@ -545,17 +702,22 @@ function Show-InstallerPicker {
         </StackPanel>
         </ScrollViewer>
         </TabItem>
-        <TabItem Header="Integration">
+        <!-- PUBLISH: CREATE the application. The fields here are shared by both targets (one source of truth),
+             so they are filled once and either Create button uses them. Changing an app that already exists is
+             NOT done here - that lives on the SCCM Modify / Intune tabs. -->
+        <TabItem x:Name="TabPublish" Header="Publish">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="8">
-          <TextBlock Text="Publish to SCCM / Intune" Foreground="#56C8D6" FontWeight="Bold" FontSize="14" Margin="0,0,0,8"/>
-          <TextBlock Text="Use the package just created above, OR load an existing one by name from the Outgoing share (no build needed)." Foreground="#888" FontSize="11" Margin="0,0,0,8"/>
+          <TextBlock Text="Publish - create the application in SCCM and/or Intune" Foreground="#56C8D6" FontWeight="Bold" FontSize="14" Margin="0,0,0,2"/>
+          <TextBlock Text="Shared by both targets - fill in once, create in either. Changing an app that already exists is done on the SCCM or Intune tab." Foreground="#888" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"/>
           <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
             <TextBlock Text="Package name:" Foreground="#E7E9ED" VerticalAlignment="Center" Margin="0,0,8,0"/>
             <TextBox x:Name="TxtPubPkgName" Width="330" Height="24" FontFamily="Consolas" VerticalContentAlignment="Center"/>
             <Button x:Name="BtnLoadOutgoing" Content="Load from Outgoing" Padding="10,4" Margin="8,0,0,0"/>
             <Button x:Name="BtnBrowsePkg" Content="Browse..." Padding="10,4" Margin="8,0,0,0"/>
           </StackPanel>
+          <TextBlock Foreground="#5E6875" FontSize="10.5" TextWrapping="Wrap" Margin="0,0,0,10"
+                     Text="Full package name. Load from Outgoing finds it by name; Browse points at the package folder."/>
           <StackPanel x:Name="PnlPublish" IsEnabled="False">
             <Grid>
               <Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -591,15 +753,15 @@ function Show-InstallerPicker {
                         VerticalAlignment="Center" Margin="20,0,0,0"
                         ToolTip="Tick when the uninstall/detection key lives under WoW6432Node (a 32-bit app on 64-bit Windows). Auto-set from the package; correct it here if the SoftIdent format made it wrong."/>
             </StackPanel>
-            <TextBlock Text="Commands (used by both SCCM and Intune; Repair is SCCM-only)" Foreground="#56C8D6" FontSize="12" Margin="0,8,0,2"/>
+            <TextBlock x:Name="LblPubCmdHdr" Text="Commands (used by both SCCM and Intune; Repair is SCCM-only)" Foreground="#56C8D6" FontSize="12" Margin="0,8,0,2"/>
             <Grid>
               <Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-              <Grid.RowDefinitions><RowDefinition Height="30"/><RowDefinition Height="30"/><RowDefinition Height="30"/></Grid.RowDefinitions>
+              <Grid.RowDefinitions><RowDefinition Height="30"/><RowDefinition Height="30"/><RowDefinition x:Name="RowPubRepair" Height="30"/></Grid.RowDefinitions>
               <TextBlock Grid.Row="0" Grid.Column="0" Text="Install"   Foreground="#E7E9ED" VerticalAlignment="Center"/>
               <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtPubInstall"   Height="24" FontFamily="Consolas" Margin="0,2"/>
               <TextBlock Grid.Row="1" Grid.Column="0" Text="Uninstall" Foreground="#E7E9ED" VerticalAlignment="Center"/>
               <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TxtPubUninstall" Height="24" FontFamily="Consolas" Margin="0,2"/>
-              <TextBlock Grid.Row="2" Grid.Column="0" Text="Repair (SCCM)" Foreground="#E7E9ED" VerticalAlignment="Center"/>
+              <TextBlock x:Name="LblPubRepair" Grid.Row="2" Grid.Column="0" Text="Repair (SCCM)" Foreground="#E7E9ED" VerticalAlignment="Center"/>
               <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TxtPubRepair"  Height="24" FontFamily="Consolas" Margin="0,2"/>
             </Grid>
             <!-- v3 packages: SCCM runs Deploy-Application.exe directly, Intune wraps it with ServiceUI. This note makes
@@ -614,14 +776,28 @@ function Show-InstallerPicker {
                 <Button x:Name="BtnCreateSccm"   Content="Create in SCCM"   Padding="10,4" Margin="0,0,8,0"/>
                 <Button x:Name="BtnCreateIntune" Content="Create in Intune" Padding="10,4" Margin="0,0,8,0"/>
               </StackPanel>
-              <Button x:Name="BtnOpenCmTrace"  Content="Open log (CMTrace)" Padding="10,4" Margin="0,0,8,0"/>
-              <Button x:Name="BtnOpenWork"     Content="Open work folder" Padding="10,4" Margin="0,0,8,0"/>
-              <!-- LOCAL shortcut screenshots (BtnTsShots) live on the Review & Create tab (test the package you just
-                   built, right after Admin/SYSTEM CMD). REMOTE screenshots (BtnRemoteShots) live on Troubleshoot. -->
+              <!-- 'Open log' / 'Open work folder' removed from Publish: they are generic utilities, not part of
+                   publishing, and they pushed this page into scrolling. Local shortcut screenshots (BtnTsShots)
+                   remain on Review & Create. There is no remote screenshot option - the agent push was
+                   unreliable, so screenshots are taken on this machine only. -->
             </StackPanel>
           </StackPanel>
           <!-- Modify section + progress live OUTSIDE PnlPublish so they work without a loaded package. -->
-            <Border BorderBrush="#4EC9B0" BorderThickness="0,2,0,0" Margin="0,16,0,0" Padding="0,12,0,0">
+        </StackPanel>
+        </ScrollViewer>
+        </TabItem>
+
+        <!-- SCCM MODIFY: changing an app that ALREADY EXISTS in SCCM. It used to sit directly under the
+             shared "Publish to SCCM / Intune" create form, which made it look like part of creating. -->
+        <!-- SCCM: one home for everything done to an SCCM application. Sub-tabs are plain nouns - the
+             parent tab already says which product this is. -->
+        <TabItem x:Name="TabSccm" Header="SCCM">
+        <TabControl Background="#181A1F" BorderThickness="0" Foreground="#E7E9ED" Padding="0,6,0,0">
+        <TabItem x:Name="TabSccmModify" Header="Application">
+        <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="12">
+          <TextBlock Text="SCCM Modify - change an application that already exists in SCCM" Foreground="#4EC9B0" FontWeight="Bold" FontSize="14" Margin="0,0,0,4"/>
+          <TextBlock Text="Independent of the Publish tab. To CREATE the app, use Publish." Foreground="#888" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+            <Border x:Name="PnlSccmModify" BorderBrush="#4EC9B0" BorderThickness="0,2,0,0" Margin="0,16,0,0" Padding="0,12,0,0">
               <StackPanel>
                 <TextBlock Text="Modify an existing SCCM application" Foreground="#4EC9B0" FontWeight="Bold" FontSize="14"/>
                 <TextBlock Text="Independent of the Create fields above. Branding key stays automatic and is never shown." Foreground="#888" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,8"/>
@@ -658,6 +834,10 @@ function Show-InstallerPicker {
                   <TextBox   Grid.Column="1" x:Name="TxtModContentSrc" Height="24" FontFamily="Consolas" Margin="0,2,8,2" ToolTip="For Update content. Blank = auto-find this package by name in Outgoing. Or browse/paste a package folder (SCCM and Intune sources can differ)."/>
                   <Button    Grid.Column="2" x:Name="BtnModBrowseSrc" Content="Browse..." Padding="10,4"/>
                 </Grid>
+                <!-- The single most-asked question: WHICH folder level. Point at the PACKAGE folder, the one
+                     holding Content\ - not at Content\ itself, and not at the parent that holds many packages. -->
+                <TextBlock Foreground="#5E6875" FontSize="10.5" TextWrapping="Wrap" Margin="150,3,0,0"
+                           Text="The PACKAGE folder (the one containing Content\), not Content\ itself. Blank = find it by name in Outgoing."/>
                 <CheckBox x:Name="ChkModRefreshOnly" Content="Content already in prelive - just refresh the DPs (don't copy)" Foreground="#E7E9ED" Margin="150,6,0,0" ToolTip="Check this when you updated the prelive content yourself. The tool will NOT copy anything - it only refreshes the existing content on the distribution points. The Content source above is ignored."/>
                 <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                   <Button x:Name="BtnUpdateDetection" Content="Update detection" Padding="10,4" Margin="0,0,8,0"/>
@@ -668,13 +848,13 @@ function Show-InstallerPicker {
                 <TextBlock Text="Fetch loads the app's current detection to edit; Update detection replaces only that clause. Update content refreshes prelive (or just the DPs when ticked). Hover a button for details." Foreground="#888" FontSize="10" TextWrapping="Wrap" Margin="0,8,0,0"/>
               </StackPanel>
             </Border>
-        </StackPanel>
-        </ScrollViewer>
+        </StackPanel></ScrollViewer>
         </TabItem>
 
-        <TabItem Header="Testing">
+        <TabItem x:Name="TabSccmTesting" Header="Collections">
         <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="12">
-          <TextBlock Text="Testing - add machines to the app's TEST collections and refresh client policy" Foreground="#56C8D6" FontWeight="Bold" FontSize="14" Margin="0,0,0,10"/>
+          <TextBlock Text="SCCM Testing - add machines to the app's TEST collections and refresh client policy" Foreground="#56C8D6" FontWeight="Bold" FontSize="14" Margin="0,0,0,4"/>
+          <TextBlock Text="SCCM only. Intune targets Azure AD groups instead - see the Intune tab." Foreground="#888" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
           <Grid>
             <Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <Grid.RowDefinitions><RowDefinition Height="34"/><RowDefinition Height="34"/></Grid.RowDefinitions>
@@ -691,6 +871,8 @@ function Show-InstallerPicker {
               </ComboBox>
             </StackPanel>
           </Grid>
+          <TextBlock Foreground="#5E6875" FontSize="10.5" TextWrapping="Wrap" Margin="150,3,0,0"
+                     Text="Short machine names, comma separated. Adding to one collection removes the machine from the other."/>
           <!-- List box on the left; the collection actions sit BESIDE it (not below) - compact + tidy. -->
           <Grid Margin="0,6,0,0">
             <Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -708,37 +890,15 @@ function Show-InstallerPicker {
               <Button x:Name="BtnRunMachinePolicy"  Content="Run machine policy"      Padding="10,5" HorizontalAlignment="Stretch"/>
             </StackPanel>
           </Grid>
-          <TextBlock Text="Add machines to the list, then Add/Remove/Run policy acts on ALL of them (against &lt;app&gt;-INSTALL/UNINSTALL TEST). Add and Remove are independent - adding to Uninstall does not remove from Install." Foreground="#888" FontSize="10" TextWrapping="Wrap" Margin="0,10,0,0"/>
-          <Border BorderBrush="#3C3C3C" BorderThickness="0,1,0,0" Margin="0,16,0,0" Padding="0,12,0,0">
-            <StackPanel>
-              <TextBlock Text="Intune operations (assignment + content) - app resolved by App ID, else branding key" Foreground="#4EC9B0" FontWeight="Bold" FontSize="13"/>
-              <Grid Margin="0,8,0,0">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <Grid.RowDefinitions><RowDefinition Height="34"/><RowDefinition Height="34"/><RowDefinition Height="34"/><RowDefinition Height="34"/></Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" Grid.Column="0" Text="App ID (preferred)" Foreground="#E7E9ED" VerticalAlignment="Center"/>
-                <TextBox   Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2" x:Name="TxtIntuneAppId" Height="24" FontFamily="Consolas" Margin="0,2" ToolTip="The Intune app's id (GUID). If set, it is used directly. Leave blank to match by branding key (package name) below."/>
-                <TextBlock Grid.Row="1" Grid.Column="0" Text="App name (fallback)" Foreground="#E7E9ED" VerticalAlignment="Center"/>
-                <TextBox   Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" x:Name="TxtIntuneAssignApp" Height="24" FontFamily="Consolas" Margin="0,2" ToolTip="Full package name - used when no App ID is given: the app is matched by its branding key (..\VWG\CM\&lt;name&gt;). No display-name guessing."/>
-                <TextBlock Grid.Row="2" Grid.Column="0" Text="Group (name or ID)" Foreground="#E7E9ED" VerticalAlignment="Center"/>
-                <TextBox   Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" x:Name="TxtIntuneGroupId" Height="24" FontFamily="Consolas" Margin="0,2" ToolTip="Azure AD group display name OR Object ID. A name is looked up automatically (needs group-read on your sign-in; if not, paste the Object ID)."/>
-                <TextBlock Grid.Row="3" Grid.Column="0" Text="Content source" Foreground="#E7E9ED" VerticalAlignment="Center"/>
-                <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TxtIntuneContentSrc" Height="24" FontFamily="Consolas" Margin="0,2,8,2" ToolTip="For Update content: the package folder to upload (its Content + Icons). Can differ from the SCCM source."/>
-                <Button    Grid.Row="3" Grid.Column="2" x:Name="BtnIntuneBrowseSrc" Content="Browse..." Padding="10,4"/>
-              </Grid>
-              <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                <Button x:Name="BtnIntuneAssignAvail" Content="Add 'Available' assignment" Padding="10,4" Margin="0,0,8,0"/>
-                <Button x:Name="BtnIntuneUnassign"    Content="Remove assignment"          Padding="10,4" Margin="0,0,8,0"/>
-                <Button x:Name="BtnIntuneUpdateContent" Content="Update content"           Padding="10,4"/>
-              </StackPanel>
-              <TextBlock Text="Add/Remove change only this group's assignment. Update content uploads a new version and re-applies the icon. Nothing else on the app is touched." Foreground="#888" FontSize="10" TextWrapping="Wrap" Margin="0,6,0,0"/>
-            </StackPanel>
-          </Border>
+          <TextBlock Text="Add/Remove/Run policy act on every machine in the list, against &lt;app&gt;-INSTALL or -UNINSTALL (TEST). Adding to one collection automatically removes the machine from the other, so it is never in both." Foreground="#888" FontSize="10" TextWrapping="Wrap" Margin="0,10,0,0"/>
         </StackPanel></ScrollViewer>
         </TabItem>
 
-        <TabItem Header="Troubleshoot">
+
+        <TabItem x:Name="TabSccmTroubleshoot" Header="Diagnostics">
         <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="12">
-          <TextBlock Text="Troubleshoot - pull a target machine's logs and open them in CMTrace" Foreground="#56C8D6" FontWeight="Bold" FontSize="14" Margin="0,0,0,10"/>
+          <TextBlock Text="SCCM Troubleshoot - pull a target machine's logs and open them in CMTrace" Foreground="#56C8D6" FontWeight="Bold" FontSize="14" Margin="0,0,0,4"/>
+          <TextBlock Text="These are the ConfigMgr client logs (CCM\Logs) and Software Center's view. For an Intune-delivered app the logs are different - see the Intune tab." Foreground="#888" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
           <Grid>
             <Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <Grid.RowDefinitions><RowDefinition Height="34"/><RowDefinition Height="34"/></Grid.RowDefinitions>
@@ -747,16 +907,17 @@ function Show-InstallerPicker {
             <TextBlock Grid.Row="1" Grid.Column="0" Text="Application name" Foreground="#E7E9ED" VerticalAlignment="Center"/>
             <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TxtTsAppName" Height="24" FontFamily="Consolas" Margin="0,2" ToolTip="Used for the install/uninstall (PSADT) log under ProgramData\VWG\Logs\&lt;app&gt;"/>
           </Grid>
+          <TextBlock Foreground="#5E6875" FontSize="10.5" TextWrapping="Wrap" Margin="150,3,0,0"
+                     Text="Short machine name, no domain suffix. Reading another machine needs admin rights on it."/>
           <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
             <Button x:Name="BtnLogDiscovery" Content="AppDiscovery log"       Padding="10,4" Margin="0,0,8,0"/>
             <Button x:Name="BtnLogEnforce"   Content="AppEnforce log"         Padding="10,4" Margin="0,0,8,0"/>
             <Button x:Name="BtnLogPackage"   Content="Package logs..."  Padding="10,4" ToolTip="List the app's package logs (install/uninstall/repair) to open one."/>
           </StackPanel>
-          <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-            <Button x:Name="BtnRemoteShots" Content="Remote screenshots (target machine)" Padding="10,4"
-                    ToolTip="Launch the app's shortcuts on the target machine(s) named above and screenshot each. App must already be installed there."/>
-          </StackPanel>
-          <TextBlock Text="Remote screenshots: a visual smoke test on the target machine (app must already be installed there; locked RDP is fine). For THIS machine, use 'Screenshot shortcuts' on the Review &amp; Create tab. Hover any button for full details." Foreground="#888" FontSize="10" TextWrapping="Wrap" Margin="0,8,0,0"/>
+          <!-- Remote screenshots were removed from the deployment side: pushing the screenshot agent to a target
+               machine never worked reliably. Shortcut screenshots are still taken where they DO work - on this
+               machine, from the snapshot (the shortcuts the install actually created) and from 'Screenshot
+               shortcuts' on the Review & Create tab after the package is built. -->
           <TextBlock Text="AppDiscovery = detection log, AppEnforce = install/uninstall log (from CCM\Logs). Package logs... lists the app's own PSADT logs (install / uninstall / repair). All are copied to the work folder and opened in CMTrace." Foreground="#888" FontSize="10" TextWrapping="Wrap" Margin="0,10,0,0"/>
           <Border BorderBrush="#3C3C3C" BorderThickness="0,1,0,0" Margin="0,16,0,0" Padding="0,12,0,0">
             <StackPanel>
@@ -778,7 +939,7 @@ function Show-InstallerPicker {
         </StackPanel></ScrollViewer>
         </TabItem>
 
-        <TabItem Header="Dev &#8594; Test">
+        <TabItem x:Name="TabDevTest" Header="Promote">
         <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="12">
           <TextBlock Text="Dev / Test movement (UAT) - move the app and its collections between folders" Foreground="#56C8D6" FontWeight="Bold" FontSize="14" Margin="0,0,0,10"/>
           <Grid>
@@ -792,6 +953,83 @@ function Show-InstallerPicker {
           </StackPanel>
           <TextBlock Text="Move to TEST promotes the app + its collections to the TEST (UAT) folders; Move back to DEV returns them. Folders are set in settings.json." Foreground="#888" FontSize="10" TextWrapping="Wrap" Margin="0,10,0,0"/>
         </StackPanel></ScrollViewer>
+        </TabItem>
+        </TabControl>
+        </TabItem>
+        <!-- INTUNE: mirrors the SCCM tab - one home, plain-noun sub-tabs. -->
+        <TabItem x:Name="TabIntune" Header="Intune">
+        <TabControl Background="#181A1F" BorderThickness="0" Foreground="#E7E9ED" Padding="0,6,0,0">
+
+        <TabItem x:Name="TabIntuneAssign" Header="Assignments &amp; Content">
+        <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="12">
+          <Border BorderBrush="#3C3C3C" BorderThickness="0" Margin="0" Padding="0">
+            <StackPanel>
+              <TextBlock Text="Assignments and content for an app that already exists in Intune" Foreground="#4EC9B0" FontWeight="Bold" FontSize="13"/>
+              <TextBlock Text="Resolved by App ID, else by branding key. Use Publish to create the app." Foreground="#888" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"/>
+              <Grid Margin="0,8,0,0">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <Grid.RowDefinitions><RowDefinition Height="34"/><RowDefinition Height="34"/><RowDefinition Height="34"/><RowDefinition Height="34"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="App ID (preferred)" Foreground="#E7E9ED" VerticalAlignment="Center"/>
+                <TextBox   Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2" x:Name="TxtIntuneAppId" Height="24" FontFamily="Consolas" Margin="0,2" ToolTip="The Intune app's id (GUID). If set, it is used directly. Leave blank to match by branding key (package name) below."/>
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="App name (fallback)" Foreground="#E7E9ED" VerticalAlignment="Center"/>
+                <TextBox   Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" x:Name="TxtIntuneAssignApp" Height="24" FontFamily="Consolas" Margin="0,2" ToolTip="Full package name - used when no App ID is given: the app is matched by its branding key (..\VWG\CM\&lt;name&gt;). No display-name guessing."/>
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="Group (name or ID)" Foreground="#E7E9ED" VerticalAlignment="Center"/>
+                <TextBox   Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" x:Name="TxtIntuneGroupId" Height="24" FontFamily="Consolas" Margin="0,2" ToolTip="Azure AD group display name OR Object ID. A name is looked up automatically (needs group-read on your sign-in; if not, paste the Object ID)."/>
+                <TextBlock Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2" Foreground="#5E6875" FontSize="10.5" TextWrapping="Wrap" Margin="0,1,0,0"
+                           Text="App ID wins if both are given. Group accepts a display name or an Object ID."/>
+                <TextBlock Grid.Row="3" Grid.Column="0" Text="Content source" Foreground="#E7E9ED" VerticalAlignment="Center"/>
+                <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TxtIntuneContentSrc" Height="24" FontFamily="Consolas" Margin="0,2,8,2" ToolTip="For Update content: the package folder to upload (its Content + Icons). Can differ from the SCCM source."/>
+                <Button    Grid.Row="3" Grid.Column="2" x:Name="BtnIntuneBrowseSrc" Content="Browse..." Padding="10,4"/>
+              </Grid>
+              <!-- Same folder-level rule as the SCCM side: the PACKAGE folder, not Content\. -->
+              <TextBlock Foreground="#5E6875" FontSize="10.5" TextWrapping="Wrap" Margin="150,3,0,0"
+                         Text="The PACKAGE folder (the one containing Content\), not Content\ itself. Repackaged into a new .intunewin; commands are unchanged."/>
+              <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                <Button x:Name="BtnIntuneAssignAvail" Content="Add 'Available' assignment" Padding="10,4" Margin="0,0,8,0"/>
+                <Button x:Name="BtnIntuneUnassign"    Content="Remove assignment"          Padding="10,4" Margin="0,0,8,0"/>
+                <Button x:Name="BtnIntuneUpdateContent" Content="Update content"           Padding="10,4"/>
+              </StackPanel>
+              <TextBlock Text="Add/Remove change only this group's assignment. Update content uploads a new version and re-applies the icon. Nothing else on the app is touched." Foreground="#888" FontSize="10" TextWrapping="Wrap" Margin="0,6,0,0"/>
+            </StackPanel>
+          </Border>
+
+        </StackPanel></ScrollViewer>
+        </TabItem>
+
+        <!-- INTUNE DIAGNOSTICS - THIS MACHINE ONLY.
+             There is no remote path here: the IME logs sit under a local ProgramData folder and reading them
+             on someone else's machine needs admin on it, which packagers do not have. So this reads the box
+             the tool is running on - the test machine you just installed on - and says so plainly. -->
+        <TabItem x:Name="TabIntuneDiag" Header="Diagnostics">
+        <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="12">
+            <StackPanel>
+              <TextBlock Text="Diagnostics - this machine" Foreground="#4EC9B0" FontWeight="Bold" FontSize="13"/>
+              <TextBlock Text="Reads the Intune Management Extension on this computer. An Intune-delivered app leaves nothing in the ConfigMgr logs, and end users see Company Portal, not Software Center." Foreground="#888" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,10"/>
+              <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="Package name" Foreground="#E7E9ED" VerticalAlignment="Center"/>
+                <TextBox   Grid.Column="1" x:Name="TxtIntuneTsAppName" Height="24" FontFamily="Consolas" Margin="0,2"
+                           ToolTip="Filters the app state and the package logs. Leave blank to list every Intune app this machine knows about."/>
+              </Grid>
+              <TextBlock Text="Blank lists everything this machine knows about." Foreground="#5E6875" FontSize="10.5" Margin="150,3,0,0"/>
+              <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                <Button x:Name="BtnIntuneAppState" Content="App state" Padding="10,4" Margin="0,0,8,0"
+                        ToolTip="What the agent actually believes about the app (enforcement + compliance), read from the IME registry. Use when Intune reports success but the app is not really installed."/>
+                <Button x:Name="BtnIntuneLogWorkload" Content="AppWorkload log" Padding="10,4" Margin="0,0,8,0"
+                        ToolTip="Detection, requirement rules and the install decision. Start here for an app that will not install."/>
+                <Button x:Name="BtnIntuneLogIme" Content="IME log" Padding="10,4" Margin="0,0,8,0"
+                        ToolTip="Policy retrieval and general agent activity. Use when the app never arrives at all."/>
+                <Button x:Name="BtnIntuneLogAgentExec" Content="AgentExecutor log" Padding="10,4" Margin="0,0,8,0"
+                        ToolTip="Output of PowerShell detection and requirement scripts."/>
+                <Button x:Name="BtnIntunePkgLogs" Content="Package logs" Padding="10,4"
+                        ToolTip="The package's own PSADT install/uninstall logs. These are the same whichever way the app was delivered."/>
+              </StackPanel>
+              <TextBlock Text="Logs open in CMTrace and are scanned for known errors." Foreground="#888" FontSize="10" TextWrapping="Wrap" Margin="0,8,0,0"/>
+            </StackPanel>
+        </StackPanel></ScrollViewer>
+        </TabItem>
+
+        </TabControl>
         </TabItem>
         </TabControl>
 
@@ -813,7 +1051,12 @@ function Show-InstallerPicker {
         <Button x:Name="BtnResetStep" Content="Reset step" Padding="12,5" Margin="0,8,6,8" DockPanel.Dock="Left"/>
         <Button x:Name="BtnResetAll"  Content="Reset all"  Padding="12,5" Margin="0,8" DockPanel.Dock="Left"/>
         <Button x:Name="BtnNext" Content="Next" Padding="16,5" Margin="14,8" DockPanel.Dock="Right"/>
+        <!-- STATUS BAR: what the tool is working on RIGHT NOW - package, delivery target, and where data is
+             coming from. Anyone looking over a shoulder can answer "what is it doing?" without reading the log. -->
+        <TextBlock x:Name="LblStatusBar" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="18,0,18,0"
+                   Foreground="#8A94A3" FontSize="11.5" TextTrimming="CharacterEllipsis"/>
       </DockPanel>
+    </Grid>
     </Grid>
   </Grid>
 </Window>
@@ -821,26 +1064,26 @@ function Show-InstallerPicker {
 
 $script:Win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xaml))
 if (Get-Command Apply-PbTheme -ErrorAction SilentlyContinue) { Apply-PbTheme $script:Win }   # modern theme for all controls
-# Custom title-bar/taskbar icon: drop your icon at Lib\PackageBuilder.ico and it is picked up here.
+# Custom title-bar/taskbar icon: drop your icon at Lib\PackageCompanion.ico and it is picked up here.
 # (Build-Exe.ps1 uses the SAME file for the compiled exe's icon, so both stay consistent.)
-$icoPath = Join-Path $root 'Lib\PackageBuilder.ico'
+$icoPath = Join-Path $root 'Lib\PackageCompanion.ico'
 if (Test-Path $icoPath) {
     try { $script:Win.Icon = [Windows.Media.Imaging.BitmapFrame]::Create((New-Object Uri $icoPath)) }
     catch { Write-Log "Window icon load failed ($($_.Exception.Message)) - using default." Warning }
 }
 # Build stamp in the title: instantly answers "is my exe running the latest pak?" after an update.
-try { $script:Win.Title = "Package Builder  -  build $($script:BuildStamp)" } catch {}
+try { $script:Win.Title = "Package Companion  -  build $($script:BuildStamp)" } catch {}
 foreach ($n in 'N1','N2','N3','N4','P1','P2','P3','P4','TabsP4','TxtPkg','LblParsed','BtnPred','BtnFetch','BtnAddInst','ChkAddUninstall',
                 'BtnPredCmds','LblReview','LblCreateResult','BtnCopyOutgoing','TxtPubPkgName','BtnLoadOutgoing','BtnBrowsePkg','PnlPublish','TxtPubProductName','TxtPubPublisher','TxtPubVersion','TxtPubProductCode',
                 'TxtPubBrandingKey','TxtPubUninstallKey','TxtPubDetectVersion','TxtPubInstall','TxtPubUninstall','TxtPubRepair','TxtPubDescription','CmbDetectType','ChkPub32Bit','ChkPubAllowInteract','LblPubCmdNote',
-                'CreatePanel','BtnCreateSccm','BtnCreateIntune','BtnOpenCmTrace','BtnOpenWork','PbPublish','LblPbPct','LblPubStatus','LblPublishLog',
+                'CreatePanel','BtnCreateSccm','BtnCreateIntune','PbPublish','LblPbPct','LblPubStatus','LblPublishLog',
                 'BtnFetchDetection','BtnUpdateDetection','BtnUpdateContent','BtnContentStatus','BtnDeleteApp',
                 'TxtModAppName','CmbModDetectType','ChkMod32Bit','TxtModUninstallKey','TxtModDetectVersion','TxtModProductCode','TxtModContentSrc','ChkModRefreshOnly','BtnModBrowseSrc',
                 'TxtIntuneContentSrc','BtnIntuneBrowseSrc','BtnIntuneUpdateContent',
                 'TxtTestAppName','TxtTestMachine','CmbTestAction','BtnAddTestMachine','BtnRemoveTestMachine','BtnRunMachinePolicy',
                 'BtnTestAddList','LstTestMachines','BtnTestRemoveSel','BtnTestClearList','BtnMsiPropsView',
                 'TxtIntuneAppId','TxtIntuneAssignApp','TxtIntuneGroupId','BtnIntuneAssignAvail','BtnIntuneUnassign',
-                'TxtTsMachine','TxtTsAppName','BtnLogDiscovery','BtnLogEnforce','BtnLogPackage','BtnTsShots','BtnRemoteShots',
+                'TxtTsMachine','TxtTsAppName','BtnLogDiscovery','BtnLogEnforce','BtnLogPackage','BtnTsShots',
                 'CmbTsColl','BtnTsShowMembers','BtnTsCheckState','BtnTsReboot','LstTsMembers',
                 'TxtMoveAppName','BtnMoveToTest','BtnMoveToDev',
                 'LblPred','LblSrc','LblInst','TxtType','TxtPC','ChkKeepShortcut','ChkKeepStartup','ChkKeepStray','ChkKeepRunKey','BtnMsiPropsView','BtnMatchPredMst','LblMatchMst','BtnBack','BtnNext','TxtRitm',
@@ -848,8 +1091,24 @@ foreach ($n in 'N1','N2','N3','N4','P1','P2','P3','P4','TabsP4','TxtPkg','LblPar
                 'LblExeParams','PnlExeParams','TxtInstArgs','TxtUninstArgs','PnlBundled','BtnBundledMsi','BtnCaptureMsi','LblBundled','PnlSnapshot','BtnSnapshot','LblSnapshot','PnlPerUser','CmbPerUser','LblPerUser','PnlKbHint','LblKbConf','LblKbArgs','LblKbNote','BtnProbeHelp','LblKbSrc','BtnKbUse','LblKbUninst','BtnKbUseUninst','PnlKbUninst','PnlLoose','ChkArp','ChkLooseShortcut','TxtLooseTargets',
                 'LblMultiArgs','PnlMultiArgs',
                 'BtnResetStep','BtnResetAll','BtnAdminCmd','BtnSystemCmd','BtnAdminInstall','BtnAdminUninstall','BtnAdminRepair','BtnSysInstall','BtnSysUninstall','BtnSysRepair',
-                'LblScriptHdr','ExpSnippets','CmbSnipCat','TxtSnipSearch','LstSnippets','TxtSnipPreview','BtnInsertSnip','BtnAddSnip','BtnEditSnip','BtnDelSnip','BtnRebuild','BtnReview','BtnLoadScript','BtnSaveScript','LstAnchors','EditorHost') {
+                'LblScriptHdr','ExpSnippets','CmbSnipCat','TxtSnipSearch','LstSnippets','TxtSnipPreview','BtnInsertSnip','BtnAddSnip','BtnEditSnip','BtnDelSnip','BtnRebuild','BtnReview','BtnLoadScript','BtnSaveScript','LstAnchors','EditorHost',
+                'LblOrigin','ChkDirectIntune','LblDirectIntuneHint',
+                'PnlSccmModify','TabDevTest','LblPubCmdHdr','LblPubRepair','RowPubRepair',
+                'TabPublish','TabSccmModify','TabSccmTesting','TabSccmTroubleshoot','TabIntune',
+                'TxtIntuneTsAppName','BtnIntuneLogWorkload','BtnIntuneLogIme','BtnIntuneLogAgentExec','BtnIntuneAppState','BtnIntunePkgLogs',
+                'TabSccm','TabIntuneAssign','TabIntuneDiag','LblStatusBar',
+                'LblHdrPkg','LblHdrRitm','LblHdrUser') {
     Set-Variable -Name $n -Value $script:Win.FindName($n) -Scope Script
+}
+
+# Paint the chrome once at startup: header (package + RITM + user) and the rail footer (source + target).
+Update-PBChrome
+
+# Apply the delivery target once at startup so the window opens in a consistent state (and so the SCCM
+# controls are correctly visible on a normal launch, not just after the checkbox is touched).
+if (Get-Command Apply-DeliveryTarget -ErrorAction SilentlyContinue) {
+    if ($ChkDirectIntune) { $ChkDirectIntune.IsChecked = [bool]$script:State.DirectIntune }
+    Apply-DeliveryTarget            # also paints the status bar for the first time
 }
 
 # SNIPPET OWNERSHIP: only owners (Core.ps1 $script:SnippetOwners, matched on $env:USERNAME) may ADD/EDIT/DELETE the
@@ -938,6 +1197,7 @@ function Show-Step {
     }
     $BtnBack.IsEnabled = ($n -gt 1)
     $BtnNext.Content = if($n -ge 4){'Create'}else{'Next'}
+    if (Get-Command Update-PBStatusBar -ErrorAction SilentlyContinue) { Update-PBStatusBar }
     # The bottom 'Create' button assembles the PACKAGE - it only makes sense on the Review & Create sub-tab.
     # On the other Step-4 tabs (Integration / Testing / Troubleshoot / Dev-Test) hide it. Steps 1-3 always show.
     if ($n -ge 4 -and $TabsP4) {
@@ -1238,7 +1498,7 @@ function Populate-Publish {
     }
     $TxtPubDescription.Text   = "$($base.Description)"
     # Convenience: pre-fill the app-name fields across the Modify/Testing/Troubleshoot/Dev-Test tabs.
-    foreach ($tb in @($TxtModAppName,$TxtTestAppName,$TxtTsAppName,$TxtMoveAppName,$TxtIntuneAssignApp)) { if ($tb -and -not $tb.Text.Trim()) { $tb.Text = "$($base.FullName)" } }
+    foreach ($tb in @($TxtModAppName,$TxtTestAppName,$TxtTsAppName,$TxtMoveAppName,$TxtIntuneAssignApp,$TxtIntuneTsAppName)) { if ($tb -and -not $tb.Text.Trim()) { $tb.Text = "$($base.FullName)" } }
     foreach ($sb in @($TxtModContentSrc,$TxtIntuneContentSrc)) { if ($sb -and -not $sb.Text.Trim()) { $sb.Text = "$($script:State.CreatedPath)" } }
     $PnlPublish.IsEnabled = $true
     if ($CreatePanel) { $CreatePanel.Visibility = 'Visible' }   # a package is loaded -> show the Create buttons
@@ -2007,7 +2267,7 @@ function Build-Step3Script {
         else { return "# Blank template not found (PSADT_Template\ or PSADT_Template.zip) and no predecessor to fall back to." }
     }
     try {
-        if ($model) { $script:State.ReusePkg = $newPkg; return (Build-PredecessorScript -Model $model -NewPkg $newPkg -Template $tpl -AddUninstallPrevious ([bool]$script:State.AddUninstallPrevious)) }
+        if ($model) { $script:State.ReusePkg = $newPkg; return (Build-PredecessorScript -Model $model -NewPkg $newPkg -Template $tpl -AddUninstallPrevious ([bool]$script:State.AddUninstallPrevious) -DirectIntune ([bool]$script:State.DirectIntune)) }
         else        { $script:State.ReusePkg = $null; return (Build-FreshScript -NewPkg $newPkg -Template $tpl) }
     } catch { Write-Log "Step 3 build failed: $($_.Exception.Message)" Error; return "# Build failed: $($_.Exception.Message)" }
 }
@@ -2423,6 +2683,7 @@ $TxtPkg.add_TextChanged({
     $script:LastPredScanKey = ''           # name edited => let the proactive predecessor check re-run on blur
     Invalidate-From 1                     # name changed => predecessor, source, detection, script all stale
     $LblSrc.Text=''; $LblPred.Text=''; $LblParsed.Text=''
+    if (Get-Command Update-PBStatusBar -ErrorAction SilentlyContinue) { Update-PBStatusBar }
 })
 $TxtPkg.add_LostFocus({ Parse-Current | Out-Null; Suggest-Predecessor })
 $TxtRitm.add_TextChanged({
@@ -2477,7 +2738,7 @@ $BtnPred.add_Click({
     # closure/runspace scope traps). The live-share walk takes a couple of seconds - a brief pause is fine; a working
     # predecessor popup is what matters. Plain add_Click (NOT .GetNewClosure) so $script:State + all functions resolve.
     $BtnPred.IsEnabled = $false
-    $LblPred.Text = 'Searching the live share for predecessors...'
+    $LblPred.Text = Get-PBSearchLabel -For 'Predecessor'
     try { $script:Win.Dispatcher.Invoke([action]{}, [System.Windows.Threading.DispatcherPriority]::Render) } catch {}
     try {
         $cands = @(Get-PredecessorCandidates -Parsed $script:State.Parsed)
@@ -2488,10 +2749,13 @@ $BtnPred.add_Click({
     }
     $BtnPred.IsEnabled = $true
     if (-not $cands -or $cands.Count -eq 0) {
-        # LAST RESORT: the live share may not be reachable for this user - let them browse to the predecessor
-        # package folder themselves. The picked folder becomes the single candidate.
+        # LAST RESORT: neither source had a match (or the share is unreachable for this user) - let them browse
+        # to the predecessor package folder themselves. The picked folder becomes the single candidate.
+        $pWhere = Get-PBOriginLabel -For 'Predecessor'
+        $pFall  = if (Get-Command Get-SPFallbackLabel -ErrorAction SilentlyContinue) { Get-SPFallbackLabel -For 'Predecessor' } else { '' }
+        $pText  = if ($pFall) { "$pWhere and $pFall" } else { $pWhere }
         $ask = [System.Windows.MessageBox]::Show(
-            "No predecessor was found automatically (live share unreachable or nothing matched).`n`nDo you want to browse to the predecessor package folder yourself?",
+            "No predecessor was found in $pText.`n`nEither nothing matched, or that location is not reachable from this machine - the log says which.`n`nDo you want to browse to the predecessor package folder yourself?",
             'Predecessor not found', 'YesNo', 'Question')
         if ($ask -eq 'Yes') {
             $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -2554,14 +2818,21 @@ $BtnFetch.add_Click({
     if (-not (Parse-Current)) { return }
     # SYNCHRONOUS (reverted from async - same closure-scope reliability reasons as BtnPred). A short share walk.
     $BtnFetch.IsEnabled = $false
-    $LblSrc.Text = 'Searching the Incoming share for the source...'; $LblSrc.Foreground = '#888'
+    $LblSrc.Text = Get-PBSearchLabel -For 'Source'; $LblSrc.Foreground = '#888'
     try { $script:Win.Dispatcher.Invoke([action]{}, [System.Windows.Threading.DispatcherPriority]::Render) } catch {}
     $folder = $null
     try { $folder = Find-SourceFolder -PkgName $script:State.Parsed.FullName }
     catch { Write-Log "Source search failed: $($_.Exception.Message)" Error; $LblSrc.Text = "Source search FAILED: $($_.Exception.Message)"; $LblSrc.Foreground='#F48771'; $BtnFetch.IsEnabled = $true; return }
     $BtnFetch.IsEnabled = $true
     if ($folder) { Set-ResolvedSource -Folder "$folder" }
-    else { $LblSrc.Text = "Source folder not found in RepositoryPath - use 'Add installer(s) / source'."; $LblSrc.Foreground='#F48771' }
+    else {
+        # Name BOTH places that were tried - "not found" is much less useful than "not found HERE and HERE".
+        $primary  = Get-PBOriginLabel -For 'Source'
+        $fallback = if (Get-Command Get-SPFallbackLabel -ErrorAction SilentlyContinue) { Get-SPFallbackLabel -For 'Source' } else { '' }
+        $where    = if ($fallback) { "$primary or $fallback" } else { $primary }
+        $LblSrc.Text = "Not found in $where - use 'Add installer(s) / source' to point at the files yourself. (See the log for exactly what was tried.)"
+        $LblSrc.Foreground = '#F48771'
+    }
 })
 $BtnAddInst.add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
@@ -2575,6 +2846,20 @@ $BtnAddInst.add_Click({
     if ($dlg.ShowDialog() -eq 'OK') { Add-ManualInstallers -Paths $dlg.FileNames }
 })
 $ChkAddUninstall.add_Click({ if ($script:Rehydrating) { return } ; $script:State.AddUninstallPrevious = [bool]$ChkAddUninstall.IsChecked; Invalidate-From 3 })
+
+# DIRECT INTUNE: changes what is BUILT (no repair carried over), so the script must be rebuilt - hence
+# Invalidate-From 3, exactly like the uninstall-block toggle above.
+$ChkDirectIntune.add_Click({
+    if ($script:Rehydrating) { return }
+    $script:State.DirectIntune = [bool]$ChkDirectIntune.IsChecked
+    Apply-DeliveryTarget
+    Write-Log $(if ($script:State.DirectIntune) {
+        'Direct Intune package: SCCM controls hidden, and no repair code will be carried from the predecessor.'
+    } else {
+        'Standard package: SCCM and Intune both available.'
+    }) Info
+    Invalidate-From 3
+})
 # KB ASSIST: fingerprint the chosen EXE + look up what similar packages used; show an advisory + Use button.
 $script:KbHintSwitch = ''
 function Update-KbHint {
@@ -3543,7 +3828,7 @@ function Show-SnapshotDialog {
     $cmbRunMode.SelectedIndex=0
     $lblManual = New-Object Windows.Controls.TextBlock; $lblManual.Text='or run it yourself:'; $lblManual.Foreground='#939BA7'; $lblManual.FontSize=11; $lblManual.VerticalAlignment='Center'; $lblManual.Margin='14,0,6,0'
     $bAdminCmd = New-Object Windows.Controls.Button; $bAdminCmd.Content='Open CMD (Admin)'; $bAdminCmd.Padding='10,3'; $bAdminCmd.Margin='0,0,6,0'; $bAdminCmd.ToolTip="Open an ELEVATED command prompt (in the installer's folder, or C:\temp) so you can run the installer / install by hand, then click '3. Analyze'. Works with no installer selected."
-    $bSysCmd = New-Object Windows.Controls.Button; $bSysCmd.Content='Open CMD (SYSTEM)'; $bSysCmd.Padding='10,3'; $bSysCmd.ToolTip="Open a SYSTEM / LocalSystem command prompt via PsExec (-s -i) so you can install exactly as SCCM/Intune would, then click '3. Analyze'. Needs PsExec next to PackageBuilder.exe."
+    $bSysCmd = New-Object Windows.Controls.Button; $bSysCmd.Content='Open CMD (SYSTEM)'; $bSysCmd.Padding='10,3'; $bSysCmd.ToolTip="Open a SYSTEM / LocalSystem command prompt via PsExec (-s -i) so you can install exactly as SCCM/Intune would, then click '3. Analyze'. Needs PsExec next to PackageCompanion.exe."
     foreach ($c in @($lblRunAs,$cmbRunMode,$lblManual,$bAdminCmd,$bSysCmd)) { [void]$runBar.Children.Add($c) }
     [void]$barWrap.Children.Add($runBar)
     # Manual consoles open at the default (C:\Windows\System32) like any elevated / SYSTEM prompt - the user cd's
@@ -4199,6 +4484,9 @@ $BtnLoadOutgoing.add_Click({
     if (-not $name) { $LblPublishLog.Text = 'Enter a package name to load.'; $LblPublishLog.Foreground = '#F48771'; return }
     # SYNCHRONOUS (reverted from async - closure-scope reliability, same as BtnPred/BtnFetch). Plain add_Click so
     # $script:State + Populate-Publish resolve directly.
+    # Check access FIRST: without this an unreachable share makes the search sit for a minute and look hung.
+    if (-not (Test-PBShareAvailable -Path (Get-Setting 'OutgoingPath') -What 'Outgoing share' -Label $LblPublishLog `
+                -Alternative 'Use Browse... instead and point at the package folder directly.')) { return }
     $BtnLoadOutgoing.IsEnabled = $false
     $LblPublishLog.Text = "Searching Outgoing for '$name'..."; $LblPublishLog.Foreground = '#888'
     try { $script:Win.Dispatcher.Invoke([action]{}, [System.Windows.Threading.DispatcherPriority]::Render) } catch {}
@@ -4206,7 +4494,7 @@ $BtnLoadOutgoing.add_Click({
     try { $p = Find-OutgoingPackage -Name $name }
     catch { Write-Log "Outgoing search failed: $($_.Exception.Message)" Error }
     $BtnLoadOutgoing.IsEnabled = $true
-    if (-not $p) { $LblPublishLog.Text = "Package '$name' not found under the Outgoing path (settings.json -> OutgoingPath)."; $LblPublishLog.Foreground = '#F48771'; return }
+    if (-not $p) { $LblPublishLog.Text = "No package called '$name' in the Outgoing share. Check the name, or use Browse... to point at the folder directly."; $LblPublishLog.Foreground = '#F48771'; return }
     $script:State.CreatedPath = "$p"
     Populate-Publish
 })
@@ -4214,7 +4502,7 @@ $BtnBrowsePkg.add_Click({
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
     $dlg.Description = 'Select a built package folder (the one containing Content\Invoke-AppDeployToolkit.ps1)'
     $og = Get-Setting 'OutgoingPath'
-    if ($og -and (Test-Path $og)) { $dlg.SelectedPath = $og }
+    if ($og -and (Test-SPUncUsable -Path $og)) { $dlg.SelectedPath = $og }
     if ($dlg.ShowDialog() -eq 'OK') { $script:State.CreatedPath = $dlg.SelectedPath; Populate-Publish }
 })
 # Run a publish (SCCM/Intune) on a BACKGROUND runspace so the window stays responsive and the
@@ -4430,6 +4718,8 @@ function Start-SccmManageJob {
             'move'           { Move-SccmDevToTest     -FullName $a.op.FullName -Target $a.op.Target -ToolRoot $a.root }
             'intuneassign'   { Add-IntuneGroupAssignment    -AppName $a.op.AppName -AppId $a.op.AppId -Group $a.op.Group -Intent 'available' }
             'intuneunassign' { Remove-IntuneGroupAssignment -AppName $a.op.AppName -AppId $a.op.AppId -Group $a.op.Group }
+            'intunelog'      { Get-IntuneClientLog    -Machine $a.op.Machine -Which $a.op.Which }
+            'intuneappstate' { Get-IntuneWin32AppState -Machine $a.op.Machine -FullName $a.op.FullName }
         }
     }).AddArgument($jobArgs) | Out-Null
     $handle = $psi.BeginInvoke()
@@ -4459,6 +4749,8 @@ function Start-SccmManageJob {
         'intuneassign'   { "Intune: adding 'Available' assignment of group '$($Op.Group)' to '$(if($Op.AppId){$Op.AppId}else{$Op.AppName})'..." }
         'intuneunassign' { "Intune: removing assignment of group '$($Op.Group)' from '$(if($Op.AppId){$Op.AppId}else{$Op.AppName})'..." }
         'intunecontent'  { "Intune: updating content for '$(if($Op.AppId){$Op.AppId}else{$Op.AppName})' from $($Op.ContentSrc) (icon re-applied)..." }
+        'intunelog'      { "Intune: fetching $($Op.Which).log from $($Op.Machine) (Intune Management Extension)..." }
+        'intuneappstate' { "Intune: reading the agent's Win32 app state on $($Op.Machine)..." }
         default          { "SCCM: working..." }
     }
 
@@ -4564,8 +4856,10 @@ $BtnCopyOutgoing.add_Click({
     $src = "$((Get-PBState).CreatedPath)"   # closure-safe
     if (-not $src -or -not (Test-Path $src)) { $LblCreateResult.Text = 'No created package yet - build one with Create first.'; $LblCreateResult.Foreground = '#F48771'; return }
     $outBase = if (Get-Command Get-Setting -EA SilentlyContinue) { Get-Setting 'OutgoingPath' } else { $null }
-    if (-not $outBase)            { $LblCreateResult.Text = 'OutgoingPath is not set in settings.json.'; $LblCreateResult.Foreground = '#F48771'; return }
-    if (-not (Test-Path $outBase)){ $LblCreateResult.Text = "Outgoing path not reachable: $outBase"; $LblCreateResult.Foreground = '#F48771'; return }
+    # Fails FAST and says what to do instead - the package is already built locally, so no access to the
+    # Outgoing share is an inconvenience, not a lost package.
+    if (-not (Test-PBShareAvailable -Path $outBase -What 'Outgoing share' -Label $LblCreateResult `
+                -Alternative "Your package is still built and complete at: $src  -  copy it across by hand, or use Browse on the Publish tab to publish straight from there.")) { return }
     $leaf = Split-Path $src -Leaf
     $dest = Join-Path $outBase $leaf
     if ([IO.Path]::GetFullPath($src) -ieq [IO.Path]::GetFullPath($dest)) { $LblCreateResult.Text = 'The created package already IS the Outgoing copy (same folder) - nothing to do.'; $LblCreateResult.Foreground = '#DCDCAA'; return }
@@ -4586,7 +4880,7 @@ $BtnCopyOutgoing.add_Click({
 
 # LOCAL TEST CONSOLES: open an ELEVATED (admin) or SYSTEM/LocalSystem command prompt at the created package's Content
 # folder, so the packager can run Invoke-AppDeployToolkit.exe Install / Uninstall / Repair by hand at both privilege
-# levels - no separate tooling needed. SYSTEM uses PsExec.exe kept alongside PackageBuilder (user request).
+# levels - no separate tooling needed. SYSTEM uses PsExec.exe kept alongside PackageCompanion (user request).
 function Get-CreatedContentDir {
     # A LOADED .ps1's OWN folder IS a package Content dir - so after Load .ps1 + Save you can test it immediately (user
     # request). Prefer that; otherwise the created package's Content folder.
@@ -4741,7 +5035,9 @@ $BtnIntuneUpdateContent.add_Click({
 # Folder pickers for the content-source fields (SCCM Modify + Intune).
 $pickFolder = { param($desc)
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog; $dlg.Description = $desc
-    $og = Get-Setting 'OutgoingPath'; if ($og -and (Test-Path $og)) { $dlg.SelectedPath = $og }
+    $og = Get-Setting 'OutgoingPath'
+    # Bounded probe: seeding the dialog with an unreachable UNC blocks on the SMB timeout.
+    if ($og -and (Test-SPUncUsable -Path $og)) { $dlg.SelectedPath = $og }
     if ($dlg.ShowDialog() -eq 'OK') { return $dlg.SelectedPath } else { return $null }
 }
 $BtnModBrowseSrc.add_Click({    $p = & $pickFolder 'Select the package folder for SCCM Update content';   if ($p) { $TxtModContentSrc.Text = $p } })
@@ -4751,24 +5047,6 @@ $BtnRunMachinePolicy.add_Click({
     if (-not $machines) { $LblPublishLog.Text='Add at least one machine (Add to list, or type names).'; $LblPublishLog.Foreground='#F48771'; return }
     Start-SccmManageJob -Action 'machinepolicy' -Op @{ Machines=$machines }
 })
-$BtnRemoteShots.add_Click({
-    # Troubleshoot tab: target machine(s) from the Machine name field (comma/space separated), app from Application name.
-    $machines = @("$($TxtTsMachine.Text)" -split '[,;\s]+' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    if (-not $machines) { $LblPublishLog.Text='Enter the target Machine name(s) in the Troubleshoot tab.'; $LblPublishLog.Foreground='#F48771'; return }
-    $app = $TxtTsAppName.Text.Trim()
-    if (-not $app -and $script:State.PublishBase) { $app = "$($script:State.PublishBase.FullName)" }
-    if (-not $app) { $LblPublishLog.Text='Enter the Application name (full package name) in the Troubleshoot tab.'; $LblPublishLog.Foreground='#F48771'; return }
-    # If the ONLY target is THIS machine, do it LOCALLY (no agent push / admin share needed) - user rule.
-    $me = "$env:COMPUTERNAME"
-    $isLocalOnly = ($machines.Count -eq 1) -and (@('.','localhost',$me) -contains $machines[0] -or "$($machines[0])".Split('.')[0] -ieq $me)
-    if ($isLocalOnly) {
-        Invoke-ShortcutValidation -Name $app -Tokens (Get-ValidationTokens $app) -StatusLabel $LblPublishLog
-        return
-    }
-    $ans = [Windows.MessageBox]::Show("Push the screenshot agent to: $($machines -join ', ')?`n`nOn each machine this LAUNCHES the app's installed Start-Menu shortcuts (in the logged-on user's session - a locked RDP session is fine), screenshots each, closes them, and pulls the report back here. The app must already be INSTALLED there (run the install first).", 'Remote screenshots (smoke test)', 'YesNo', 'Warning')
-    if ($ans -ne 'Yes') { return }
-    Start-SccmManageJob -Action 'remoteshots' -Op @{ Machines=$machines; FullName=$app; Tokens=(Get-ValidationTokens $app); Ref=@($script:State.SnapshotShortcuts) }
-})
 # --- Troubleshoot tab ---
 $doLog = { param($which)
     $m = $TxtTsMachine.Text.Trim()
@@ -4777,6 +5055,25 @@ $doLog = { param($which)
 }
 $BtnLogDiscovery.add_Click({ & $doLog 'AppDiscovery' })
 $BtnLogEnforce.add_Click({   & $doLog 'AppEnforce' })
+
+# --- Intune Diagnostics: THIS MACHINE ONLY ---------------------------------------------------------------
+# No machine field on purpose. The IME logs live under a local ProgramData path, and reading them on another
+# machine needs admin there - which packagers do not have. So every button here reads this computer: the test
+# box the packager just installed on.
+$doIntuneLog = { param($which)
+    Start-SccmManageJob -Action 'intunelog' -Op @{ Machine = "$env:COMPUTERNAME"; Which = $which }
+}
+$BtnIntuneLogWorkload.add_Click({  & $doIntuneLog 'AppWorkload' })
+$BtnIntuneLogIme.add_Click({       & $doIntuneLog 'IntuneManagementExtension' })
+$BtnIntuneLogAgentExec.add_Click({ & $doIntuneLog 'AgentExecutor' })
+$BtnIntuneAppState.add_Click({
+    Start-SccmManageJob -Action 'intuneappstate' -Op @{ Machine = "$env:COMPUTERNAME"; FullName = "$($TxtIntuneTsAppName.Text)".Trim() }
+})
+# The package's own PSADT logs are identical whichever way the app was delivered, so this reuses the existing
+# SCCM log lister rather than duplicating it.
+$BtnIntunePkgLogs.add_Click({
+    Start-SccmManageJob -Action 'loglist' -Op @{ Machine = "$env:COMPUTERNAME"; FullName = "$($TxtIntuneTsAppName.Text)".Trim() }
+})
 $BtnLogPackage.add_Click({
     # Package logs: LIST what's on the machine (ProgramData\VWG\Logs, filtered by vendor/app) and let
     # the user PICK which log to open - install / uninstall / repair / MSI / EXE logs included.
@@ -4816,14 +5113,6 @@ $BtnMoveToDev.add_Click({
     $app = $TxtMoveAppName.Text.Trim()
     if (-not $app) { $LblPublishLog.Text='Enter the application name in the Dev/Test tab.'; $LblPublishLog.Foreground='#F48771'; return }
     Start-SccmManageJob -Action 'move' -Op @{ FullName=$app; Target='Dev' }
-})
-$BtnOpenCmTrace.add_Click({
-    $log = if (Get-Command Get-LogPath -ErrorAction SilentlyContinue) { Get-LogPath } else { 'C:\temp\PackageBuilder\Logs\PackageBuilder.log' }
-    if (Get-Command Open-CMTrace -ErrorAction SilentlyContinue) { Open-CMTrace -LogPath $log } elseif (Test-Path $log) { Start-Process $log }
-})
-$BtnOpenWork.add_Click({
-    $w = if (Get-Command Get-WorkPath -ErrorAction SilentlyContinue) { Get-WorkPath } else { 'C:\temp\PackageBuilder' }
-    try { Start-Process explorer.exe $w } catch { $LblPublishLog.Text = "Work folder: $w"; $LblPublishLog.Foreground = '#888' }
 })
 # Launch + screenshot the app's installed Start-Menu shortcuts on a BACKGROUND runspace (apps need seconds to
 # render; on the UI thread the window would freeze). $OnDone runs on the UI thread with ($result, $err).
@@ -4943,7 +5232,7 @@ $TabsP4.add_SelectionChanged({ param($s,$e)
     }
     $base = $script:State.PublishBase
     $nm = if ($base) { "$($base.FullName)" } elseif ($TxtPubPkgName -and $TxtPubPkgName.Text.Trim()) { $TxtPubPkgName.Text.Trim() } else { '' }
-    if ($nm) { foreach ($tb in @($TxtModAppName,$TxtTestAppName,$TxtTsAppName,$TxtMoveAppName,$TxtIntuneAssignApp)) { if ($tb -and -not $tb.Text.Trim()) { $tb.Text = $nm } } }
+    if ($nm) { foreach ($tb in @($TxtModAppName,$TxtTestAppName,$TxtTsAppName,$TxtMoveAppName,$TxtIntuneAssignApp,$TxtIntuneTsAppName)) { if ($tb -and -not $tb.Text.Trim()) { $tb.Text = $nm } } }
     $src = "$($script:State.CreatedPath)"
     if ($src) { foreach ($sb in @($TxtModContentSrc,$TxtIntuneContentSrc)) { if ($sb -and -not $sb.Text.Trim()) { $sb.Text = $src } } }
     # Keep the Intune App ID we got at creation, until the user edits it.
@@ -5055,7 +5344,7 @@ $BtnNext.add_Click({
         if (Test-LiveShareDuplicate) { return }   # warn once if this exact name is already in the live share
         $script:State.Ritm = $TxtRitm.Text.Trim()
         if (-not $script:State.ChosenInstallers -or $script:State.ChosenInstallers.Count -eq 0) {
-            [Windows.MessageBox]::Show('Fetch a source with at least one installer/payload file before continuing.','Package Builder') | Out-Null
+            [Windows.MessageBox]::Show('Fetch a source with at least one installer/payload file before continuing.','Package Companion') | Out-Null
             return
         }
         if ($script:State.ChosenInstallers | Where-Object { $_.Extension.ToLower() -eq '.iso' }) {

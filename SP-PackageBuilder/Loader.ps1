@@ -1,11 +1,11 @@
 ##############################################################
-# Package Builder - LOADER (compile this ONCE into PackageBuilder.exe with ps2exe:
-#   Invoke-PS2EXE -InputFile .\Loader.ps1 -OutputFile .\PackageBuilder.exe -STA -noConsole `
-#                 -title 'Package Builder' -iconFile .\Lib\PackageBuilder.ico
-# It never changes again - tool updates ship as a new PackageBuilder.pak only.)
+# Package Companion - LOADER (compile this ONCE into PackageCompanion.exe with ps2exe:
+#   Invoke-PS2EXE -InputFile .\Loader.ps1 -OutputFile .\PackageCompanion.exe -STA -noConsole `
+#                 -title 'Package Companion' -iconFile .\Lib\PackageCompanion.ico
+# It never changes again - tool updates ship as a new PackageCompanion.pak only.)
 #
 # What it does:
-#   1. finds PackageBuilder.pak next to itself
+#   1. finds PackageCompanion.pak next to itself
 #   2. (optional) if settings.json has "UpdatePath" and a NEWER .pak exists there, copies it
 #      over the local one first -> team always runs the latest engine without redistribution
 #   3. decrypts + decompresses the pak in memory and executes it (no script ever on disk)
@@ -23,7 +23,7 @@ elseif ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
     return
 }
 
-$pak = Join-Path $root 'PackageBuilder.pak'
+$pak = Join-Path $root 'PackageCompanion.pak'
 
 # Optional self-update from a maintainer share (settings.json -> "UpdatePath").
 try {
@@ -31,7 +31,7 @@ try {
     if (Test-Path $settings) {
         $cfg = (Get-Content $settings -Raw).TrimStart([char]0xFEFF) | ConvertFrom-Json
         if ($cfg.UpdatePath) {
-            $remote = Join-Path "$($cfg.UpdatePath)" 'PackageBuilder.pak'
+            $remote = Join-Path "$($cfg.UpdatePath)" 'PackageCompanion.pak'
             if ((Test-Path $remote) -and (-not (Test-Path $pak) -or
                 (Get-Item $remote).LastWriteTimeUtc -gt (Get-Item $pak).LastWriteTimeUtc)) {
                 Copy-Item $remote $pak -Force
@@ -42,7 +42,7 @@ try {
 
 if (-not (Test-Path $pak)) {
     Add-Type -AssemblyName PresentationFramework
-    [Windows.MessageBox]::Show("PackageBuilder.pak not found next to the launcher:`n$pak", 'Package Builder') | Out-Null
+    [Windows.MessageBox]::Show("PackageCompanion.pak not found next to the launcher:`n$pak", 'Package Companion') | Out-Null
     return
 }
 

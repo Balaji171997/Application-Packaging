@@ -623,6 +623,70 @@ function Add-Bullets {
     }
 }
 
+# "2026-09-10T14:23:05.123Z" -> "10 Sep 2026  14:23". Falls back to the raw string if it will not parse.
+function Format-When {
+    param([string]$When)
+    if (-not "$When".Trim()) { return '' }
+    try { return ([datetime]::Parse("$When")).ToString('dd MMM yyyy  HH:mm') } catch {}
+    # Unparseable: tidy an ISO-looking string, but ONLY between digits. A bare -replace 'T',' ' is
+    # case-insensitive in PowerShell and would chew the letter t out of ordinary text.
+    $s = "$When" -replace '(?<=\d)[Tt](?=\d)', ' '
+    return ($s -replace '(?<=\d:\d\d)\.\d+Z?$', '')
+}
+
+# One history entry, rendered as a readable card instead of a log line:
+#     Version      140.14.0  ->  140.15.0
+#     10 Sep 2026  14:23  ·  Balaji Gurram  ·  Patch MobileApp
+function Add-HistoryCard {
+    param([string]$Field, [string]$From, [string]$To, [string]$What,
+          [string]$When, [string]$Who, [string]$Action, [string]$Source)
+
+    $conv = New-Object Windows.Media.BrushConverter
+    $card = New-Object Windows.Controls.Border
+    $card.Background      = $conv.ConvertFromString('#FFF7F8FA')
+    $card.BorderBrush     = $conv.ConvertFromString('#FFE3E6EB')
+    $card.BorderThickness = New-Object Windows.Thickness(1)
+    $card.CornerRadius    = New-Object Windows.CornerRadius(4)
+    $card.Padding         = New-Object Windows.Thickness(10,7,10,8)
+    $card.Margin          = New-Object Windows.Thickness(0,0,0,6)
+
+    $sp = New-Object Windows.Controls.StackPanel
+
+    # Headline: the change itself, in the biggest type on the card.
+    $headline = New-Object Windows.Controls.StackPanel
+    $headline.Orientation = 'Horizontal'
+    if ("$Field".Trim()) {
+        $lbl = New-Text -Text "$Field" -Size 10.5 -Colour '#FF5A6472' -Weight 'SemiBold'
+        $lbl.Margin = New-Object Windows.Thickness(0,0,10,0)
+        $lbl.MinWidth = 96
+        [void]$headline.Children.Add($lbl)
+    }
+    if ("$From".Trim() -or "$To".Trim()) {
+        $f = $(if ("$From".Trim()) { "$From" } else { '(not set)' })
+        [void]$headline.Children.Add((New-Text -Text $f -Size 12.5 -Colour '#FF8A94A3'))
+        $arrow = New-Text -Text '  ->  ' -Size 12.5 -Colour '#FF8A94A3'
+        [void]$headline.Children.Add($arrow)
+        [void]$headline.Children.Add((New-Text -Text $(if ("$To".Trim()) { "$To" } else { '(cleared)' }) -Size 12.5 -Weight 'SemiBold'))
+    } else {
+        [void]$headline.Children.Add((New-Text -Text "$What" -Size 12.5 -Wrap $true))
+    }
+    [void]$sp.Children.Add($headline)
+
+    # Sub-line: when . who . what action it came from. This is the "who and what is it related to" part.
+    $bits = @()
+    $w = Format-When $When
+    if ($w) { $bits += $w }
+    if ("$Who".Trim())    { $bits += "$Who" } else { $bits += 'author not recorded' }
+    if ("$Action".Trim()) { $bits += "$Action" }
+    if ("$Source".Trim()) { $bits += "$Source" }
+    $sub = New-Text -Text ($bits -join '  .  ') -Size 11 -Colour '#FF8A94A3' -Wrap $true
+    $sub.Margin = New-Object Windows.Thickness(0,3,0,0)
+    [void]$sp.Children.Add($sub)
+
+    $card.Child = $sp
+    [void]$Detail.Children.Add($card)
+}
+
 function Show-Detail {
     param($A)
     $Detail.Children.Clear()
@@ -656,32 +720,32 @@ function Show-Detail {
     Add-Fact 'Rollout'     $A.RolloutDate
     Add-Fact 'App ID'      $A.Id '#FF5A6472'
 
-    Add-Section 'Timeline'
     $mh = AsArray (Get-ModificationHistory -App $A -ChangeLog $script:Ledger)
+    Add-Section $(if ($mh.Count) { "Timeline  ($($mh.Count))" } else { 'Timeline' })
     if ($mh.Count -eq 0) {
         [void]$Detail.Children.Add((New-Text -Text 'Nothing recorded yet. Entries appear from the audit log, from dated lines in the app notes, and from changes this tool sees between syncs.' -Size 12 -Colour '#FF98A1AE' -Wrap $true))
     } else {
         foreach ($m in ($mh | Select-Object -First 25)) {
-            $row = New-Object Windows.Controls.Border
-            $row.BorderThickness = New-Object Windows.Thickness(2,0,0,0)
-            $row.BorderBrush = $conv.ConvertFromString('#FFDCE4F5')
-            $row.Padding = New-Object Windows.Thickness(9,1,0,7)
-            $sp = New-Object Windows.Controls.StackPanel
-            $when = ("$($m.When)" -replace 'T', ' ' -replace '\..*$', '')
-            $head = $(if ("$($m.Who)") { "$when   $($m.Who)" } else { $when })
-            [void]$sp.Children.Add((New-Text -Text $head -Size 11 -Colour '#FF8A94A3'))
-            [void]$sp.Children.Add((New-Text -Text "$($m.What)" -Size 12 -Wrap $true))
-            $row.Child = $sp
-            [void]$Detail.Children.Add($row)
+            Add-HistoryCard -Field "$($m.Field)" -From "$($m.From)" -To "$($m.To)" -What "$($m.What)" `
+                            -When "$($m.When)" -Who "$($m.Who)" -Action "$($m.Action)" -Source "$($m.Source)"
+        }
+        if ($mh.Count -gt 25) {
+            [void]$Detail.Children.Add((New-Text -Text "... and $($mh.Count - 25) older entr$(if ($mh.Count - 25 -eq 1) { 'y' } else { 'ies' })." -Size 11 -Colour '#FF98A1AE'))
         }
     }
 
-    Add-Section 'Version history'
     $vh = AsArray (Get-VersionHistory -App $A -ChangeLog $script:Ledger)
+    Add-Section $(if ($vh.Count) { "Version history  ($($vh.Count))" } else { 'Version history' })
+    [void]$Detail.Children.Add((New-Text -Text "Now on $($A.DisplayVersion)." -Size 12 -Colour '#FF5A6472' -Wrap $true))
     if ($vh.Count -eq 0) {
-        [void]$Detail.Children.Add((New-Text -Text "Current version is $($A.DisplayVersion). A transition is only listed once a sync actually sees the version change." -Size 12 -Colour '#FF98A1AE' -Wrap $true))
+        [void]$Detail.Children.Add((New-Text -Text 'No version change recorded yet. A transition appears here once the Intune audit reports it, or once a sync sees the version move.' -Size 11.5 -Colour '#FF98A1AE' -Wrap $true))
     } else {
-        foreach ($v in $vh) { Add-Fact ("$($v.When)" -replace 'T.*$', '') "$(if ($v.From) { $v.From } else { '?' }) -> $($v.To)" }
+        $spacer = New-Text -Text '' -Size 4
+        [void]$Detail.Children.Add($spacer)
+        foreach ($v in $vh) {
+            Add-HistoryCard -Field "$($v.Field)" -From "$($v.From)" -To "$($v.To)" -What "$($v.What)" `
+                            -When "$($v.When)" -Who "$($v.Who)" -Action "$($v.Action)" -Source "$($v.Source)"
+        }
     }
 
     Add-Section 'Assignments'

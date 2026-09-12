@@ -1,8 +1,8 @@
 ##############################################################
-# Package Builder - launcher
+# Package Companion - launcher
 # Run this file to start the tool. It re-launches itself in an
 # STA PowerShell (WPF requirement) if needed and starts the GUI.
-# Usage:  powershell -ExecutionPolicy Bypass -File PackageBuilder.ps1
+# Usage:  powershell -ExecutionPolicy Bypass -File PackageCompanion.ps1
 ##############################################################
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 

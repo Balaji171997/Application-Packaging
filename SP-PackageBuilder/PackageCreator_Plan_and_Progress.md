@@ -1,10 +1,10 @@
-﻿# Package Builder — Rebuild Plan & Handoff
+# Package Companion — Rebuild Plan & Handoff
 
 Single source of truth. Hand to Claude Code/Cowork: "Continue building from this plan."
 Goal: a simple, smart, smooth tool to build daily PSADT v4 packages with minimal clicks —
 strong predecessor reuse, reliable version/RITM/ProductCode handling, an AvalonEdit editor,
 flexible source handling, and a portable launcher the team runs by copying one folder.
-Name everywhere: **Package Builder**.
+Name everywhere: **Package Companion**.
 
 ## 0. Current status
 DONE & validated:
@@ -27,7 +27,7 @@ package (Set-SessionField); fresh-fill path (Build-FreshScript) when no predeces
 inline (plan §6 wants real snippets.json).
 
 PACKAGING DECISION (2026-06-06): template ships as PSADT_Template.zip (NOT base64 - base64 bloats
-~33% and parses slowly on every launch). Portable layout: PackageBuilder.exe (PS2EXE from the .ps1
+~33% and parses slowly on every launch). Portable layout: PackageCompanion.exe (PS2EXE from the .ps1
 sources) + PSADT_Template.zip + Lib\AvalonEdit.dll + EXTERNAL snippets.json + EXTERNAL settings.json
 (team edits snippets/settings; sources embedded in exe, not casually editable). Maintainer keeps .ps1
 to rebuild. Loader already supports both an extracted folder (dev) and the zip (distribution).
@@ -230,7 +230,7 @@ central $State on navigation (Back/Forward reflect truth — fixes stale-install
 change invalidates downstream so Step 3 rebuilds. Never close/reopen for mid-flow changes.
 
 ## 8. File layout (simple)
-PackageBuilder.ps1 (entry+stamp) | Core.ps1 | Predecessor.ps1 | Build.ps1 | Source.ps1 |
+PackageCompanion.ps1 (entry+stamp) | Core.ps1 | Predecessor.ps1 | Build.ps1 | Source.ps1 |
 GUI.ps1 (inline XAML) | Lib\ICSharpCode.AvalonEdit.dll | Tests\Test-Build.ps1 | goldens\ |
 settings.json, snippets.json, PSADT_V3toV4_Mappings.ps1
 
@@ -560,8 +560,8 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
      ErrorCode/ReturnCode) and appends Get-SccmErrorExplanation. Removed the separate "Explain error code" box.
    - Intune App ID from create is remembered ($script:State.IntuneAppId) -> pre-filled into TxtIntuneAppId and
      re-applied on tab switch (until the user edits). Tab switch keeps reflecting Integrate app name + content path.
-   - FOLDER CONSOLIDATION: Core Get-WorkRoot/Get-WorkPath; WorkRoot (settings, default C:\temp\PackageBuilder) with
-     subfolders Logs / IntuneWin / Downloads / Build / Temp. Routed: log (Logs\PackageBuilder.log), .intunewin
+   - FOLDER CONSOLIDATION: Core Get-WorkRoot/Get-WorkPath; WorkRoot (settings, default C:\temp\PackageCompanion) with
+     subfolders Logs / IntuneWin / Downloads / Build / Temp. Routed: log (Logs\PackageCompanion.log), .intunewin
      (IntuneWin\), encrypted payload + build temps PBtpl*/PBzip*/PkgBuilder.msi (Temp\), fetched client logs
      (Downloads\<machine>\), LocalWorkingDir default (Build\). GUI Open-log + messages use Get-LogPath.
    Verified: all .ps1 parse clean, settings valid, XAML balanced, Test-Build PASSED. (exe NOT built - per user.)
@@ -671,15 +671,15 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
    version-swap no-op (identical pairs dropped); loose zip/shortcut/ARP path goldens green; icons pipeline
    (copy -> ico->png -> exe-extract fallback); Unblock-File pass on output; publish guards (PublishBase gate,
    ManageReady gate). Final state: 12/12 files parse clean, XAML balanced, ALL TESTS PASSED.
-   2026-06-10 scenario-gap pass + Package Builder structure:
+   2026-06-10 scenario-gap pass + Package Companion structure:
    - GAP FIXED: .msp/.iso are selectable installers ($script:InstallerExts) but only MSI/EXE have command
      sets - a single .msp silently produced an EXE-style Start-ADTProcess line. Get-SourceWarning now flags
      unsupported extensions (works with OR without a predecessor; loose-files mode exempt) -> red Step-3
      header "No standard command set for .msp - author commands manually".
-   - Clean structure: PackageBuilder.ps1 launcher (STA enforce -> GUI.ps1); README.md (folder map, run cmd,
+   - Clean structure: PackageCompanion.ps1 launcher (STA enforce -> GUI.ps1); README.md (folder map, run cmd,
      settings reference, runtime-output table); BuildStamp -> 2026-06-10.r9; deleted stray Ps1.txt debug file.
      Physical subfolder reorg deliberately NOT done (would touch every dot-source path at final stage; the
-     flat engine-module layout is documented in README instead). Window title already "Package Builder".
+     flat engine-module layout is documented in README instead). Window title already "Package Companion".
    - KNOWN LIMITS (documented, accepted): same-FILENAME MSIs in different subfolders share per-MSI props/flags
      (keyed by name at create); here-strings containing unbalanced braces inside v3 HKCU scriptblocks would
      still confuse depth counting (parse-net catches it); paths >260 chars depend on robocopy/long-path policy;
@@ -693,7 +693,7 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
      AgreeToLicense) and inspected the image - fully readable. Lesson recorded: UI changes need a visual check,
      parse/logic checks don't catch styling.
    - Set-ToolVisibility.ps1 (deploy-time): -Hide sets Hidden attr on all top-level items EXCEPT settings.json,
-     snippets.json and PackageBuilder.exe (or the .ps1 launcher until the exe exists); -Show reverts. Hidden
+     snippets.json and PackageCompanion.exe (or the .ps1 launcher until the exe exists); -Show reverts. Hidden
      files still load (explicit paths) - sandbox-verified all three states incl. hidden-folder enumeration.
      NOT run on the dev folder (keeps dev/searches normal); run it on the TEAM copy after the exe build.
      Note for user: Hidden attribute deters casual browsing; it is NOT security (show-hidden-files reveals).
@@ -701,7 +701,7 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
    2026-06-10 EMBEDDED-ENGINE exe model (user rejected attribute-hiding - everyone has show-hidden on):
    - Real answer: ship NO .ps1 at all. Build-Exe.ps1 (maintainer-only) concatenates the 10 engine modules
      (BOM-stripped), base64-embeds them as $script:PBEngineSource, appends GUI.ps1 verbatim ->
-     PackageBuilder_merged.ps1 -> parse-gate -> Invoke-PS2EXE (-STA -noConsole) -> PackageBuilder.exe;
+     PackageBuilder_merged.ps1 -> parse-gate -> Invoke-PS2EXE (-STA -noConsole) -> PackageCompanion.exe;
      merged file deleted after compile. TEAM SHIP LIST: exe + settings.json + snippets.json + Lib\ +
      PSADT_Template\ + ConfigurationManagerPrelive\ (deps only - none of OUR logic readable).
    - GUI.ps1 made DUAL-MODE: header skips file dot-sourcing when $script:PBEngineSource is set (root =
@@ -718,13 +718,13 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
    - Step-rail "4  Review and Create" was clipped (rail 132px). Rail -> 152px; N4 renamed "4  Create & Publish"
      (truer name - the step holds Review&Create/Integration/Testing/Troubleshoot/Dev-Test tabs). Render
      confirmed: full label visible, tabs clean.
-   - Window/taskbar icon: GUI loads Lib\PackageBuilder.ico onto $Win.Icon when present (defensive, logs on
+   - Window/taskbar icon: GUI loads Lib\PackageCompanion.ico onto $Win.Icon when present (defensive, logs on
      failure); Build-Exe.ps1 already uses the SAME file for the exe icon. USER ACTION: drop the .ico as
-     Lib\PackageBuilder.ico - both the window and the future exe pick it up automatically.
+     Lib\PackageCompanion.ico - both the window and the future exe pick it up automatically.
    2026-06-10 LOADER + PAK architecture (user: embedded exe = hard to update; wants portable/flexible/advanced):
    - SPLIT protection from code: Pack-Engine.ps1 (maintainer) merges all .ps1 (same proven model) -> parse-gate
-     -> Deflate compress -> AES-256 encrypt -> PackageBuilder.pak (441KB source -> 128KB opaque binary).
-     Loader.ps1 (compile ONCE with ps2exe -> PackageBuilder.exe, never changes): finds pak beside itself,
+     -> Deflate compress -> AES-256 encrypt -> PackageCompanion.pak (441KB source -> 128KB opaque binary).
+     Loader.ps1 (compile ONCE with ps2exe -> PackageCompanion.exe, never changes): finds pak beside itself,
      decrypts+decompresses IN MEMORY, executes. UPDATE = re-run Pack-Engine + replace ONE .pak file - no
      recompile, no ps2exe, exe untouched forever.
    - AUTO-UPDATE built into the loader: settings.json "UpdatePath" -> newer pak on the share is copied local
@@ -738,15 +738,15 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
      vs a determined insider; fully stops casual reading/editing/copying.
    SHIP FLOW: [once] Invoke-PS2EXE Loader.ps1 -> exe; [each release] Pack-Engine.ps1 -> copy pak.
    2026-06-10 *** FINAL BUILD SHIPPED ***
-   - ps2exe installed (PSGallery). PackageBuilder.pak built (441KB -> 128KB). PackageBuilder.exe compiled
-     (134KB; -STA -noConsole, title 'Package Builder', icon Lib\PackageBuilder.ico - user provided the ico,
+   - ps2exe installed (PSGallery). PackageCompanion.pak built (441KB -> 128KB). PackageCompanion.exe compiled
+     (134KB; -STA -noConsole, title 'Package Companion', icon Lib\PackageCompanion.ico - user provided the ico,
      product/company/version metadata set).
    - SMOKE-TESTED TWICE: (1) exe in dev folder - GUI up, engine initialized, config+snippets loaded;
      (2) exe in the SHIP folder - loads config from ITS OWN folder (portability proven), AvalonEdit from
      Lib\ beside the exe, process stable, clean shutdown.
    - TEAM FOLDER built at C:\Users\AW140\Downloads\PackageBuilder (253.8 MB, 1112 files, 5 root items):
-     PackageBuilder.exe + PackageBuilder.pak + settings.json + snippets.json + Lib\ (AvalonEdit dll,
-     IntuneWinAppUtil.exe, PackageBuilder.ico, PowerShell Module\{MSAL.PS,IntuneWin32App},
+     PackageCompanion.exe + PackageCompanion.pak + settings.json + snippets.json + Lib\ (AvalonEdit dll,
+     IntuneWinAppUtil.exe, PackageCompanion.ico, PowerShell Module\{MSAL.PS,IntuneWin32App},
      PSADT_Template\, ConfigurationManagerPrelive\).
    - Dev folder unchanged (all .ps1 + exe + pak build artifacts stay with maintainer).
    - NOT yet exercised from ship copy (live-test next): Step-4 template pickup from Lib\PSADT_Template and
@@ -758,7 +758,7 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
    ONLY when $Host.Name -eq 'ConsoleHost' (dev unchanged; exe silent - log file is the record). Only runtime
    Write-Host in shipped code was Core's Write-Log (grep-verified; maintainer scripts keep theirs).
    SHIPPED AS A PAK UPDATE - first real use of the update flow: Pack-Engine -> copy pak -> done, exe untouched.
-   VERIFIED: ship exe MainWindowTitle = 'Package Builder' within 12s (window straight up, no blocking boxes);
+   VERIFIED: ship exe MainWindowTitle = 'Package Companion' within 12s (window straight up, no blocking boxes);
    Test-Build PASSED.
    2026-06-11 round 7a - reboot confirmation + reboot-from-tool (user: "after reboot it still says pending; how
    do you confirm reboot done? better to reboot from the tool"):
@@ -1367,7 +1367,7 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
      Test-IsSecurityProduct targets; bounded timeouts; best-effort), Compare-ShortcutSets (Added/Gone/Same; keyed by
      name+target; tolerates empty reference). Integration-tab button "Validate: screenshot app shortcuts" (BtnShotValidate)
      -> Start-ScreenshotJob (background runspace) LIVE-enumerates the installed shortcuts (authority), screenshots to
-     C:\temp\PackageBuilder\Screenshots\<pkg>\integration\<timestamp>, and diffs vs the OPTIONAL snapshot reference
+     C:\temp\PackageCompanion\Screenshots\<pkg>\integration\<timestamp>, and diffs vs the OPTIONAL snapshot reference
      (State.SnapshotShortcuts, stored by the snapshot dialog's $res.Shortcuts). Works standalone with no snapshot.
      Added Screenshots.ps1 to Pack-Engine engineFiles. VERIFIED: parse all + merged pak parse-gate + Test-Build (60,
      incl. 4 new shortcut asserts: keeps real/drops uninstall+desktop, diff Added, empty-ref tolerated). NOTE/LIMIT:
@@ -1894,7 +1894,7 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
      FIXED MinVisibleSec (10s) wait after launch, THEN find the window (largest NEW visible top-level window via
      EnumWindows, any owning process; else largest visible app window), re-checking every 2s up to TimeoutSec for slow
      apps. Added a DIAGNOSTIC log line per shortcut: "saw N candidate window(s); capturing '<title>' (pid X)" or "NONE
-     matched - recording a miss", written to PackageBuilder.log so a miss is explainable. VERIFIED: end-to-end runspace
+     matched - recording a miss", written to PackageCompanion.log so a miss is explainable. VERIFIED: end-to-end runspace
      capture test saves a PNG, parse + Test-Build green, decrypt-load. Deployed r115.
    2026-06-24 r116 - analyze layout (robust) + post-window LOAD wait (user). (#1) Analyze report STILL blank at normal
      size: now the dialog opens LARGE by default (90% of the work area, capped 1500x1000, CenterScreen) so the report
@@ -2222,7 +2222,7 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
          (mbdcaswvtb29843.mn-man.biz) did not RESOLVE/reach from the test machine - a network/DNS/VPN/rights issue, NOT a tool
          bug (the ConfigMgr module imported fine from the share, got as far as New-PSDrive). Improved Connect-Sccm error to name
          the server + say to check name resolution / VPN / settings.json Sccm.SiteServer / SCCM rights.
-     Test-Build green. Packed r141; deployed pak + PackageBuilder.exe.config to BOTH the local folder AND the user's share
+     Test-Build green. Packed r141; deployed pak + PackageCompanion.exe.config to BOTH the local folder AND the user's share
      (\\mndemucfsm01\...\Balaji\PackageBuilder). User to re-test Intune publish (now staged locally) + SCCM (after confirming
      the site server resolves).
    2026-07-01 r142 - three more from the on-share test:
@@ -2234,10 +2234,10 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
          (WinINET) proxy DIRECTLY via GetSystemWebProxy() - which does NOT go through that config section - attach default
          creds, pin as DefaultWebProxy; on failure fall back to a direct (null-proxy) connection. Never throws (asserted).
          (Module STAGING from r141 already worked - both modules staged + imported from the local cache.)
-     (3) LONG PATH hardening: PackageBuilder.exe.config gains AppContextSwitchOverrides
+     (3) LONG PATH hardening: PackageCompanion.exe.config gains AppContextSwitchOverrides
          (Switch.System.IO.UseLegacyPathHandling=false;Switch.System.IO.BlockLongPaths=false) so System.IO tolerates
          >260-char paths on OSes with long paths enabled. Note: full >260 support also needs the OS LongPathsEnabled
-         policy (IT). The Intune local cache (C:\temp\PackageBuilder\modules) is SHORT, which itself reduces path length.
+         policy (IT). The Intune local cache (C:\temp\PackageCompanion\modules) is SHORT, which itself reduces path length.
      SCCM "database lookup" is unchanged = the SMS Provider FQDN not resolving from the machine (network/DNS/VPN), NOT a
      tool bug. Test-Build green. Packed r142; pak + exe.config redeployed to local + the user's share.
    2026-07-01 r143 - ROOT CAUSE of "works when copied local, FAILS from the share shortcut" (user tested both on the same
@@ -2288,7 +2288,7 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
          ProductCodes (multi-component installer), it does NOT swap - keeps the predecessor's detection (a one-code swap
          would be wrong). Counts distinct GUIDs in $State.SnapshotUninstall.
      (2) SCCM 'run policy' access-denied: Invoke-SccmMachinePolicy now detects denied/verweigert/0x80070005 and says to run
-         Package Builder AS ADMINISTRATOR (triggering CCM client policy needs local admin) - environmental, not a bug.
+         Package Companion AS ADMINISTRATOR (triggering CCM client policy needs local admin) - environmental, not a bug.
      (3) SHORTCUT-SCREENSHOT button consolidated: removed the duplicate on the Integration tab (BtnShotValidate); kept the
          ONE on the Troubleshoot tab (BtnTsShots). Both called the same Invoke-ShortcutValidation (install-timestamp/folder/
          snapshot detection - not name guessing), so no logic lost. Main XAML re-validated. Test-Build green. Deployed r145.
@@ -2865,7 +2865,7 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
      ConfigurationManagerPrelive\ under lib\ (root now just lib\ + .claude + tool files). NO code change - every
      resolver already supported both layouts (Sccm.ps1 "next to the tool or under Lib\", Core self-stage, template
      lookups); only Test-Build's template-path lookup gained a Lib-first fallback (test infra, not in the pak).
-     Full Test-Build ALL PASS after the move. Also: files\PackageBuilder.exe (991 KB, 07-03) is the OLD self-contained
+     Full Test-Build ALL PASS after the move. Also: files\PackageCompanion.exe (991 KB, 07-03) is the OLD self-contained
      exe (r158 baked in, ignores the pak) - kept as-is per no-change rule; the REAL team loader is the 55 KB exe in
      Downloads\PackageBuilder / on the share. GPF work continues in its own folder (see its progress doc + memory).
    ===== PENDING PLAN (agreed with user 2026-07-01; NOT yet built; ALL builds LOCAL-ONLY, user pushes to share manually) =====
@@ -3074,7 +3074,7 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
      assignment lines that read DeploymentType / ADT $env* / $config* (and anything that depends on them) into
      each action's PRE-INSTALLATION / PRE-UNINSTALLATION / PRE-REPAIR section, where the session+env are live.
      Skips multi-line/here-string assignments (left for manual). Corpus SAFETY: 100 packages, 39 moved, 0 parse
-     breaks introduced. Marker comment "[Package Builder] moved from the variables block" -> Get-ScriptReview
+     breaks introduced. Marker comment "[Package Companion] moved from the variables block" -> Get-ScriptReview
      Findings reports "AUTO-MOVED... verify" (transparent); a still-unmoved DeploymentType line is flagged to
      move manually. VERIFIED on Scania_XCOM: moved 11 lines, 0 DeploymentType left in var block, parse-clean.
    - BUNDLED-MSI (BundledMsi.ps1, Step-2 "Check for bundled MSI..." button for a lone EXE): Test-ExeBundlesMsi
@@ -3310,7 +3310,7 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
      scripts by default (the user's original BC-style ask); checkbox filters on demand.
    - RESULT on the real Mozilla rebuild: 70 -> 18 changed rows, formatting-noise rows = 0, every remaining row
      a REAL change (version/date/author/RITM/installer/log-scaffolding swap/Import-Module footer).
-   - BUILD STAMP IN TITLE: Core BuildStamp -> '2026-06-12.r23'; window title = "Package Builder - build <stamp>"
+   - BUILD STAMP IN TITLE: Core BuildStamp -> '2026-06-12.r23'; window title = "Package Companion - build <stamp>"
      so "is my exe on the latest pak?" is answerable at a glance. Smoke-verified: ship exe title shows the stamp.
    Parse clean, Test-Build PASSED, pak shipped (153KB).
    2026-06-12 round 22 - diff availability + similarity pairing (user: diff "not available" after installer
@@ -3394,7 +3394,7 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
      rendered the dialog to PNG - visually confirmed alignment/colors/legend.
    - FINAL SWEEP (presentation tomorrow): all 17 .ps1 parse clean; Test-Build ALL PASSED; pak rebuilt
      (509KB->150KB) and round-trip-verified (decrypts byte-perfect, parses clean, contains engine+GUI+new
-     diff); ship-folder integrity 11/11 critical items OK; ship exe smoke test alive with 'Package Builder'
+     diff); ship-folder integrity 11/11 critical items OK; ship exe smoke test alive with 'Package Companion'
      window; log proves engine initialized from the ship folder. Presentation_Notes.md written (what/why/
      architecture/distribution model/reliability/numbers) for the user's demo.
    2026-06-11 round 17 - SCCM content-update CONFIRMATION (user: instant success but DPs lag; when did content
@@ -3467,7 +3467,7 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
    (A) ICON: Get-IconBase64 sent RAW .ico bytes labelled image/png when no .png existed -> Graph rejected the
        icon. FIX: convert .ico -> real PNG. WPF BitmapDecoder (handles BMP *and* PNG-compressed .ico frames,
        picks the largest), System.Drawing Bitmap(path) fallback; if both fail, create app WITHOUT icon (not
-       fatal). VERIFIED 3 methods on the all-PNG-frame PackageBuilder.ico: Icon.ToBitmap() FAILS (range error),
+       fatal). VERIFIED 3 methods on the all-PNG-frame PackageCompanion.ico: Icon.ToBitmap() FAILS (range error),
        Image.FromFile/Bitmap(path) OK, WPF decoder OK + largest (256px). So now any .ico just works; PNG still
        used directly if present.
    (B) SAS-RENEWAL COMMIT RACE: after a SAS renewal during upload, the Graph /commit fired before the renewal
@@ -3607,7 +3607,7 @@ NEXT (in this order — launcher/exe is LAST so we don't re-extract on every cha
    STILL OPEN (user testing): confirm de icon now renders; large-file Intune upload end-to-end.
    REMAINING (later): SCCM other tabs (add devices to a collection; download package logs -> CMTrace); Intune
    update content/icon/detection buttons (functions exist); portable launcher.
-6. Portable launcher: thin PackageBuilder.exe (PS2EXE/WinForms shim) dot-sources + starts tool;
+6. Portable launcher: thin PackageCompanion.exe (PS2EXE/WinForms shim) dot-sources + starts tool;
    team copies one folder + Lib\ and double-clicks; scripts stay editable for maintainer; unblock-load so
    copied DLLs work. BUILD LAST — once features are stable (avoids re-extracting the exe per change).
 7. Golden tests — add real-package goldens (MSI, EXE, loose, 3-part version).

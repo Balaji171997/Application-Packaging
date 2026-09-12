@@ -1,4 +1,4 @@
-# Build the distributable ZIP for the SharePoint-linked Package Builder.
+# Build the distributable ZIP for the SharePoint-linked Package Companion.
 # Users download it from SharePoint, unblock, extract, run. No UNC, no Intune, no installer.
 #
 #   .\New-SPToolRelease.ps1                 # full release  (~343 MB raw)
@@ -24,35 +24,35 @@ if (-not $SkipPack) {
     & (Join-Path $root 'Pack-Engine.ps1')
     if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw "Pack-Engine failed (exit $LASTEXITCODE)" }
 }
-$pak = Join-Path $root 'PackageBuilder.pak'
-if (-not (Test-Path -LiteralPath $pak)) { throw "No PackageBuilder.pak at $pak" }
+$pak = Join-Path $root 'PackageCompanion.pak'
+if (-not (Test-Path -LiteralPath $pak)) { throw "No PackageCompanion.pak at $pak" }
 
 # Guard: a .pak built before the wiring fix would silently ship a UNC-only tool. Cheap to check, expensive to miss.
 if (-not (Select-String -Path (Join-Path $root 'Pack-Engine.ps1') -Pattern "'SharePoint\.ps1'" -Quiet)) {
     throw "Pack-Engine.ps1 does not include SharePoint.ps1 - the release would have NO SharePoint support."
 }
 
-# Guard: the exe MUST be the thin Loader that reads PackageBuilder.pak at runtime. The other exe in this repo is
+# Guard: the exe MUST be the thin Loader that reads PackageCompanion.pak at runtime. The other exe in this repo is
 # a ps2exe build with a July engine baked INSIDE it - it ignores the .pak completely, so repacking changes nothing
 # and the tool silently behaves like the old UNC-only build. That shipped in two releases before it was caught.
-$exe = Join-Path $root 'PackageBuilder.exe'
-if (-not (Test-Path -LiteralPath $exe)) { throw "PackageBuilder.exe not found at $exe" }
+$exe = Join-Path $root 'PackageCompanion.exe'
+if (-not (Test-Path -LiteralPath $exe)) { throw "PackageCompanion.exe not found at $exe" }
 $exeBytes = [IO.File]::ReadAllBytes($exe)
 $exeText  = [Text.Encoding]::Unicode.GetString($exeBytes) + [Text.Encoding]::ASCII.GetString($exeBytes)
-if ($exeText -notmatch 'PackageBuilder\.pak') {
-    throw ("PackageBuilder.exe ({0:N0} KB) does not reference PackageBuilder.pak - it looks like a ps2exe build " -f ((Get-Item $exe).Length/1KB)) +
+if ($exeText -notmatch 'PackageCompanion\.pak') {
+    throw ("PackageCompanion.exe ({0:N0} KB) does not reference PackageCompanion.pak - it looks like a ps2exe build " -f ((Get-Item $exe).Length/1KB)) +
           "with the engine baked in, which would IGNORE the .pak. Copy the thin Loader exe (~54 KB) over it first."
 }
 Write-Host ("Loader exe verified ({0:N0} KB, reads the .pak)." -f ((Get-Item $exe).Length/1KB)) -ForegroundColor Green
 
 # ---- 2. assemble a clean distribution folder --------------------------------------------------
-$name  = "PackageBuilder-SharePoint-$Version" + $(if ($NoSccm) { '-nosccm' } else { '' })
+$name  = "PackageCompanion-SharePoint-$Version" + $(if ($NoSccm) { '-nosccm' } else { '' })
 $stage = Join-Path $OutDir $name
 if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
 New-Item -Path $stage -ItemType Directory -Force | Out-Null
 
 # Exactly what the portable copy ships - sources and dev scripts are NOT shipped.
-$files = @('PackageBuilder.exe','PackageBuilder.exe.config','PackageBuilder.pak',
+$files = @('PackageCompanion.exe','PackageCompanion.exe.config','PackageCompanion.pak',
            'settings.json','snippets.json','KnowledgeBase.Recommend.json','PsExec.exe')
 foreach ($f in $files) {
     $p = Join-Path $root $f
@@ -70,7 +70,7 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying Lib (exit $LASTEXITCOD
 # ---- 3. version marker + first-run instructions -----------------------------------------------
 $sp = (Get-Content (Join-Path $root 'settings.json') -Raw | ConvertFrom-Json).SharePoint
 @"
-Package Builder - SharePoint edition
+Package Companion - SharePoint edition
 Version   : $Version
 Built     : $(Get-Date -Format 'yyyy-MM-dd HH:mm')
 Flavour   : $(if ($NoSccm) { 'lean (no ConfigMgr module - cannot publish to SCCM)' } else { 'full' })
@@ -79,7 +79,7 @@ Library   : $($sp.Library)
 "@ | Set-Content -LiteralPath (Join-Path $stage 'VERSION.txt') -Encoding UTF8
 
 @"
-Package Builder - SharePoint edition - READ THIS FIRST
+Package Companion - SharePoint edition - READ THIS FIRST
 ======================================================
 
 1. UNBLOCK THE ZIP *BEFORE* EXTRACTING.  This matters - skip it and the tool will misbehave.
@@ -90,10 +90,10 @@ Package Builder - SharePoint edition - READ THIS FIRST
    ZIP first means the extracted files are clean. If you already extracted without unblocking,
    just run Unblock-Tool.cmd from the extracted folder.
 
-2. Extract the whole folder somewhere LOCAL, e.g. C:\Tools\PackageBuilder.
+2. Extract the whole folder somewhere LOCAL, e.g. C:\Tools\PackageCompanion.
    Do not run it from inside the .zip, and do not run it from a network drive.
 
-3. Run PackageBuilder.exe.
+3. Run PackageCompanion.exe.
    The first time it touches SharePoint you will get a Microsoft sign-in prompt. Sign in with your
    normal work account. It reads the package sources you already have access to - nothing more.
 
@@ -122,7 +122,7 @@ TROUBLE
 @echo off
 echo Removing the "downloaded from the internet" tag from every file here...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ChildItem -LiteralPath '%~dp0' -Recurse -File | Unblock-File"
-echo Done. You can start PackageBuilder.exe now.
+echo Done. You can start PackageCompanion.exe now.
 pause
 "@ | Set-Content -LiteralPath (Join-Path $stage 'Unblock-Tool.cmd') -Encoding ASCII
 

@@ -1,11 +1,11 @@
-# Package Builder
+# Package Companion
 
 Wizard for building PSADT v4 software-deployment packages and publishing them to **SCCM** and **Intune**.
 
 ## Run
 
 ```
-powershell -ExecutionPolicy Bypass -File PackageBuilder.ps1
+powershell -ExecutionPolicy Bypass -File PackageCompanion.ps1
 ```
 
 (or run `GUI.ps1` directly with `-STA`). PowerShell 5.1, Windows.
@@ -14,7 +14,7 @@ powershell -ExecutionPolicy Bypass -File PackageBuilder.ps1
 
 ```
 PackageBuilder\
-├─ PackageBuilder.ps1        <- START HERE (launcher; enforces STA)
+├─ PackageCompanion.ps1        <- START HERE (launcher; enforces STA)
 ├─ GUI.ps1                   <- the WPF wizard (4 steps + Integration/Testing/Troubleshoot/Dev-Test tabs)
 │
 │  engine modules (dot-sourced by GUI and by background jobs):
@@ -49,8 +49,8 @@ copy it anywhere and it works. The future .exe sits in this same folder and chan
 | What | Where |
 |---|---|
 | Built packages | `OutputBasePath` from settings.json (default `C:\temp\<PackageName>`) |
-| Log | `C:\temp\PackageBuilder\Logs\PackageBuilder.log` |
-| .intunewin builds, temps, fetched client logs | `C:\temp\PackageBuilder\{IntuneWin,Temp,Downloads}` |
+| Log | `C:\temp\PackageCompanion\Logs\PackageCompanion.log` |
+| .intunewin builds, temps, fetched client logs | `C:\temp\PackageCompanion\{IntuneWin,Temp,Downloads}` |
 
 `WorkRoot` in settings.json moves all of the above. "Open work folder" button opens it.
 
@@ -70,25 +70,25 @@ copy it anywhere and it works. The future .exe sits in this same folder and chan
 One-time: build the loader exe (never changes again):
 
 ```
-Invoke-PS2EXE -InputFile .\Loader.ps1 -OutputFile .\PackageBuilder.exe -STA -noConsole `
-              -title 'Package Builder' -iconFile .\Lib\PackageBuilder.ico
+Invoke-PS2EXE -InputFile .\Loader.ps1 -OutputFile .\PackageCompanion.exe -STA -noConsole `
+              -title 'Package Companion' -iconFile .\Lib\PackageCompanion.ico
 ```
 
 Every release after that:
 
 ```
-powershell -ExecutionPolicy Bypass -File .\Pack-Engine.ps1     # -> PackageBuilder.pak
+powershell -ExecutionPolicy Bypass -File .\Pack-Engine.ps1     # -> PackageCompanion.pak
 ```
 
-and copy ONLY the new `PackageBuilder.pak` to the team folder. The team copy is:
+and copy ONLY the new `PackageCompanion.pak` to the team folder. The team copy is:
 
 ```
-PackageBuilder.exe    <- stable loader (built once)
-PackageBuilder.pak    <- ALL tool logic, AES-encrypted + compressed (this is the update unit)
+PackageCompanion.exe    <- stable loader (built once)
+PackageCompanion.pak    <- ALL tool logic, AES-encrypted + compressed (this is the update unit)
 settings.json         <- editable
 snippets.json         <- editable
 Lib\                  <- ALL dependencies in ONE folder:
-    ICSharpCode.AvalonEdit.dll, IntuneWinAppUtil.exe, PackageBuilder.ico,
+    ICSharpCode.AvalonEdit.dll, IntuneWinAppUtil.exe, PackageCompanion.ico,
     PowerShell Module\ (MSAL.PS + IntuneWin32App),
     PSADT_Template\ (or .zip), ConfigurationManagerPrelive\
 ```

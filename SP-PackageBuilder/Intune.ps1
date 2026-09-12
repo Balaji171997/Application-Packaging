@@ -740,7 +740,7 @@ function New-IntuneApp {
             # package's script author - better for reporting. Just the name. Falls back to a live resolve, then generic.
             notes                   = $(if ("$($Fields.Author)".Trim()) { "Created by $($Fields.Author)." }
                                         elseif (Get-Command Get-AuthorName -ErrorAction SilentlyContinue) { "Created by $(Get-AuthorName)." }
-                                        else { 'Created by Package Builder.' })
+                                        else { 'Created by Package Companion.' })
         }
         $icon = Get-IconBase64 -PackagePath $LocalPackagePath
         if ($icon.Count) { $body['largeIcon'] = $icon }
@@ -996,4 +996,88 @@ function Update-IntuneDetection {
         Invoke-Graph PATCH "$($(Get-IntuneConfig).GraphBase)/deviceAppManagement/mobileApps/$($app.id)" (@{ '@odata.type'='#microsoft.graph.win32LobApp'; detectionRules=@(Get-IntuneDetectionRules -Fields $Fields) }) | Out-Null
         return @{ Ok=$true; Message="Intune detection rules updated for '$($Fields.FullName)'." }
     } catch { return @{ Ok=$false; Message="Intune detection update failed: $($_.Exception.Message)" } }
+}
+
+##############################################################
+# INTUNE CLIENT TROUBLESHOOTING
+# Intune is NOT "SCCM with different buttons": the client app is Company Portal (not Software Center) and the
+# logs live in a different place entirely. The ConfigMgr logs (AppDiscovery / AppEnforce under CCM\Logs) say
+# nothing at all about an Intune-delivered app, which is why these need their own tab.
+#
+#   C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\
+#       AppWorkload.log               <- Win32 app detection / requirement rules / install decisions. THE one.
+#       IntuneManagementExtension.log <- IME policy retrieval + general agent activity
+#       AgentExecutor.log             <- PowerShell detection + requirement scripts, and their output
+#       ClientHealth.log              <- IME health / check-in
+#
+# The package's own PSADT logs are the SAME for both targets (it is our script), so those are reused from the
+# SCCM side rather than duplicated.
+##############################################################
+$script:IntuneLogShare = 'c$\ProgramData\Microsoft\IntuneManagementExtension\Logs'
+$script:IntuneLogNames = [ordered]@{
+    'AppWorkload'               = 'Win32 app detection, requirement rules and install decisions - start here for an app that will not install.'
+    'IntuneManagementExtension' = 'IME policy retrieval and general agent activity - use when the app never arrives at all.'
+    'AgentExecutor'             = 'Output of PowerShell detection / requirement scripts.'
+    'ClientHealth'              = 'IME health and check-in.'
+}
+
+# Fetch ONE Intune client log from a machine and open it in CMTrace - same shape as Get-SccmClientLog, so the
+# behaviour (copy to the work folder, open, scan for known errors) is identical no matter which target you use.
+function Get-IntuneClientLog {
+    param([Parameter(Mandatory)][string]$Machine, [Parameter(Mandatory)][string]$Which)
+    $mn = "$Machine".Trim().Split('.')[0]
+    if (-not $mn) { return @{ Ok=$false; Message='Enter a machine name.' } }
+    if (-not $script:IntuneLogNames.Contains($Which)) { return @{ Ok=$false; Message="Unknown Intune log '$Which'." } }
+    $dest = Join-Path (Get-WorkPath 'Downloads') $mn
+    if (-not (Test-Path $dest)) { New-Item $dest -ItemType Directory -Force | Out-Null }
+    try {
+        $name = "$Which.log"
+        $src  = Join-Path (Get-PBClientPath -Machine $mn -ShareRel $script:IntuneLogShare) $name
+        if (-not (Test-Path $src)) {
+            $why = if ($src -match '^\\') { 'machine off, or you need admin on that machine' } else { 'not present on this machine' }
+            return @{ Ok=$false; Message="$name not reachable at $src ($why).`nIf the device is Intune-managed, check the Intune Management Extension is installed - these logs only exist once it is." }
+        }
+        $d = Join-Path $dest $name
+        Copy-Item $src $d -Force -ErrorAction Stop
+        Open-CMTrace -LogPath $d
+        $known = try { Find-KnownLogErrors -Text ([IO.File]::ReadAllText($d)) } catch { $null }
+        return @{ Ok=$true; Message="Copied $name from $mn and opened it in CMTrace ($d).$(if($known){"`nKnown issue(s) found:`n$known"})" }
+    } catch { return @{ Ok=$false; Message="Get Intune log failed: $($_.Exception.Message)" } }
+}
+
+# Win32 app ENFORCEMENT STATE straight from the IME registry. This is what the agent actually believes about the
+# app on that machine - far more direct than reading it out of a log, and the first thing worth checking when
+# Intune reports success but the app is not really there (or the other way round).
+function Get-IntuneWin32AppState {
+    param([Parameter(Mandatory)][string]$Machine, [string]$FullName)
+    $mn = "$Machine".Trim().Split('.')[0]
+    if (-not $mn) { return @{ Ok=$false; Message='Enter a machine name.' } }
+    try {
+        $sb = {
+            param($needle)
+            $root = 'HKLM:\SOFTWARE\Microsoft\IntuneManagementExtension\Win32Apps'
+            if (-not (Test-Path $root)) { return ,@() }
+            $out = New-Object System.Collections.Generic.List[object]
+            foreach ($grs in (Get-ChildItem $root -ErrorAction SilentlyContinue)) {
+                foreach ($app in (Get-ChildItem $grs.PSPath -ErrorAction SilentlyContinue)) {
+                    $p = Get-ItemProperty $app.PSPath -ErrorAction SilentlyContinue
+                    $name = "$($p.DisplayName)"; if (-not $name) { $name = Split-Path $app.PSPath -Leaf }
+                    if ($needle -and ($name -notlike "*$needle*") -and ((Split-Path $app.PSPath -Leaf) -notlike "*$needle*")) { continue }
+                    $out.Add([pscustomobject]@{
+                        App = $name; Id = (Split-Path $app.PSPath -Leaf)
+                        Enforcement = "$($p.EnforcementStateMessage)"; Compliance = "$($p.ComplianceStateMessage)"
+                    })
+                }
+            }
+            return ,@($out.ToArray())
+        }
+        $splat = Get-PBMachineSplat $mn
+        $rows = if ($splat.Count -eq 0) { & $sb $FullName } else { Invoke-Command @splat -ScriptBlock $sb -ArgumentList $FullName -ErrorAction Stop }
+        $rows = @($rows)
+        if ($rows.Count -eq 0) {
+            return @{ Ok=$true; Message="No Win32 app state found on $mn$(if($FullName){" matching '$FullName'"}).`nEither the app was never targeted at this device, or the Intune Management Extension has not run yet." }
+        }
+        $txt = ($rows | ForEach-Object { "  $($_.App)`n      id         : $($_.Id)`n      enforcement: $($_.Enforcement)`n      compliance : $($_.Compliance)" }) -join "`n"
+        return @{ Ok=$true; Message="Win32 app state on $mn ($($rows.Count) app(s)):`n$txt" }
+    } catch { return @{ Ok=$false; Message="Win32 app state failed: $($_.Exception.Message)" } }
 }

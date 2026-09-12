@@ -506,7 +506,7 @@ Assert "shield: unrelated app->no match"            (-not (Test-IntuneAppMatches
 # lifecycle parse from the app notes JSON
 Assert "shield: lifecycle RETIRED from notes json" ((Get-IntuneAppLifecycle -App @{ notes='{ "managed": true, "status": "OK", "lifecycle": "RETIRED" }' }) -eq 'RETIRED')
 Assert "shield: lifecycle LIVE from notes json"    ((Get-IntuneAppLifecycle -App @{ notes='{"lifecycle":"LIVE"}' }) -eq 'LIVE')
-Assert "shield: lifecycle unknown when absent"     ((Get-IntuneAppLifecycle -App @{ notes='Created by Package Builder.' }) -eq 'unknown')
+Assert "shield: lifecycle unknown when absent"     ((Get-IntuneAppLifecycle -App @{ notes='Created by Package Companion.' }) -eq 'unknown')
 
 # ---- Intune content-root resolver (v3/v4, subfolder nesting, no-PSADT) + v3 ServiceUI staging ----
 $ivr = Join-Path $env:TEMP ('pb_ivroot_' + [Guid]::NewGuid().ToString('N').Substring(0,8))
@@ -553,7 +553,7 @@ if (Test-Path '.\lib\IntuneWinAppUtil.exe') {
 
 # ---- Icon-readiness gate (before SCCM/Intune create + Intune update-content): convert .ico->.png (persist) or block ----
 $icoTest = Join-Path $env:TEMP ('pbicon_' + [Guid]::NewGuid().ToString('N').Substring(0,8))
-$realIco = Join-Path (Get-ToolRoot) 'Lib\PackageBuilder.ico'
+$realIco = Join-Path (Get-ToolRoot) 'Lib\PackageCompanion.ico'
 if (Test-Path $realIco) {
     try {
         $ip1 = Join-Path $icoTest 'IcoOnly'; New-Item (Join-Path $ip1 'Icons') -ItemType Directory -Force | Out-Null
@@ -566,7 +566,7 @@ if (Test-Path $realIco) {
         Assert "icon gate: no icon -> NOT ready (blocks)"    (-not $ir2.Ready)
         Assert "icon gate: no icon -> message tells to add .ico" ($ir2.Message.ToLower().Contains('ico'))
     } finally { Remove-Item $icoTest -Recurse -Force -ErrorAction SilentlyContinue }
-} else { Write-Host "SKIP icon-gate test (PackageBuilder.ico not under Lib)" -ForegroundColor Yellow }
+} else { Write-Host "SKIP icon-gate test (PackageCompanion.ico not under Lib)" -ForegroundColor Yellow }
 
 # ---- Remote screenshots: the generated agent is a VALID standalone script with everything baked in ----
 $agent = New-PBShotsAgentScript -PkgName 'Acme_Tool_x64_1.0-0001_MUL' -Tokens @('acme',"o'tool") -RefNames @('Acme Tool')
@@ -896,8 +896,8 @@ Assert "saved report carries ChangeSet (tree on load)" ((@($csLoaded.Files | Whe
 # ---- SELF-STAGE (run-from-share -> local): CORE copied first, heavy publish modules DEFERRED until needed ----
 $stg = Join-Path $env:TEMP ('pbstage_' + [Guid]::NewGuid().ToString('N').Substring(0,8))
 $shareD = Join-Path $stg 'share'; $localD = Join-Path $stg 'local'
-foreach ($rel in 'PackageBuilder.exe','PackageBuilder.exe.config','PackageBuilder.pak','settings.json','snippets.json','KnowledgeBase.Recommend.json',
-                 'Lib\ICSharpCode.AvalonEdit.dll','Lib\PackageBuilder.ico','Lib\PSADT_Template\Content\Invoke-AppDeployToolkit.ps1',
+foreach ($rel in 'PackageCompanion.exe','PackageCompanion.exe.config','PackageCompanion.pak','settings.json','snippets.json','KnowledgeBase.Recommend.json',
+                 'Lib\ICSharpCode.AvalonEdit.dll','Lib\PackageCompanion.ico','Lib\PSADT_Template\Content\Invoke-AppDeployToolkit.ps1',
                  'Lib\ConfigurationManagerPrelive\ConfigurationManager.psd1','Lib\PowerShell Module\MSAL.PS 4.37.0.0\MSAL.PS.psd1','Lib\IntuneWinAppUtil.exe',
                  'PsExec64.exe','Tools\extra-helper.exe') {
     $fp = Join-Path $shareD $rel; $dir = Split-Path $fp -Parent; if (-not (Test-Path $dir)) { New-Item $dir -ItemType Directory -Force | Out-Null }
@@ -905,13 +905,13 @@ foreach ($rel in 'PackageBuilder.exe','PackageBuilder.exe.config','PackageBuilde
 }
 # DEPLOYMENT REALITY: Set-ToolVisibility ships the pak Hidden+ReadOnly. Copy-IfNewer's timestamp compare used
 # Get-Item WITHOUT -Force, which THROWS "cannot find path" on a Hidden file -> the self-stage crashed with a dialog
-# ("...PackageBuilder.pak konnte nicht gefunden werden"). Reproduce that exact state so the fix stays locked in.
-(Get-Item -LiteralPath (Join-Path $shareD 'PackageBuilder.pak') -Force).Attributes = 'Hidden, ReadOnly'
+# ("...PackageCompanion.pak konnte nicht gefunden werden"). Reproduce that exact state so the fix stays locked in.
+(Get-Item -LiteralPath (Join-Path $shareD 'PackageCompanion.pak') -Force).Attributes = 'Hidden, ReadOnly'
 $rl = Invoke-SelfStage -Root $shareD -Local $localD -Force
-Assert "self-stage: returns local exe path"             ("$rl" -eq (Join-Path $localD 'PackageBuilder.exe'))
-Assert "self-stage: core exe+pak copied"                ((Test-Path (Join-Path $localD 'PackageBuilder.exe')) -and (Test-Path (Join-Path $localD 'PackageBuilder.pak')))
-Assert "self-stage: HIDDEN pak copied (no 'cannot find path' crash)" (Test-Path (Join-Path $localD 'PackageBuilder.pak'))
-Assert "self-stage: exe.config copied (UNC-share launcher config)"   (Test-Path (Join-Path $localD 'PackageBuilder.exe.config'))
+Assert "self-stage: returns local exe path"             ("$rl" -eq (Join-Path $localD 'PackageCompanion.exe'))
+Assert "self-stage: core exe+pak copied"                ((Test-Path (Join-Path $localD 'PackageCompanion.exe')) -and (Test-Path (Join-Path $localD 'PackageCompanion.pak')))
+Assert "self-stage: HIDDEN pak copied (no 'cannot find path' crash)" (Test-Path (Join-Path $localD 'PackageCompanion.pak'))
+Assert "self-stage: exe.config copied (UNC-share launcher config)"   (Test-Path (Join-Path $localD 'PackageCompanion.exe.config'))
 
 # ---- Intune detection rules: "None (branding only)" = ONE rule, which MUST serialize as a JSON ARRAY not an object.
 #      A single-element List unwrapped to a bare hashtable -> `detectionRules` became `{}` -> Graph 400

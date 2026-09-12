@@ -1,0 +1,29 @@
+---
+name: ps-wpf-closure-scope
+description: "In PS-built WPF dialogs, each .GetNewClosure() handler has its OWN scope — share async state via one captured reference object (hashtable), not $script: vars"
+metadata: 
+  node_type: memory
+  type: feedback
+  originSessionId: f4fc59ce-bb2a-4ffe-b080-0f251cb9e612
+---
+
+In Package Builder's PowerShell-built WPF dialogs (the `Show-*Dialog` functions in GUI.ps1), each event handler attached as `{ ... }.GetNewClosure()` runs in its **own module scope**. A `$script:Foo` written in one handler (or in a `Dispatcher.BeginInvoke([action]{...})` queued from one handler) is **not reliably visible** in another handler — but a captured **object reference** (WPF control, hashtable) IS shared, because all closures copy the same reference.
+
+**Symptom that exposed it:** Show-SnapshotDialog captured the baseline into `$script:SnapBefore` inside the Loaded handler's async dispatcher action; it set `$bAnalyze.IsEnabled=$true` in the same action (worked — control is a shared ref), but the Analyze handler read `$script:SnapBefore` as `$null` → "baseline pending" even though it had run.
+
+**Why:** Add `$script:Win` is shared by luck/precedent, but cross-handler `$script:` writes are scope-fragile here. Object identity is not.
+
+**How to apply:** For any state shared across handlers in one dialog, create ONE local reference object in the function body and let every closure capture it:
+`$ctx = @{ Before=$null; Result=$null; Cleanups=(New-Object Collections.Generic.List[object]) }` — then `$ctx.Before = ...` in any handler, and `return $ctx.Result` in the function body after ShowDialog. Mutate fields; never reassign `$ctx`. Don't rely on `$script:`-scoped scalars to pass values between handlers.
+
+**Nested callbacks (a closure created INSIDE a handler, e.g. a `Start-SnapshotJob -OnDone {…}` or a DispatcherTimer tick) are the worst trap:** the inner `{…}.GetNewClosure()` does NOT inherit the handler's *captured* (module-scope) variables — they come out `$null`, giving `"The property 'Text'/'Visibility' cannot be found on this object"` at runtime. Proven: `$script:` is also isolated per-closure (fails); `$global:` works; the clean fix is to **re-bind each needed var to a true local** at the top of the handler before creating the inner closure: `$pb=$pb; $ctx=$ctx; $lblStat=$lblStat; …` (RHS reads the module copy, LHS makes a local the inner closure captures). **Rebind EVERY control/var the callback touches** — a single missed one (e.g. `$lblSummary`) is `$null` and throws mid-render, aborting the rest of the callback (looks like "half/garbage output").
+
+**Declaration-ORDER variant (same "property Text cannot be found" symptom, different cause):** `.GetNewClosure()` captures a variable BY ITS CURRENT VALUE at the moment the closure is created. So a control referenced inside `$btn.add_Click({ … $lblSummary.Text=… }.GetNewClosure())` must be **created BEFORE that add_Click line** — if `$lblSummary = New-Object …` appears LATER in the function body, the closure captured `$null` and the handler throws when clicked. Fix: move the control's creation above the handler that closes over it (you can still add it to the panel later, in display order). Proven in r89 (Show-SnapshotDialog `$bShots`).
+
+**$script:State / $script:Win DIRECTLY inside a .GetNewClosure() body is ALWAYS wrong** (proven live r151/r152: user hit "property 'CreatedPath' cannot be found" clicking Load-from-Outgoing — `$script:State.CreatedPath = ...` inside an async Done closure; an AST audit then found 10 more pre-existing ones, incl. 'Run & capture MSI' Use button that ALWAYS returned nothing and 'Copy to Outgoing' that always said "no package yet"). Writes throw / land in the closure's own scope; reads silently return `$null` (feature quietly broken). **Two safe patterns:** (1) capture a real local first (`$stateRef = $script:State` in the outer non-closure scope) — hashtable mutation via the captured ref works; (2) closure-safe ACCESSOR functions — `function Get-PBState { return $script:State }` / `Get-PBMainWindow` — because FUNCTIONS execute in their DEFINITION scope, a closure calling them gets the real object. **Audit tool:** scratchpad `closure_audit.ps1` — AST-find every `$script:`/`$global:` VariableExpressionAst inside InvokeMemberExpressionAst(GetNewClosure) blocks; run it after touching GUI handlers.
+
+**RESOLUTION (r156): the predecessor/fetch/load-outgoing buttons were reverted to SYNCHRONOUS.** The r148 async experiment (`Invoke-PBAsync` background runspace + `.GetNewClosure()` `-Done` callback) broke the predecessor popup THREE times (r148 CreatedPath write, r154 engine-visibility, r155 nested-closure `$stateRef`/accessor both unreachable). A scope probe proved BOTH a captured-local AND an accessor function are unreachable from a closure created INSIDE another closure when the tool loads in child scope. The 2-3s share-walk pause is fine; a working popup is not negotiable. **Rule going forward: for these share-walk buttons, plain `add_Click({...})` (NO `.GetNewClosure()`), direct `$script:State`, direct function calls. Don't reintroduce async here.** A Test-Build guard asserts BtnPred has no `Invoke-PBAsync`.
+
+**Sibling trap — BACKGROUND RUNSPACES see ENGINE functions only (r154):** Package Builder's `Invoke-PBAsync` / publish jobs load `$script:PBEngineSource` = the engineFiles merge — **GUI.ps1 is NOT in it**. A GUI-defined function called inside `-Work {}` dies with CommandNotFound in the packed build (caught → looks like "no results": that's how 'Find predecessor' silently returned nothing for a predecessor that existed). Rule: **any function invoked inside a background runspace must live in an engine module** (Predecessor/Source/Sccm/...), never GUI.ps1. Also: never let a failed background call render as an empty result — show "search FAILED: err" distinctly.
+
+Related: [[ps51-comma-arg-and-alias]], [[ps51-list-object-wrap]].

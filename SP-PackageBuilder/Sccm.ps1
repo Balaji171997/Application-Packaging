@@ -805,16 +805,36 @@ function Add-SccmTestMachine {
     try {
         $coll = if ($Action -eq 'Install') { "$FullName-INSTALL (TEST)" } else { "$FullName-UNINSTALL (TEST)" }
         if (-not (Get-CMDeviceCollection -Name $coll -ErrorAction SilentlyContinue)) { return @{ Ok=$false; Message="Collection '$coll' not found - create the app first." } }
-        $added = 0; $miss = @()
+        # A machine in BOTH the install and uninstall collections gets contradictory deployments and the result
+        # depends on which policy lands last. Adding to one therefore REMOVES from the other - the packager no
+        # longer has to remember to clean up the previous test.
+        $other = if ($Action -eq 'Install') { "$FullName-UNINSTALL (TEST)" } else { "$FullName-INSTALL (TEST)" }
+        $hasOther = [bool](Get-CMDeviceCollection -Name $other -ErrorAction SilentlyContinue)
+        $added = 0; $miss = @(); $moved = @()
         foreach ($m in $Machines) {
             $mn = "$m".Trim(); if (-not $mn) { continue }
             $dev = Get-CMDevice -Name $mn -ErrorAction SilentlyContinue
             if ($dev -and $dev.ResourceID) {
+                if ($hasOther) {
+                    # Only report a move when the machine really was in the other collection.
+                    $inOther = $null
+                    try { $inOther = Get-CMDeviceCollectionDirectMembershipRule -CollectionName $other -ResourceId $dev.ResourceID -ErrorAction SilentlyContinue } catch {}
+                    if ($inOther) {
+                        try {
+                            Remove-CMDeviceCollectionDirectMembershipRule -CollectionName $other -ResourceId $dev.ResourceID -Force -ErrorAction Stop | Out-Null
+                            $moved += $mn
+                            Write-Log "SCCM: removed '$mn' from '$other' (it is being added to '$coll')."
+                        } catch { Write-Log "SCCM: could not remove '$mn' from '$other': $($_.Exception.Message)" Warning }
+                    }
+                }
                 Add-CMDeviceCollectionDirectMembershipRule -CollectionName $coll -ResourceId $dev.ResourceID -ErrorAction SilentlyContinue | Out-Null
                 Write-Log "SCCM: added '$mn' to '$coll'."; $added++
             } else { $miss += $mn; Write-Log "SCCM: device '$mn' not found in SCCM." Warning }
         }
-        return @{ Ok=($added -gt 0); Message="Added $added machine(s) to '$coll'.$(if($miss){' Not found: '+($miss -join ', ')})" }
+        $msg = "Added $added machine(s) to '$coll'."
+        if ($moved) { $msg += " Moved out of the $(if($Action -eq 'Install'){'uninstall'}else{'install'}) collection: $($moved -join ', ')." }
+        if ($miss)  { $msg += " Not found: $($miss -join ', ')." }
+        return @{ Ok=($added -gt 0); Message=$msg }
     } catch { return @{ Ok=$false; Message="Add member failed: $($_.Exception.Message)" } }
     finally { Pop-Location }
 }
@@ -877,7 +897,7 @@ function Invoke-SccmMachinePolicy {
         Set-PbProgress -Indeterminate -Status "Triggering policy on $mn$(if ($isLocal) { ' (local)' })..."
         $ok = $false
         if ($isLocal) {
-            # LOCAL machine (where Package Builder runs): use the control-panel applet path - NO admin/elevation required.
+            # LOCAL machine (where Package Companion runs): use the control-panel applet path - NO admin/elevation required.
             $n = Invoke-CmLocalClientActions
             if ($n -gt 0) { $ok = $true; Write-Log "SCCM: triggered $n local client action(s) via the Configuration Manager applet on $mn (no elevation needed)." Success }
             elseif ($n -eq 0) { Write-Log "SCCM: the Configuration Manager applet returned no matching actions on $mn - is the SCCM client installed + running?" Warning }

@@ -1,23 +1,23 @@
 ##############################################################
-# Package Builder - deployment protection switch (structure + read-only lock).
+# Package Companion - deployment protection switch (structure + read-only lock).
 #
-#  -Hide  (team copy): make the folder look clean AND resist accidental edits -
-#      * VISIBLE + EDITABLE : the JSON config files (settings / snippets / KnowledgeBase) - users may tune these.
-#      * VISIBLE + READ-ONLY: PackageBuilder.exe (the one thing users click; must not be changed).
-#      * HIDDEN  + READ-ONLY: EVERYTHING else (PackageBuilder.pak, Lib\, template, ...). So opening the folder
+#  -Hide  (team copy): make the folder look clean AN: resist accidental edits -
+#      * VISIBLE + E:ITABLE : the JSON config files (settings / snippets / KnowledgeBase) - users may tune these.
+#      * VISIBLE + REA:-ONLY: PackageCompanion.exe (the one thing users click; must not be changed).
+#      * HI::EN  + REA:-ONLY: EVERYTHING else (PackageCompanion.pak, Lib\, template, ...). So opening the folder
 #                             shows ONLY the exe + the JSON files, and the support files can't be casually
 #                             edited or deleted. Read-only is applied recursively inside subfolders (Lib\).
 #  -Show  (maintainer): unhide + clear read-only on everything.
 #
-# SECURITY REALITY (read this): the tool's LOGIC is ALREADY tamper-proof - it is AES-256 encrypted inside
-# PackageBuilder.pak, so no user can read or change how the tool behaves. The attributes below only PREVENT
-# ACCIDENTS on the exposed support files. On a folder a user copies to their OWN machine they are the owner and
+# SECURITY REALITY (read this): the tool's LOGIC is ALREA:Y tamper-proof - it is AES-256 encrypted inside
+# PackageCompanion.pak, so no user can read or change how the tool behaves. The attributes below only PREVENT
+# ACCI:ENTS on the exposed support files. On a folder a user copies to their OWN machine they are the owner and
 # can always clear these attributes; true, enforced lock-down is only possible on a controlled SHARE via NTFS
 # permissions (deny-write to users). For a copied-local folder, "encrypted pak + read-only + hidden" is the
 # practical ceiling - and it already stops anyone from altering the actual tool.
 #
 # Run against the DEPLOYED folder:
-#   powershell -ExecutionPolicy Bypass -File .\Set-ToolVisibility.ps1 -Hide -Path 'D:\Dist\PackageBuilder'
+#   powershell -ExecutionPolicy Bypass -File .\Set-ToolVisibility.ps1 -Hide -Path 'D:\Dist\PackageCompanion'
 ##############################################################
 param([switch]$Hide, [switch]$Show, [string]$Path)
 
@@ -25,9 +25,9 @@ $root = if ($Path) { $Path } else { Split-Path -Parent $MyInvocation.MyCommand.P
 if (-not $Hide -and -not $Show) { Write-Host 'Use -Hide (team copy) or -Show (maintainer). Optional: -Path <folder>.'; return }
 if (-not (Test-Path -LiteralPath $root)) { Write-Host "Folder not found: $root" -ForegroundColor Red; return }
 
-# JSON config files stay VISIBLE + EDITABLE. The exe stays VISIBLE (but read-only). Everything else is HIDDEN + read-only.
+# JSON config files stay VISIBLE + E:ITABLE. The exe stays VISIBLE (but read-only). Everything else is HI::EN + read-only.
 $editable = @('settings.json', 'snippets.json', 'KnowledgeBase.Recommend.json')
-$exeNames = @('PackageBuilder.exe', 'PackageBuilder.ps1')   # the launcher stays visible (ps1 only if no exe yet)
+$exeNames = @('PackageCompanion.exe', 'PackageCompanion.ps1')   # the launcher stays visible (ps1 only if no exe yet)
 
 function Set-ReadOnlyRecursive([string]$ItemPath, [bool]$On) {
     if (Test-Path -LiteralPath $ItemPath -PathType Container) {
@@ -67,6 +67,6 @@ foreach ($item in (Get-ChildItem -LiteralPath $root -Force)) {
 
 # Report the resulting VISIBLE top-level (what a user sees in Explorer's default view).
 $seen = @(Get-ChildItem -LiteralPath $root -Force | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::Hidden) } | ForEach-Object { $_.Name })
-$mode = if ($Hide) { 'HIDE + LOCK' } else { 'SHOW (all visible + writable)' }
-Write-Host "Done ($mode) on: $root" -ForegroundColor Green
+$mode = if ($Hide) { 'HI:E + LOCK' } else { 'SHOW (all visible + writable)' }
+Write-Host ":one ($mode) on: $root" -ForegroundColor Green
 Write-Host ("Visible to users: " + ($seen -join ', '))

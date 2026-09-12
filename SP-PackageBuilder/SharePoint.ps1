@@ -210,6 +210,46 @@ function Connect-PBSharePoint {
     }
 }
 
+# ---------------------------------------------------------------- UI wording
+# The tool must always say where it is ACTUALLY looking. These labels are derived from the live config, so
+# flipping SharePoint off in settings.json changes what the window says as well as what it does - no string
+# anywhere claims "the live share" while the code is really reading SharePoint.
+function Get-SPPrimaryLabel {
+    param([ValidateSet('Source','Predecessor')][string]$For = 'Source')
+    $cfg = Get-SPConfig
+    $on  = $cfg.Enabled -and $(if ($For -eq 'Source') { $cfg.UseSourceRepo } else { $cfg.UsePredecessorRepo })
+    if ($on) { return 'SharePoint' }
+    return $(if ($For -eq 'Source') { 'the Incoming share' } else { 'the live share' })
+}
+function Get-SPFallbackLabel {
+    param([ValidateSet('Source','Predecessor')][string]$For = 'Source')
+    $cfg = Get-SPConfig
+    if (-not $cfg.Enabled) { return '' }
+    if ($For -eq 'Source') {
+        if ($cfg.UseSourceRepo -and $cfg.UseUncSourceFallback) { return 'the Incoming share' }
+    } else {
+        if ($cfg.UsePredecessorRepo -and $cfg.AlsoSearchUnc)   { return 'the live share' }
+    }
+    return ''
+}
+function Get-SPSearchText {
+    param([ValidateSet('Source','Predecessor')][string]$For = 'Source')
+    $p = Get-SPPrimaryLabel   -For $For
+    $f = Get-SPFallbackLabel  -For $For
+    $what = $(if ($For -eq 'Source') { 'the source' } else { 'predecessors' })
+    if ($f) { return "Searching $p for $what (falls back to $f)..." }
+    return "Searching $p for $what..."
+}
+# One-line summary of where this build reads from - shown in the window so it is obvious at a glance.
+function Get-SPOriginSummary {
+    $cfg = Get-SPConfig
+    if (-not $cfg.Enabled) { return 'Sources: network shares only (SharePoint disabled)' }
+    $bits = @()
+    $bits += "Source: $(Get-SPPrimaryLabel -For Source)$(if (Get-SPFallbackLabel -For Source) { ' -> share' })"
+    $bits += "Predecessor: $(Get-SPPrimaryLabel -For Predecessor)$(if (Get-SPFallbackLabel -For Predecessor) { ' + share' })"
+    return ($bits -join '     ')
+}
+
 # ---------------------------------------------------------------- SharePoint primitives
 function Get-SPItems {
     param([string]$RelUrl)
@@ -237,7 +277,7 @@ function Get-SPFilesRecursive {
 
 function Get-SPStageRoot {
     if (Get-Command Get-WorkPath -ErrorAction SilentlyContinue) { return (Get-WorkPath 'Temp') }
-    return 'C:\temp\PackageBuilder\Temp'
+    return 'C:\temp\PackageCompanion\Temp'
 }
 
 # Staged sources hold the FULL installer payload and nothing else ever deletes them, so a packaging machine
@@ -276,7 +316,25 @@ function Invoke-SPDownload {
     param([object[]]$Files, [string]$Dest, [string]$Activity = 'Fetching from SharePoint')
     if (-not $Files -or @($Files).Count -eq 0) { return 0 }
     if (-not (Test-Path -LiteralPath $Dest)) { New-Item -Path $Dest -ItemType Directory -Force | Out-Null }
+
+    # ---------------------------------------------------------------------------------------------------
+    # WHY THIS EXISTS: Get-PnPFile deadlocks when called from the WPF UI thread.
+    # Proven with Test-Download.ps1: the identical call on the identical file takes 1.1s from a console and
+    # hangs FOREVER from the tool. PnP downloads await internally; on a thread that carries a WPF
+    # SynchronizationContext the continuation is posted back to the dispatcher, but the dispatcher is blocked
+    # waiting for that very call - so neither side can move. It is not the proxy (direct), not the filename,
+    # not file size. Clearing the context for the duration makes continuations run on the thread pool instead,
+    # which is exactly what happens in a console. Restored in finally so the GUI is unaffected afterwards.
+    $prevCtx = [System.Threading.SynchronizationContext]::Current
+    if ($null -ne $prevCtx) {
+        [System.Threading.SynchronizationContext]::SetSynchronizationContext($null)
+        Write-SPLog 'Detaching the UI sync context for the download (PnP deadlocks on the WPF thread otherwise).' Info
+    }
+    try {
     $n = 0; $ok = 0; $skipped = 0; $total = @($Files).Count
+    # Per-file logging for a normal package; for a big one, report at intervals instead of spamming the log.
+    $logEvery = $(if ($total -le 30) { 1 } else { [Math]::Max(1, [int][Math]::Ceiling($total / 10)) })
+    $sw = [Diagnostics.Stopwatch]::StartNew()
     foreach ($f in $Files) {
         $n++
         $sub = Split-Path $f.RelInside -Parent
@@ -293,14 +351,29 @@ function Invoke-SPDownload {
         if (Get-Command Set-PBProgress -ErrorAction SilentlyContinue) {
             Set-PBProgress -Percent ([int](($n / $total) * 100)) -Status "$Activity ($n/$total)"
         }
+        if (($n -eq 1) -or ($n % $logEvery -eq 0) -or ($n -eq $total)) {
+            $mb = if ($f.Size -ge 1MB) { ('{0:N1} MB' -f ($f.Size / 1MB)) } else { ('{0:N0} KB' -f ($f.Size / 1KB)) }
+            Write-SPLog ("  [{0}/{1}] {2}  ({3})" -f $n, $total, $f.RelInside, $mb) Info
+        }
+        # Plain blocking download - exactly what the old share-based flow did with Copy-Item. The window is
+        # unresponsive while this runs; that is expected and was always the case. Do NOT pump the WPF
+        # dispatcher from here: this code runs ON the dispatcher thread, so a synchronous Invoke deadlocks.
         try { Get-PnPFile -Url $f.ServerUrl -Path $dir -FileName $f.Name -AsFile -Force -ErrorAction Stop; $ok++ }
         catch { Write-SPLog "Download failed '$($f.RelInside)': $($_.Exception.Message)" Warning }
     }
+    $sw.Stop()
+    Write-SPLog ("Fetched {0}/{1} file(s) in {2:N0}s." -f $ok, $total, $sw.Elapsed.TotalSeconds) Info
     if ($skipped -gt 0) { Write-SPLog "$skipped of $total file(s) were already staged locally - not re-downloaded." Info }
     # Strip Mark-of-the-Web so staged installers launch cleanly (same reason PB unblocks extracted zips).
     if (Get-Command Unblock-PBPath -ErrorAction SilentlyContinue) { try { Unblock-PBPath -Path $Dest } catch {} }
     else { Get-ChildItem -LiteralPath $Dest -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { try { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue } catch {} } }
     return $ok
+    }
+    finally {
+        # Always put the UI context back, even if a download threw - otherwise the rest of the GUI would keep
+        # running without its dispatcher context.
+        if ($null -ne $prevCtx) { [System.Threading.SynchronizationContext]::SetSynchronizationContext($prevCtx) }
+    }
 }
 
 # ---------------------------------------------------------------- name <-> path mapping

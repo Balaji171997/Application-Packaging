@@ -1,16 +1,16 @@
-# Package Builder — v1 shared-folder rollout
+# Package Companion — v1 shared-folder rollout
 
 The whole tool lives in **one folder on a shared network location**. Users get a **shortcut** to
-`PackageBuilder.exe` on that share — nothing is copied to their machine. Update the tool by replacing
-`PackageBuilder.pak` on the share; everyone runs the new engine automatically.
+`PackageCompanion.exe` on that share — nothing is copied to their machine. Update the tool by replacing
+`PackageCompanion.pak` on the share; everyone runs the new engine automatically.
 
 ## 1. Put the tool folder on the share
 Copy the complete folder (the deployed layout) to the share, e.g. `\\<server>\<share>\PackageBuilder\`:
 
 ```
-PackageBuilder.exe            launcher (built once from Loader.ps1; never rebuilt)
-PackageBuilder.exe.config     lets the SCCM/Intune modules load from the share (see step 3)
-PackageBuilder.pak            the engine — replace THIS file to update the tool
+PackageCompanion.exe            launcher (built once from Loader.ps1; never rebuilt)
+PackageCompanion.exe.config     lets the SCCM/Intune modules load from the share (see step 3)
+PackageCompanion.pak            the engine — replace THIS file to update the tool
 settings.json                 central config (share paths, G08 site) — read-only for users
 snippets.json                 central snippet library
 KnowledgeBase.Recommend.json  installer-args knowledge base
@@ -23,7 +23,7 @@ Readiness was verified: every artifact above is present and the engine round-tri
 with `Release-Check.ps1` for the build, plus the deployment manifest check.)
 
 ## 2. Give users a shortcut (not a copied exe)
-Create a Windows shortcut whose **Target** is `\\<server>\<share>\PackageBuilder\PackageBuilder.exe`.
+Create a Windows shortcut whose **Target** is `\\<server>\<share>\PackageBuilder\PackageCompanion.exe`.
 Distribute the `.lnk` (or pin it). The tool resolves everything relative to the exe's own folder, so it
 must run from the share — a bare exe copied elsewhere will report "pak not found".
 
@@ -31,7 +31,7 @@ must run from the share — a bare exe copied elsewhere will report "pak not fou
 The SCCM (ConfigurationManager) and Intune (MSAL.PS) modules load **binary .NET assemblies** from the
 share. If the share is treated as the *Internet* zone (common for FQDN paths like
 `\\server.domain.biz\...`), .NET blocks those loads. Two ways to fix — do at least one:
-- **Shipped:** `PackageBuilder.exe.config` (already beside the exe) enables `loadFromRemoteSources`.
+- **Shipped:** `PackageCompanion.exe.config` (already beside the exe) enables `loadFromRemoteSources`.
 - **Recommended also:** have IT add the share host to the **Local Intranet** zone via GPO.
 
 ## 4. Smoke-test from the share before wide rollout
@@ -43,7 +43,7 @@ Launch via the shortcut (running from the share) and confirm:
 - [ ] **Dev→Test move** clears test-machine members then moves (new r140 behaviour) — verify on G08.
 
 ## Notes
-- All runtime output (logs, build, temp) goes to local `C:\temp\PackageBuilder`, never the share.
+- All runtime output (logs, build, temp) goes to local `C:\temp\PackageCompanion`, never the share.
 - Packages are written to the Outgoing shares as today.
 - Adding snippets from the GUI needs a writable `snippets.json`; on a read-only share it fails
   gracefully (warning). Snippets are maintained centrally.

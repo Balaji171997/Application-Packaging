@@ -800,20 +800,73 @@ function Get-VersionHistory {
     return ,@(@($merged.Values) | Sort-Object { "$($_.When)" } -Descending)
 }
 
-# Everything that ever happened to this app, newest first, from all three sources.
+# Everything that ever happened to this app, newest first. Same de-duplication idea as the version history:
+# the audit and our snapshot diff both report the same property edits, so a change is keyed on what actually
+# changed (field + old + new) rather than on which source noticed it.
 function Get-ModificationHistory {
     param($App, [object[]]$ChangeLog)
     $rows = New-Object 'System.Collections.Generic.List[object]'
-    foreach ($e in (AsArray $App.NoteEvents))  { [void]$rows.Add([pscustomobject]@{ When = "$($e.When)"; Who = ''; What = "$($e.What)"; Source = 'App notes' }) }
-    foreach ($e in (AsArray $App.AuditEvents)) {
-        $what = "$($e.What)"
-        if ("$($e.Changes)") { $what = "$what - $($e.Changes)" }
-        [void]$rows.Add([pscustomobject]@{ When = "$($e.When)"; Who = "$($e.Who)"; What = $what; Source = 'Intune audit' })
+
+    foreach ($e in (AsArray $App.NoteEvents)) {
+        [void]$rows.Add([pscustomobject]@{
+            When = "$($e.When)"; Who = ''; Field = 'Notes'; From = ''; To = ''
+            What = "$($e.What)"; Action = 'Note'; Source = 'App notes'; Key = "note|$($e.What)".ToLower()
+        })
     }
+
+    foreach ($e in (AsArray $App.AuditEvents)) {
+        $parsed = ConvertFrom-AuditChanges "$($e.Changes)"
+        if (@($parsed).Count -gt 0) {
+            foreach ($ch in $parsed) {
+                $fld = Get-FriendlyFieldName $ch.Property
+                [void]$rows.Add([pscustomobject]@{
+                    When = "$($e.When)"; Who = "$($e.Who)"; Field = $fld; From = "$($ch.Old)"; To = "$($ch.New)"
+                    What = "$fld changed from '$($ch.Old)' to '$($ch.New)'"; Action = "$($e.What)"
+                    Source = 'Intune audit'; Key = ("$fld|$($ch.Old)|$($ch.New)").ToLower()
+                })
+            }
+        } else {
+            # An audited action with no property detail (create, delete, assignment change, ...).
+            [void]$rows.Add([pscustomobject]@{
+                When = "$($e.When)"; Who = "$($e.Who)"; Field = ''; From = ''; To = ''
+                What = "$($e.What)"; Action = "$($e.What)"; Source = 'Intune audit'
+                Key = ("act|$($e.What)|$($e.When)").ToLower()
+            })
+        }
+    }
+
     foreach ($c in (AsArray $ChangeLog)) {
         if ("$($c.AppId)" -ne "$($App.Id)") { continue }
-        $what = $(if ($c.Type -eq 'Modified') { "$($c.Property): $($c.Old) -> $($c.New)" } else { "$($c.Type)" })
-        [void]$rows.Add([pscustomobject]@{ When = "$($c.When)"; Who = ''; What = $what; Source = 'Snapshot diff' })
+        if ($c.Type -eq 'Modified') {
+            $fld = Get-FriendlyFieldName "$($c.Property)"
+            [void]$rows.Add([pscustomobject]@{
+                When = "$($c.When)"; Who = ''; Field = $fld; From = "$($c.Old)"; To = "$($c.New)"
+                What = "$fld changed from '$($c.Old)' to '$($c.New)'"; Action = 'Seen by sync'
+                Source = 'Snapshot diff'; Key = ("$fld|$($c.Old)|$($c.New)").ToLower()
+            })
+        } else {
+            [void]$rows.Add([pscustomobject]@{
+                When = "$($c.When)"; Who = ''; Field = ''; From = ''; To = ''
+                What = "$($c.Type)"; Action = "$($c.Type)"; Source = 'Snapshot diff'
+                Key = ("type|$($c.Type)|$($c.When)").ToLower()
+            })
+        }
     }
-    return ,@($rows.ToArray() | Sort-Object { "$($_.When)" } -Descending)
+
+    # Merge rows describing the same actual change; prefer the one that knows who did it.
+    $merged = [ordered]@{}
+    foreach ($r in $rows) {
+        if (-not $merged.Contains($r.Key)) { $merged[$r.Key] = $r; continue }
+        $keep = $merged[$r.Key]
+        if (-not "$($keep.Who)".Trim() -and "$($r.Who)".Trim()) {
+            $r.Source = 'Intune audit + sync'
+            if ("$($keep.When)" -and "$($keep.When)" -lt "$($r.When)") { $r.When = "$($keep.When)" }
+            $merged[$r.Key] = $r
+        } else {
+            if ("$($r.Who)".Trim() -eq '') { $keep.Source = 'Intune audit + sync' }
+            if ("$($r.When)" -and "$($r.When)" -lt "$($keep.When)") { $keep.When = "$($r.When)" }
+        }
+    }
+
+    return ,@(@($merged.Values) | Sort-Object { "$($_.When)" } -Descending)
 }

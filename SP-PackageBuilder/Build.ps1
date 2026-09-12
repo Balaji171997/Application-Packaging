@@ -841,7 +841,7 @@ function Get-ScriptReviewFindings {
     # 2. v4 variable scope. If the build auto-moved the offending lines (marker present), just ask to VERIFY.
     #    If something STILL reads $adtSession.DeploymentType in the variables block (the auto-fix skips multi-line
     #    assignments), tell the user to move it - it is EMPTY there on v4.
-    if ($ScriptText -match '\[Package Builder\] moved from the variables block') {
+    if ($ScriptText -match '\[Package Companion\] moved from the variables block') {
         $out.Add('Some variables were AUTO-MOVED from the CUSTOM VARIABLES block into the Install/Uninstall/Repair PRE-sections (they read the live session - DeploymentType / ADT $env* - empty in the variables block on v4). Verify the resulting paths / log names look right.')
     }
     $cv = [regex]::Match($ScriptText, '(?s)CUSTOM APPLICATION VARIABLES BEGIN(.*?)CUSTOM APPLICATION VARIABLES END')
@@ -1078,7 +1078,7 @@ function Move-V4RuntimeVars {
     # would break that reference at runtime. Don't move in that case - leave it for the manual-review finding,
     # rather than ship a parse-clean-but-broken script.
     foreach ($mv in $movedVars) { if ($newBody -match ('\$' + [regex]::Escape($mv) + '\b')) { return $result } }
-    $block = "`r`n        # [Package Builder] moved from the variables block - these read the live session (DeploymentType / ADT `$env*), which is empty in CUSTOM VARIABLES on v4.`r`n        " +
+    $block = "`r`n        # [Package Companion] moved from the variables block - these read the live session (DeploymentType / ADT `$env*), which is empty in CUSTOM VARIABLES on v4.`r`n        " +
              ($move -join "`r`n        ") + "`r`n"
     $out = $ScriptText.Substring(0, $bodyStart) + $newBody + $ScriptText.Substring($em.Index)
     foreach ($sec in 'PRE-INSTALLATION BEGIN','PRE-UNINSTALLATION BEGIN','PRE-REPAIR BEGIN') {
@@ -1533,7 +1533,11 @@ function Build-PredecessorScript {
         [hashtable]$Model,
         [hashtable]$NewPkg,
         [string]$Template,
-        [bool]$AddUninstallPrevious = $true
+        [bool]$AddUninstallPrevious = $true,
+        # DIRECT INTUNE: Intune has no repair action, so the predecessor's repair code must NOT be carried
+        # forward. The template's Repair sections still exist (standard PSADT shape, and a package can be
+        # re-targeted at SCCM later) - they are simply left empty.
+        [bool]$DirectIntune = $false
     )
     $predVer = "$($Model.Identity.Version)".Trim()
     $newVer  = "$($NewPkg.Version)".Trim()   # trim: a stray trailing space in the version corrupts folder/zip paths + the detection key
@@ -1601,8 +1605,16 @@ function Build-PredecessorScript {
     # predecessor's own copy (incl. the "Uninsallation" typo) so it is not left orphaned.
     $uninstallHeader = '## Uninstallation of predecessor package'
     $out = $Template
+    $repairFields = @('PreRepairCode','MainRepairCode','PostRepairCode')
+    $droppedRepair = 0
     foreach ($s in $script:SectionMarkers) {
         $body = "$($Model.Code.$($s.F))"
+        # DIRECT INTUNE: drop the predecessor's repair body. The section marker itself is still written, so the
+        # script keeps the standard Install / Uninstall / Repair shape - just with nothing in Repair.
+        if ($DirectIntune -and ($s.F -in $repairFields)) {
+            if ("$body".Trim()) { $droppedRepair++ }
+            $body = ''
+        }
         if ($s.F -eq 'PreInstallCode') {
             # Extract EVERY existing uninstall block (the predecessor's own chain) so the later version swap can't touch
             # them; they are re-inserted verbatim below (ALWAYS - regardless of the $AddUninstallPrevious checkbox).
@@ -1629,6 +1641,9 @@ function Build-PredecessorScript {
             $body = Remove-PreRepairNoise -Body $body
         }
         $out = Set-SectionBody -Template $out -Begin $s.B -End $s.E -Body $body -Pre $s.Pre
+    }
+    if ($DirectIntune -and $droppedRepair -gt 0) {
+        Write-Log "Direct Intune: left $droppedRepair Repair section(s) empty - the predecessor's repair code was NOT carried forward (Intune has no repair action)." Info
     }
 
     # 2. Session block. The (blank) template's $adtSession is replaced by the predecessor's

@@ -61,7 +61,7 @@ function Get-WorkRoot {
     if ($script:WorkRoot) { return $script:WorkRoot }
     $r = $null
     try { if (Get-Command Get-Setting -ErrorAction SilentlyContinue) { $r = Get-Setting 'WorkRoot' } } catch {}
-    if (-not $r) { $r = 'C:\temp\PackageBuilder' }
+    if (-not $r) { $r = 'C:\temp\PackageCompanion' }
     $script:WorkRoot = $r; return $r
 }
 function Get-WorkPath {
@@ -84,7 +84,7 @@ function Test-NetworkPath {
     try { $r = [IO.Path]::GetPathRoot($Path); if ($r -match '^[A-Za-z]:\\$') { return ((New-Object IO.DriveInfo $r).DriveType -eq [IO.DriveType]::Network) } } catch {}   # mapped drive
     return $false
 }
-function Get-LocalStageRoot { Join-Path $env:LOCALAPPDATA 'PackageBuilder' }
+function Get-LocalStageRoot { Join-Path $env:LOCALAPPDATA 'PackageCompanion' }
 
 # Copy a single file only when the source is NEWER or the destination is missing (keeps launches/updates cheap).
 function Copy-IfNewer {
@@ -125,8 +125,8 @@ function Invoke-SelfStage {
     $local = if ($Local) { $Local } else { Get-LocalStageRoot }
     try {
         if (-not (Test-Path $local)) { New-Item $local -ItemType Directory -Force | Out-Null }
-        foreach ($f in 'PackageBuilder.exe','PackageBuilder.exe.config','PackageBuilder.pak','settings.json','snippets.json','KnowledgeBase.Recommend.json',
-                       'Lib\ICSharpCode.AvalonEdit.dll','Lib\PackageBuilder.ico') {
+        foreach ($f in 'PackageCompanion.exe','PackageCompanion.exe.config','PackageCompanion.pak','settings.json','snippets.json','KnowledgeBase.Recommend.json',
+                       'Lib\ICSharpCode.AvalonEdit.dll','Lib\PackageCompanion.ico') {
             Copy-IfNewer -Source (Join-Path $Root $f) -Dest (Join-Path $local $f)
         }
         foreach ($t in 'PSADT_Template','Lib\PSADT_Template') { $s = Join-Path $Root $t; if (Test-Path $s) { Copy-TreeNewer -Source $s -Dest (Join-Path $local $t) } }
@@ -136,7 +136,7 @@ function Invoke-SelfStage {
         foreach ($ex in @(Get-ChildItem -LiteralPath $Root -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '(?i)^PsExec.*\.exe$' })) { Copy-IfNewer -Source $ex.FullName -Dest (Join-Path $local $ex.Name) }
         foreach ($td in 'PsExec','Tools') { $s = Join-Path $Root $td; if (Test-Path $s) { Copy-TreeNewer -Source $s -Dest (Join-Path $local $td) } }
         Set-StageSource -LocalRoot $local -Source $Root
-        $exe = Join-Path $local 'PackageBuilder.exe'
+        $exe = Join-Path $local 'PackageCompanion.exe'
         if (Test-Path $exe) { return $exe }
     } catch { if (Get-Command Write-Log -ErrorAction SilentlyContinue) { Write-Log "Self-stage to local failed: $($_.Exception.Message). Running from the current location." Warning } }
     return $null
@@ -182,9 +182,9 @@ function Unblock-PBPath {
 
 #region Logging -------------------------------------------------
 $script:LogFilePath = $null
-function Get-LogPath { if (-not $script:LogFilePath) { $script:LogFilePath = Join-Path (Get-WorkPath 'Logs') 'PackageBuilder.log' }; return $script:LogFilePath }
+function Get-LogPath { if (-not $script:LogFilePath) { $script:LogFilePath = Join-Path (Get-WorkPath 'Logs') 'PackageCompanion.log' }; return $script:LogFilePath }
 function Initialize-Log {
-    try { $script:LogFilePath = Join-Path (Get-WorkPath 'Logs') 'PackageBuilder.log'; "" | Out-File $script:LogFilePath -Encoding utf8 -Force } catch {}
+    try { $script:LogFilePath = Join-Path (Get-WorkPath 'Logs') 'PackageCompanion.log'; "" | Out-File $script:LogFilePath -Encoding utf8 -Force } catch {}
 }
 function Write-Log {
     param([Parameter(Position=0)][string]$Message, [Parameter(Position=1)][string]$Level = 'Info')
@@ -283,7 +283,7 @@ function Initialize-Config {
     param([string]$Path)
     $script:SettingsPath = $Path
     $defaults = [ordered]@{
-        WorkRoot             = 'C:\temp\PackageBuilder'
+        WorkRoot             = 'C:\temp\PackageCompanion'
         LocalWorkingDir      = (Join-Path (Get-WorkRoot) 'Build')
         DefaultMsiProperties = @('ALLUSERS=1','REBOOT=ReallySuppress')
         AutoDetectAuthor     = $true

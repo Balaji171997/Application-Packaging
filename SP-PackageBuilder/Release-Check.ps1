@@ -1,12 +1,12 @@
 ##############################################################
-# Release-Check.ps1  -  Package Builder RELEASE GATE
+# Release-Check.ps1  -  Package Companion RELEASE GATE
 # Run before shipping a build:  powershell -ExecutionPolicy Bypass -File .\Release-Check.ps1
 # Validates EVERYTHING the tool ships end-to-end:
 #   1. every shipped module parses,
 #   2. config files are valid JSON,
 #   3. the engine + blank v4 template load,
 #   4. FRESH + PREDECESSOR-REUSE builders produce parse-clean PSADT v4 across a live-corpus sample,
-#   5. the packed PackageBuilder.pak round-trips (AES-256 decrypt -> Deflate -> parse) exactly as the loader runs it.
+#   5. the packed PackageCompanion.pak round-trips (AES-256 decrypt -> Deflate -> parse) exactly as the loader runs it.
 # Test-Build.ps1 is the UNIT/behaviour gate; this is the broad INTEGRATION/portability gate.
 ##############################################################
 param([int]$Sample = 100, [string]$Root)
@@ -77,9 +77,9 @@ if (-not (Test-Path $repo)) {
 }
 
 Line "`n=== 5. PAK round-trip (portable artifact runs) ===" 'Cyan'
-$pak = Join-Path $d 'PackageBuilder.pak'
+$pak = Join-Path $d 'PackageCompanion.pak'
 if (-not (Test-Path $pak)) {
-    Line "  (no PackageBuilder.pak next to this script - run Pack-Engine.ps1 first)" 'Yellow'
+    Line "  (no PackageCompanion.pak next to this script - run Pack-Engine.ps1 first)" 'Yellow'
 } else {
     try {
         $cipher = [IO.File]::ReadAllBytes($pak)

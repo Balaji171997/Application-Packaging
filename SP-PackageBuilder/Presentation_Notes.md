@@ -1,4 +1,4 @@
-# Package Builder — Presentation Notes
+# Package Companion — Presentation Notes
 
 ## What it is (the elevator pitch)
 A single-folder Windows tool that takes a software packaging job from **"here's the installer"** to
@@ -49,8 +49,8 @@ Side-by-side **diff vs predecessor** (Beyond Compare style, whitespace-ignored) 
 | Quality | offline **test suite + parse gates** at build AND pack time | a broken build physically cannot be packed or shipped |
 
 ## The distribution model (the part worth showing off)
-- **PackageBuilder.exe** — a tiny loader, compiled once (PS2EXE), never changes. Carries the icon.
-- **PackageBuilder.pak** — ALL tool logic: merged, compressed, **AES-encrypted** (~150 KB). Opaque binary —
+- **PackageCompanion.exe** — a tiny loader, compiled once (PS2EXE), never changes. Carries the icon.
+- **PackageCompanion.pak** — ALL tool logic: merged, compressed, **AES-encrypted** (~150 KB). Opaque binary —
   nobody can read or tamper with the code.
 - **settings.json / snippets.json** — the only editable files (paths, site, tenant, snippets).
 - **Lib\** — third-party dependencies only (AvalonEdit, IntuneWinAppUtil, MSAL+IntuneWin32App modules,
