@@ -1,6 +1,7 @@
 # Memory index
 
 - [Memory lives in the repo](memory-lives-in-repo.md) — this folder is a junction into Application-Packaging\claude-memory; on a new machine run Setup-ClaudeMemory.ps1 -WorkingDir <folder>
+- [git not on PATH](git-not-on-path.md) — AW140 machine: use GitHub Desktop's bundled git.exe via full path (`$env:LOCALAPPDATA\GitHubDesktop\app-*\resources\app\git\cmd\git.exe`)
 
 - [GPF xlsx testing fixes](gpf-xlsx-testing-fixes.md) — field-test findings; r60 did -Transforms + ProcessAsUser -Wait/-ContinueOnError drop + .NET env-var conversion; filename-swap DEFERRED by user
 - [MTB reuse SoftIdent/ProcToBlock](mtb-reuse-softident-proctoblock.md) — r222: keep name-based predecessor SoftIdent (Merge-SnapshotDeltas); empty ProcToBlock stays empty on reuse
