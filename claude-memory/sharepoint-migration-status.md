@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 5f8c282b-8837-49ff-ba23-d8ac148e8fa6
-  modified: 2026-09-12T05:59:15.778Z
+  modified: 2026-09-12T14:45:01.196Z
 ---
 
 Migrating PB from UNC shares to SharePoint (`SWPackaging/PackageSources`). Work lives in
@@ -42,7 +42,8 @@ installer inside `Content\SupportFiles`). `-Full` overrides.
   binary modules. Untested from the share. See [[shared-folder-deployment]].
 
 **SEPARATE TOOL (user's decision, 2026-09-05):** the SharePoint version is its own copy at
-`Downloads\Application-Packaging\SP-PackageBuilder` — `files\` must stay untouched. It is a DEPLOYMENT VARIANT,
+`Application-Packaging\SP-PackageCompanion` (repo root is now `Documents\GitHub\Application-Packaging`; folder
+renamed from `SP-PackageBuilder` on 2026-09-12) — `files\` must stay untouched. It is a DEPLOYMENT VARIANT,
 not a fork: every engine file is byte-identical to MTB. Only 4 things are its own — `SharePoint.ps1`,
 `lib\PnP.PowerShell\1.12.0\`, `settings.json` (has the `SharePoint` block, `Enabled=true`), and 3 wiring lines.
 `Sync-FromMTB.ps1` pulls MTB fixes forward and re-applies the wiring automatically.
@@ -54,10 +55,26 @@ Everything renamed: text, `PackageCompanion.exe/.pak/.exe.config/.ps1`, `Lib\Pac
 **MACHINE MOVE 2026-09-12:** the freshly compiled `PackageCompanion.exe` was QUARANTINED by Cortex XDR / Trellix
 (fresh unsigned ps2exe binaries trip them; Defender is off, so `Get-MpThreatDetection` shows nothing). User moved
 to a new test machine, copying `Application-Packaging` whole (git repo at its root, today's work uncommitted).
-**`SP-PackageBuilder\HANDOFF.md` carries the full state and the recompile command** — memory does NOT travel
+**`SP-PackageCompanion\HANDOFF.md` carries the full state and the recompile command** — memory does NOT travel
 with a folder copy. If the exe is eaten again, fall back to display-name-only (files stay `PackageBuilder.*`).
 
-**Design work agreed but NOT built** (in order): rail state dots + amber review-count badge (clickable);
+**2026-09-12 (new machine):** exe rebuilt fine (ps2exe 1.0.18, Trellix quiet). Shell REDESIGNED in the SP copy:
+no rail, step-pill strip `Info|Installation|Editor|Create & Publish` (user REJECTED dots/numbers/review-count
+badges - a count reads as "things left to do"), header = name + `RITM <id>` beside it, no user name,
+Source/Target at strip's right, 19 result labels selectable (PbCopyText). `SW-Source` resolver fix + doc-folder
+flattening went into MTB `files\` too (byte-identical mirror). **Copy to SharePoint BUILT (Copy-SPPackage +
+BtnCopySharePoint, verify-by-size, dry-run 16/16) but NOT live-tested - test on a DUMMY vendor/app only.**
+Full state in `SP-PackageCompanion\HANDOFF.md`.
+
+**NEXT DIRECTION (user, 2026-09-12): SharePoint is the ONLY read/browse/update source - Outgoing becomes a
+BACKUP.** Everything the tool currently fetches from the Outgoing share (Load from Outgoing on Publish, the
+Browse/Load package paths, Modify content source, predecessor lookups, anything that "reads a package back")
+must read from the SharePoint package folder (`{Vendor}/{App}/{Ver}_{Rel}/SCCM/{Name}/`) first; Outgoing is a
+write-only mirror kept for safety, never the place the tool browses or updates from. Do this before adding any
+new Outgoing-based feature. Copy to SharePoint (built, untested) is the write half of this; the read half is
+the open work.
+
+**Older list (superseded by the above):** rail state dots + amber review-count badge (clickable);
 thin progress line replacing the chunky ProgressBar; **Copy to SharePoint** after Create (upload to
 `{Vendor}/{App}/{Ver}_{Rel}/SCCM/{Name}/`, create `SCCM` if missing, show that button OR Copy-to-Outgoing by
 where the source came from — a WRITE, verify every file landed); build summary replacing review summary;

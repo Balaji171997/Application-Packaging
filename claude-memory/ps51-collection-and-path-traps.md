@@ -28,7 +28,13 @@ Four PS 5.1 traps that all produced *silent* wrong behaviour (no error) in WPF t
 4. **`.GetNewClosure()` on a WPF event handler hides the script's FUNCTIONS.** The closure runs in
    its own module scope: captured *variables* work, but `Connect-X` / `Add-UiLog` defined in the
    script are "not recognized" at click time. Register handlers as PLAIN scriptblocks and share
-   state through one hashtable (see [[ps-wpf-closure-scope]]).
+   state through one hashtable (see [[ps-wpf-closure-scope]]). Bitten AGAIN 2026-09-12 in Package
+   Companion's review popup (`Set-ReviewAck` not recognized from a checkbox closure). For a MODAL
+   dialog a plain handler is enough: the dialog function's locals stay reachable dynamically while
+   `ShowDialog` blocks. A driver that fires the real Click via `RaiseEvent` catches this class in
+   seconds - a `Get-Command X` guard inside a closure silently HIDES it instead.
+4b. **`[Windows.TextDecorations]::Strikethrough` unrolls** to a bare `TextDecoration` in PS 5.1 -
+   assigning it to `.TextDecorations` throws "cannot convert". Build a `TextDecorationCollection`.
 
 Two more that cost real debugging time:
 

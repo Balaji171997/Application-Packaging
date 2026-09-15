@@ -11,7 +11,7 @@
 - [Shared-folder deployment](shared-folder-deployment.md) — v1 rollout: exe+all on a share, users get a SHORTCUT; UNC binary-module load caveat + PackageBuilder.exe.config fix
 - [Docx: no Node/Python here](docx-no-node-python.md) — build Office files via hand-written OOXML + PowerShell zip; skill helper scripts can't run
 - [Intune vs SCCM troubleshooting](intune-vs-sccm-troubleshooting.md) — Company Portal not Software Center; AppWorkload.log is THE Intune app log (+ IME/AgentExecutor); Win32Apps registry state
-- [SharePoint migration status](sharepoint-migration-status.md) — source+predecessor DONE via SharePoint.ps1 overrides (proven); Outgoing/Snippets pending; SCCM ContentShare can NEVER move
+- [SharePoint migration status](sharepoint-migration-status.md) — source+predecessor DONE via SharePoint.ps1 overrides (proven); NEXT: SharePoint = ONLY read/browse/update source, Outgoing = backup only; SCCM ContentShare can NEVER move
 - [SharePoint auth = PnP 1.12.0](sharepoint-auth-pnp112.md) — ONLY PnP 1.12.0 + PnP Management Shell client id works (PS 5.1); Graph CLI Tools + Intune app both blocked by tenant policy — don't retry those
 - [PackageSources layout](sharepoint-packagesources-layout.md) — Vendor/App/Version_Release/{source,doc,EQS,SCCM,Intune,Order}; deterministic map from PB's package name
 - [Downloads\files = PB only](downloads-files-is-pb-only.md) — don't create unrelated files there; other deliverables go in own folder outside `files`
@@ -19,7 +19,7 @@
 - [Multi-team brand variants](multi-team-brand-variants.md) — manager wants PB reused for other teams; separate brand copies (their PSADT template + paths + branding), user brings 5-10 samples after a meeting
 - [GPF brand variant](gpf-brand-variant.md) — GPF team (3 target brands INA=Audi/VWG=Group/G1V=VW): SEPARATE tool copy at Downloads\GPF-PackageBuilder, files\ stays MTB-only; template/conversion/resolver done + ALL TESTS PASS vs real corpus; Step-1 GUI wiring pending
 - [Intune Notes = JSON](intune-notes-json-schema.md) — app Notes field is JSON (lifecycle/notes/managed/status); real stages LIVE/SAT/RETIRED/UAT/FailedUAT/PreRollout; parse don't regex
-- [IntuneAppReport tool](intune-app-report-tool.md) — Downloads\IntuneAppReport: WPF Sync-now tool exporting Win32 app inventory + change history (audit trail + own snapshot diffs); PB's MSAL auth, can't be scheduled
+- [IntuneAppReport tool](intune-app-report-tool.md) — repo\IntuneAppReport: dark six-page WPF reporting tool (Overview/Apps/App page/Activity/People/Insights) built 15 Sep 2026 to the approved mock; measured header widths + priority column hiding for the 1280-px screen; AuditCache v3 + translator; AsArray-pipe trap; .ps1 need UTF-8 BOM
 - [GPF 30-Jul findings + brand selector](gpf-30jul-findings-and-brand-selector.md) — r43/r44: 12 findings done (Test-Path dbl-guard, InstallTitle style, $flag=match-predecessor, brand rules) + Audi/VW/Group Step-1 dropdown; OPEN: #1/#2 dep-ordering, #9, #10, #3
 - [GPF test-case remediation](gpf-testcases-remediation.md) — findings from GPF team's Package_BuilderTesting.docx; 3 user decisions, Freia 9.1.0 gold standard, Increment 1 DONE (wrapper fills/date/author/@()/branding-last), remaining increments mapped
 - [Audi SCCM integration tool](audi-sccm-integration-tool.md) — new client: rewrite EQS-PoshGUI tool so all SCCM work runs as ONE service account; transport DECIDED = flow 2 drop folder only (don't re-propose WinRM/JEA); NO real person recorded anywhere server-side, RFC is the audit link; tool in Downloads\Application-Packaging\AudiSwIntegration
@@ -27,6 +27,9 @@
 
 - [Verify = semantic, not syntax](verify-semantic-not-syntax.md) — for Package Builder, "verify" means meaningful + matches live + review-flagged, not just parse-clean
 - [Active Setup house style](activesetup-house-style.md) — team's per-user-config pattern (plain-PS stub in SupportFiles + Set-ADTActiveSetup); reference pkg on Outgoing share
+- [Package Record design](package-record-design.md) — PARKED Sept 2026: one record per package version (5 sections/owners + thread) on SharePoint/Power Apps, PB writes Build section; per-app card + 3-column sheet rejected
+- [EQS evaluation corpus](eqs-evaluation-corpus.md) — user = MAN EQS (evaluation side); Outgoing/CMLib_LIVE layout; AO docx IS a form (~10 screenshots); MRF/Complexity/EQS+QA checklists; 250 query mails on 151/228 pkgs; Evaluation-Sheet idea pending
+- [ADO pipeline idea dropped](ado-pipeline-idea-dropped.md) — Sept 2026: Azure DevOps/Citrix-replacement proposal evaluated and dropped by user; don't re-propose
 - [Automations ruled out](automation-scope-not-useful.md) — firewall/services/reboot/ProgramData automations are NOT useful for Package Builder; don't re-propose
 - [Snapshot froze on 10GB app](snapshot-huge-install-perf.md) — eager WPF tree + O(n²) counts; lazy children + 400 cap + memoised counts (r213/r26)
 - [Screenshots: keep it simple](screenshot-keep-it-simple.md) — shortcut screenshots use fixed timing (launch→wait→shot1→15s→shot2), full-screen; NO adaptive "is it loaded" detection

@@ -4,7 +4,7 @@
 #
 #   .\Test-Download.ps1
 
-$sp  = 'C:\Users\AW140\Downloads\Application-Packaging\SP-PackageBuilder'
+$sp  = Join-Path (Split-Path $PSScriptRoot -Parent) 'SP-PackageCompanion'
 $lib = 'PackageSources'
 $verRel = 'PackageSources/Mozilla/FirefoxESRMAN/140.15.0_0001'
 $sitePath = '/sites/SWPackaging'

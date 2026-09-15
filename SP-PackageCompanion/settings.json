@@ -1,0 +1,57 @@
+{
+    "WorkRoot": "C:\\temp\\PackageCompanion",
+    "LocalWorkingDir": "C:\\temp\\PackageCompanion\\Build",
+    "DefaultMsiProperties": [
+        "ALLUSERS=1",
+        "REBOOT=ReallySuppress",
+        "MSIDISABLERMRESTART=1",
+        "MSIRMSHUTDOWN=2",
+        "MSIRESTARTMANAGERCONTROL=Disable"
+    ],
+    "AutoDetectAuthor": true,
+    "DefaultAuthor": "",
+    "PredecessorPath": "\\\\mbddfsovpc01.mn-man.biz\\SWDLive-Gate\\CMLib_LIVE\\Apps",
+    "OutputBasePath": "c:\\temp",
+    "RepositoryPath": "\\\\mndemucfsm01\\SEC-EQS-Lib-Gate\\EQS_SEC\\EQS\\Packages\\Incoming",
+    "OutgoingPath": "\\\\mndemucfsm01\\SEC-EQS-Lib-Gate\\EQS_SEC\\EQS\\Packages\\Outgoing",
+    "SharePointPath": "",
+    "_SharePoint_help": [
+        "Enabled=false makes this tool behave EXACTLY like the normal Package Companion (shares only).",
+        "SiteUrl + Library are the only two you normally change; SitePath is derived from SiteUrl automatically.",
+        "Fallbacks are the shares this tool already used: RepositoryPath for source, PredecessorPath(s) for predecessors.",
+        "UseSourceRepo=false / UsePredecessorRepo=false turn off SharePoint for just that one thing."
+    ],
+    "SharePoint": {
+        "Enabled": true,
+        "SiteUrl": "https://manonlineservices.sharepoint.com/sites/SWPackaging",
+        "Library": "PackageSources",
+        "ClientId": "28bf2c22-437c-42e7-a4be-e8a0f44a8264",
+        "ModulePath": "Lib\\PnP.PowerShell\\1.12.0\\PnP.PowerShell.psd1",
+        "UseSourceRepo": true,
+        "UseUncSourceFallback": true,
+        "UsePredecessorRepo": true,
+        "AlsoSearchUnc": true,
+        "UncProbeTimeoutMs": 1500,
+        "SourceSkipFolders": [ "EQS", "SCCM" ],
+        "SnippetsFile": "",
+        "StagingRetentionDays": 7
+    },
+    "_comment_snippets": "EMPTY on purpose: this tool uses its OWN snippets.json next to the exe. The team share is not reachable for everyone who runs the SharePoint build, and the local copy is already a superset of the share's library (31 snippets vs 20 - nothing on the share is missing here). Point this at a shared file only if every user of this build can reach it.",
+    "SnippetsPath": "",
+    "Sccm": {
+        "SiteCode": "G08",
+        "SiteServer": "mbdcaswvtb29843.mn-man.biz",
+        "ContentShare": "\\\\mbddfsovpc01.mn-man.biz\\SWDPreLive-Gate\\CMLib_TEST\\Apps",
+        "DPGroup": "_ALL_DPs",
+        "AppFolder": "G08:\\Application\\VOLKSWAGEN\\DEVELOPMENT\\EQS",
+        "CollectionFolder": "G08:\\DeviceCollection\\DEVELOPMENT\\EQS",
+        "LimitingCollection": "All Systems",
+        "ModuleRelPath": "ConfigurationManagerPrelive\\ConfigurationManager\\ConfigurationManager.psd1",
+        "CMTracePath": "C:\\Windows\\CCM\\CMTrace.exe"
+    },
+    "Intune": {
+        "TenantId": "m365.man",
+        "IntuneWinAppUtil": "Lib",
+        "ModulePath": "Lib"
+    }
+}

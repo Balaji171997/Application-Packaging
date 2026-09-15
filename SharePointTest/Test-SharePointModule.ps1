@@ -12,7 +12,7 @@
 param(
     [ValidateSet('Off','Source','Pred')][string]$Stage = 'Off',
     [string]$PkgName = '3Dconnexion_3DxWare_x64_10.9.1.650-0003_MUL',
-    [string]$PBRoot  = 'C:\Users\AW140\Downloads\Application-Packaging\SP-PackageBuilder'
+    [string]$PBRoot  = (Join-Path (Split-Path $PSScriptRoot -Parent) 'SP-PackageCompanion')
 )
 
 $ErrorActionPreference = 'Continue'
