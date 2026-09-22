@@ -10,7 +10,7 @@ param([switch]$Quiet)
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-. (Join-Path (Split-Path -Parent $PSScriptRoot) 'Server\Engine\AudiSwIntegration.ps1')
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'SccmServer\Engine\AudiSwIntegration.ps1')
 
 $script:Pass = 0
 $script:Fail = 0
@@ -186,7 +186,7 @@ Assert-True  'a preview only warns, so a plan can still be reviewed' `
 # path with no drive qualifier is resolved by the CURRENT provider. A UNC share
 # has no drive qualifier, so without naming the filesystem provider a share that
 # is sitting right there and perfectly readable comes back as "not found".
-$providerLines = @(Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'Server\Engine\Src\Provider.ps1'))
+$providerLines = @(Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'SccmServer\Engine\Src\Provider.ps1'))
 foreach ($probe in 'TestContentPath', 'TestContentShare', 'GetContentShareNames') {
     # the assignment and the two lines after it - these probes span more than one line
     $at = @(0..($providerLines.Count - 1) | Where-Object { $providerLines[$_] -match "^\s*$probe\s*=" })[0]
@@ -246,7 +246,7 @@ $reads = @([regex]::Matches($providerText, '\$c\.(?<p>[A-Za-z_][A-Za-z0-9_]*)') 
 
 # what the engine puts INTO $c - EVERY file, because the call sites live in
 # Steps.ps1, Inspect.ps1 and Orchestrator.ps1 now, not beside the provider
-$engineText = (Get-ChildItem -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'Server\Engine\Src') -Filter '*.ps1' |
+$engineText = (Get-ChildItem -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'SccmServer\Engine\Src') -Filter '*.ps1' |
                ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
 $passed = @([regex]::Matches($engineText, '&\s*\$Provider\.\w+\s*@\{(?<body>[\s\S]*?)\}') |
             ForEach-Object { [regex]::Matches($_.Groups['body'].Value, '(?m)(?<k>[A-Za-z_][A-Za-z0-9_]*)\s*=') } |
@@ -491,19 +491,23 @@ Assert-Equal 'the plan carries the German description' 'Liest PDF-Dokumente.' $d
 $deFallback = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'INA' -Rfc 'R' -LocalizedName 'Only English'
 Assert-Equal 'German falls back to English when not given' 'Only English' $deFallback.LocalizedNameDe
 
-# A package named for one environment must not be published into another. The old
-# tool rewrote the first three characters instead, which is what turned
-# ADO_ADOBE_Reader into INA_INABE_Reader.
+# An INA_ package goes into ICZ (test) first and INA (production) after, under
+# the same name - the prefix says who the package is for, not which site this
+# job targets. So a differing prefix is REPORTED and never blocks, and the name
+# is never rewritten. The old tool rewrote the first three characters instead,
+# which is what turned ADO_ADOBE_Reader into INA_INABE_Reader.
 $crossed  = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'ICZ' -Rfc 'RFC0012345'
 $crossPre = Test-AudiSwPrerequisite -Plan $crossed -Provider (New-AudiSccmDryRunProvider)
 $sitePrefix = @($crossPre.Findings | Where-Object { $_.Check -eq 'SitePrefix' })
-Assert-Equal 'the site prefix is checked'                1 $sitePrefix.Count
-Assert-True  'an INA package into ICZ is rejected'       (-not $sitePrefix[0].Ok)
-Assert-True  'and it blocks the run'                     (-not $crossPre.Ok)
+Assert-Equal 'the site prefix is reported'               1 $sitePrefix.Count
+Assert-True  'an INA package into ICZ is NOT rejected'   ($sitePrefix[0].Ok)
+Assert-True  'and the prefix never blocks the run'       (-not (@($crossPre.Findings | Where-Object { $_.Check -eq 'SitePrefix' -and -not $_.Ok })).Count)
 Assert-True  'the message names both sides'              ($sitePrefix[0].Message -like "*INA*ICZ*")
+Assert-Equal 'and the name is kept exactly'              'INA_AUDI_DummyTest_x86_1.0_0001_MUL' $crossed.PackageName
+Assert-Equal 'so the application is named as the package' 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' $crossed.ApplicationName
 
 $aligned = Test-AudiSwPrerequisite -Plan (New-TestPlan -Code 'ICZ') -Provider (New-AudiSccmDryRunProvider)
-Assert-True  'a matching prefix passes' (@($aligned.Findings | Where-Object { $_.Check -eq 'SitePrefix' })[0].Ok)
+Assert-True  'a matching prefix passes too' (@($aligned.Findings | Where-Object { $_.Check -eq 'SitePrefix' })[0].Ok)
 
 # One identity only: the shared account. A person must not survive into the result.
 Assert-True  'the result carries no requester' (-not $run.PSObject.Properties['Requester'])
@@ -819,6 +823,110 @@ $failRun = Invoke-AudiSwChange -Plan $memPlan -Provider (New-MemberProvider -Fai
                -MemberChanges @([pscustomobject]@{ Collection = $memCol; Machine = 'PC-0005'; Action = 'Add' })
 Assert-True 'a failed machine change reports failure' (-not $failRun.Ok)
 Assert-Equal 'and claims no rollback' 0 $failRun.RolledBack.Count
+
+# ------------------------------------------------------------- Find and remove
+# EWALD'S CASE, THE OTHER HALF. Some applications on the site were made by
+# hand and carry a * in their name. Nothing here ever removes by pattern: a
+# packager FINDS what matches, SEES the list, TICKS, CONFIRMS - and the server
+# removes those exact names, one object each.
+Write-Host ''
+Write-Host 'Find, then remove exactly what was ticked' -ForegroundColor Cyan
+
+$site = New-AudiSiteOnlyPlan -EnvironmentCode 'INA' -Rfc 'RFC0012345' -Label 'FIND'
+Assert-Equal 'a site-only plan carries the site'  'INA' $site.Environment
+Assert-True  'and the store root'                 ([bool]$site.ContentShare)
+
+$legacy = New-AudiSccmDryRunProvider `
+    -ExistingApplications @('INA_ADOBE_Reader_x64_2024.1_0003_MUL', 'INA_ADOBE_Reader_x64_2024.1_0004_MUL', 'INA_ADOBE_Legacy*_x64_1.0_0001_MUL', 'INA_ETAS_INCA_x64_7.5.7_0001_MUL') `
+    -ExistingCollections  @('GY1-INA_ADOBE_Reader_x64_2024.1_0003_MUL', 'SM1-INA_ADOBE_Reader_x64_2024.1_0003_MUL_InstallComputer', 'GY1-INA_ADOBE_Legacy*_x64_1.0_0001_MUL', 'GY1-INA_ETAS_INCA_x64_7.5.7_0001_MUL')
+
+$found = Find-AudiSwApplication -Plan $site -Pattern 'INA_ADOBE_*' -Provider $legacy -DryRun
+Assert-True  'Find succeeds'                                   $found.Ok $found.Message
+Assert-Equal 'it lists every application matching the pattern' 3 @($found.Found).Count
+Assert-True  'and not the ones that do not match'              (@($found.Found | Where-Object { $_.Name -like '*ETAS*' }).Count -eq 0)
+$reader3 = @($found.Found | Where-Object { $_.Name -eq 'INA_ADOBE_Reader_x64_2024.1_0003_MUL' })[0]
+Assert-Equal 'each with the collections it is deployed to'    2 @($reader3.Collections).Count
+Assert-True  'and where its content is'                       ([bool]$reader3.ContentPath)
+Assert-True  'Find is a read - it changes nothing'            (@($legacy.Log | Where-Object { $_.Operation -like 'Remove*' }).Count -eq 0)
+
+# the literal name with a * in it is found as itself
+$literal = Find-AudiSwApplication -Plan $site -Pattern 'INA_ADOBE_Legacy*_x64_1.0_0001_MUL' -Provider $legacy -DryRun
+Assert-True 'a name that IS a wildcard is found as one application' (@($literal.Found | Where-Object { $_.Name -ceq 'INA_ADOBE_Legacy*_x64_1.0_0001_MUL' }).Count -eq 1)
+
+# the packager ticks two of the three; the third must survive
+$ticked = @($found.Found | Where-Object { $_.Name -ne 'INA_ADOBE_Reader_x64_2024.1_0004_MUL' })
+$removed = Invoke-AudiSwTargetRemoval -Plan $site -Targets $ticked -Provider $legacy -DryRun
+Assert-True  'the ticked applications are removed'             $removed.Ok $removed.Message
+Assert-Equal 'one step per application, named'                2 @($removed.Steps).Count
+$removedApps = @($legacy.Log | Where-Object { $_.Operation -eq 'RemoveApplication' } | ForEach-Object { $_.Detail })
+Assert-True  'exactly the ticked names went - the unticked one did not' `
+    (($removedApps -contains 'INA_ADOBE_Reader_x64_2024.1_0003_MUL') -and ($removedApps -ccontains 'INA_ADOBE_Legacy*_x64_1.0_0001_MUL') -and ($removedApps -notcontains 'INA_ADOBE_Reader_x64_2024.1_0004_MUL')) ($removedApps -join ', ')
+Assert-True  'the literal wildcard name was removed as ONE object, by that whole name' ($removedApps -ccontains 'INA_ADOBE_Legacy*_x64_1.0_0001_MUL')
+$removedCols = @($legacy.Log | Where-Object { $_.Operation -eq 'RemoveCollection' } | ForEach-Object { $_.Detail })
+Assert-Equal 'and only the collections that were listed with them' 3 $removedCols.Count
+Assert-True  'nothing of the unticked application was touched' (@($removedCols | Where-Object { $_ -like '*0004*' }).Count -eq 0)
+$none = Invoke-AudiSwTargetRemoval -Plan $site -Targets @() -Provider $legacy -DryRun
+Assert-True  'no targets, nothing removed'                     (-not $none.Ok)
+
+# ---- the exact-name lookup against a stand-in for the ConfigMgr cmdlet, under
+# StrictMode, for the three answers a site can give: nothing, one, two.
+# (A package not yet on the site made preflight die with "property Count not
+# found" on 18.09.2026 - the empty answer collapsed to $null.)
+function Get-CMApplication { param($Name, [switch]$Fast, $ErrorAction) $script:FakeApps | Where-Object { -not $Name -or $_.LocalizedDisplayName -like $Name } }
+$script:FakeApps = @()
+Assert-True 'exact lookup: nothing on the site is $null, no error' ($null -eq (Get-AudiCmObjectExact -Name 'INA_X_App_x64_1.0_0001_MUL' -Kind Application))
+$script:FakeApps = @([pscustomobject]@{ LocalizedDisplayName = 'INA_X_App_x64_1.0_0001_MUL' }, [pscustomobject]@{ LocalizedDisplayName = 'INA_X_App_x64_1.0_0001_MUL_old' })
+Assert-Equal 'exact lookup: the whole-name match, not the pattern match' 'INA_X_App_x64_1.0_0001_MUL' (Get-AudiCmObjectExact -Name 'INA_X_App_x64_1.0_0001_MUL' -Kind Application).LocalizedDisplayName
+Assert-True  'exact lookup: a literal wildcard name finds only itself' ($null -eq (Get-AudiCmObjectExact -Name 'INA_X_App*' -Kind Application))
+$script:FakeApps = @([pscustomobject]@{ LocalizedDisplayName = 'DUP' }, [pscustomobject]@{ LocalizedDisplayName = 'DUP' })
+$dupSaid = ''; try { $null = Get-AudiCmObjectExact -Name 'DUP' -Kind Application } catch { $dupSaid = $_.Exception.Message }
+Assert-True  'exact lookup: two objects with the same name is refused, not picked' ($dupSaid -like '*More than one*')
+Remove-Item Function:\Get-CMApplication
+
+# ---- the guard under it all: a pattern can never reach a remove
+$wild = ''
+try { Assert-AudiExactName -Name 'INA_ADOBE_*' -What 'application name' | Out-Null } catch { $wild = $_.Exception.Message }
+Assert-True 'a wildcard name is refused by the exact-name guard' ($wild -like '*wildcard*')
+Assert-Equal 'unless the caller says it is a literal - then it passes through unchanged' 'INA_ADOBE_Legacy*_x64_1.0_0001_MUL' `
+    (Assert-AudiExactName -Name 'INA_ADOBE_Legacy*_x64_1.0_0001_MUL' -AllowWildcardCharacters)
+
+# ------------------------------------------------------------- refresh content
+Write-Host ''
+Write-Host 'Refresh content' -ForegroundColor Cyan
+$refreshProv = New-AudiSccmDryRunProvider -ExistingApplications @((New-TestPlan).ApplicationName)
+$refreshed = Invoke-AudiSwContentRefresh -Plan (New-TestPlan) -Provider $refreshProv -DryRun
+Assert-True  'refresh tells the distribution points to fetch again' $refreshed.Ok $refreshed.Message
+Assert-Equal 'one step'                                            1 @($refreshed.Steps).Count
+Assert-True  'through the redistribute call, nothing else'         (@($refreshProv.Log | ForEach-Object { $_.Operation }) -join ',' -eq 'RedistributeContent')
+$noApp = Invoke-AudiSwContentRefresh -Plan (New-TestPlan) -Provider (New-AudiSccmDryRunProvider) -DryRun
+Assert-True  'refusing when the application is not there'          (-not $noApp.Ok -and $noApp.Message -like '*Integrate first*') $noApp.Message
+
+# ------------------------------------------------------- the content folder
+Write-Host ''
+Write-Host 'Deleting a content folder, only where it is safe' -ForegroundColor Cyan
+$storeTest = Join-Path ([System.IO.Path]::GetTempPath()) ("AudiStore_{0}" -f ([guid]::NewGuid().ToString('N')))
+try {
+    New-Item -ItemType Directory -Path (Join-Path $storeTest 'INA_X_App_x64_1.0_0001_MUL\Files') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $storeTest 'INA_X_Other_x64_1.0_0001_MUL') -Force | Out-Null
+    'x' | Set-Content (Join-Path $storeTest 'INA_X_App_x64_1.0_0001_MUL\Files\a.txt')
+    # installers often ship read-only files; and the caller may be standing on
+    # a non-filesystem drive (the CMSite drive after a run - 19.09.2026, "Der
+    # Objektverweis wurde nicht auf eine Objektinstanz festgelegt")
+    Set-ItemProperty -LiteralPath (Join-Path $storeTest 'INA_X_App_x64_1.0_0001_MUL\Files\a.txt') -Name IsReadOnly -Value $true
+    Push-Location 'HKCU:\'
+    try   { $r = Remove-AudiPackageContent -ContentShare $storeTest -Path (Join-Path $storeTest 'INA_X_App_x64_1.0_0001_MUL') }
+    finally { Pop-Location }
+    Assert-True  'the package folder under the store is deleted - read-only file inside, session on a registry drive' ($r.Removed -and -not (Test-Path (Join-Path $storeTest 'INA_X_App_x64_1.0_0001_MUL'))) "$($r.Reason)"
+    Assert-True  'its neighbour is untouched'                          (Test-Path (Join-Path $storeTest 'INA_X_Other_x64_1.0_0001_MUL'))
+    Assert-True  'the store root itself is refused'                    (-not (Remove-AudiPackageContent -ContentShare $storeTest -Path $storeTest).Removed)
+    Assert-True  'a path outside the store is refused'                 (-not (Remove-AudiPackageContent -ContentShare $storeTest -Path $env:TEMP).Removed)
+    Assert-True  'a path with a wildcard is refused'                   (-not (Remove-AudiPackageContent -ContentShare $storeTest -Path (Join-Path $storeTest 'INA_*')).Removed)
+    Assert-True  'a path two levels down is refused'                   (-not (Remove-AudiPackageContent -ContentShare $storeTest -Path (Join-Path $storeTest 'INA_X_Other_x64_1.0_0001_MUL\sub')).Removed)
+    Assert-True  'an empty path is refused'                            (-not (Remove-AudiPackageContent -ContentShare $storeTest -Path '').Removed)
+    Assert-True  'a folder already gone is reported, not failed'       ((Remove-AudiPackageContent -ContentShare $storeTest -Path (Join-Path $storeTest 'INA_X_App_x64_1.0_0001_MUL')).Reason -like '*already gone*')
+    Assert-True  'the neighbour is still untouched after all that'     (Test-Path (Join-Path $storeTest 'INA_X_Other_x64_1.0_0001_MUL'))
+}
+finally { Remove-Item -LiteralPath $storeTest -Recurse -Force -ErrorAction SilentlyContinue }
 
 Write-Host ''
 if ($script:Fail -eq 0) { Write-Host ("All {0} checks passed." -f $script:Pass) -ForegroundColor Green }

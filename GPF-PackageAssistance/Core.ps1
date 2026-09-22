@@ -212,7 +212,10 @@ function Set-PbProgress {
 
 #region Package name --------------------------------------------
 function Parse-PackageName {
-    param([Parameter(Mandatory)][string]$Name)
+    # An EMPTY name is simply not a valid name - never a binding error. A focus change out of an empty name box
+    # reaches here (20.09.2026: 'Cannot bind argument to parameter Name because it is an empty string' closed the tool).
+    param([AllowEmptyString()][AllowNull()][string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) { return @{ IsValid=$false; FullName='' } }
     $p = '^(?<Vendor>[^_]+)_(?<AppName>.+)_(?<Arch>x86|x64|x86_64|ALL)_(?<Version>[^_]+)-(?<Release>\d{4})_(?<Lang>[\w\-]+)$'
     if ($Name -match $p) {
         return @{ IsValid=$true; FullName=$Name; Vendor=$Matches.Vendor; AppName=$Matches.AppName
@@ -377,6 +380,13 @@ function Get-PBBrand {
 function Test-PBFeature {
     param([string]$Feature)   # Sccm | Intune | Publish
     return [bool](Get-PBBrand -Path "Features.$Feature" -Default $true)
+}
+# The GPF FAMILY of conventions (GPF template, GPF log style, GPF request folders...) is shared by more than one
+# brand: GPF itself and Porsche (PAG), which differs only in its target prefix and order number. Brand.Family
+# names the family; a brand without one is its own family (GPF -> GPF, MTB -> MTB).
+function Test-PBGpfFamily {
+    $name = "$(Get-PBBrand -Path 'Name' -Default 'MTB')"
+    return ("$(Get-PBBrand -Path 'Family' -Default $name)" -eq 'GPF')
 }
 # Lift the execution policy for THIS PROCESS ONLY, so SCRIPT modules (ConfigMgr AdminUI.PS, MSAL.PS, IntuneWin32App)
 # import even when the machine/user policy is Restricted/Undefined - which is common on the 32-bit WOW6432Node hive the

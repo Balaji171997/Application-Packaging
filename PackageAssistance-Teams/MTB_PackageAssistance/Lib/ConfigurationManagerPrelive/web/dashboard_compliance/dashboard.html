@@ -1,0 +1,30 @@
+﻿<!DOCTYPE html>
+<html ng-app="dashboard">
+<head>
+    <title>Health Attestation Dashboard</title>
+    <meta charset="UTF-8">
+    <meta content="IE=edge" http-equiv="X-UA-Compatible">
+    <meta name="description" content="Health Attestation Dashboard">
+    <meta name="keywords" content="Health Attestation, Dashboard">
+
+    <link href="../css/c3.min.css" rel="stylesheet" type="text/css">
+    <link href="css/columns.css" rel="stylesheet" type="text/css">
+    <link href="css/styles.css" rel="stylesheet" type="text/css">
+
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="../js/d3.min.js" type="text/javascript"></script>
+    <script src="../js/c3.min.js" type="text/javascript"></script>
+    <script src="js/controller.js" type="text/javascript"></script>
+    <noscript>Javascript is not enabled</noscript>
+</head>
+
+<body ng-controller="dashboardController">
+    <div class="tile-container-2-6">
+        <div class="tile-2-2">
+            <h1 ng-bind="getString('OverallComplianceDonutTitle')" tabindex="1"></h1>
+            <div id="OverallComplianceDonut">
+            </div>
+        </div>
+    </div>
+</body>
+</html>

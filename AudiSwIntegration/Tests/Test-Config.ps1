@@ -8,7 +8,7 @@ param([switch]$Quiet)
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-. (Join-Path (Split-Path -Parent $PSScriptRoot) 'Server\Engine\AudiSwIntegration.ps1')
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'SccmServer\Engine\AudiSwIntegration.ps1')
 
 $script:Pass = 0
 $script:Fail = 0
@@ -141,6 +141,21 @@ $badName = ''
 try { Split-AudiPackageName -PackageName 'INA_AUDI_Test' | Out-Null } catch { $badName = $_.Exception.Message }
 Assert-True 'and the message shows the expected shape' ($badName -like '*INA_ETAS_INCA_x64_7.5.7-0001_MUL*')
 
+# EWALD'S CASE: ConfigMgr -Name parameters take wildcards, so a package name
+# with one would match every object that fits the pattern - and a removal
+# would take all of them. Such a name never gets as far as a plan.
+foreach ($wild in 'INA_*_x64_1.0_0001_MUL', 'INA_AUDI_Test?_x86_1.0_0001_MUL', 'INA_AUDI_[a-z]_x86_1.0_0001_MUL',
+                  'INA_AUDI_..\..\Test_x86_1.0_0001_MUL', 'INA_AUDI_Te st_x86_1.0_0001_MUL', 'INA_AUDI_Test"_x86_1.0_0001_MUL') {
+    $refused = ''
+    try { Split-AudiPackageName -PackageName $wild | Out-Null } catch { $refused = $_.Exception.Message }
+    Assert-True "a name with a wildcard or path character is refused: $wild" ($refused -like '*not allowed in a name*') $refused
+}
+# and the provider's own guard says the same for any name that reaches it
+$guard = ''
+try { Assert-AudiExactName -Name 'INA_*' -What 'application name' | Out-Null } catch { $guard = $_.Exception.Message }
+Assert-True 'the provider refuses a wildcard name before any cmdlet sees it' ($guard -like '*wildcard*') $guard
+Assert-Equal 'and passes an exact one through' 'INA_X' (Assert-AudiExactName -Name 'INA_X')
+
 Assert-Equal 'branding key' 'AUDI_DummyTest_x86_1.0-0001_MUL' (Get-AudiBrandingKey -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL')
 
 # ------------------------------------------------------- reading a package
@@ -172,12 +187,13 @@ try {
     Assert-Equal 'script gives the order number' 'AES-1-000123-A' $detail.Fields['OrderNumber']
     Assert-Equal 'script gives the portfolio'    'Adobe'          $detail.Fields['Portfolio']
 
-    # SoftIdent is declared twice; the CUSTOM APPLICATION VARIABLES one wins,
-    # because only that one carries the Wow6432Node placeholder
-    Assert-True 'SoftIdent comes from the custom variables block' `
-        ($detail.Fields['SoftIdentRaw'] -like '*VWG_CurrentRegWOW*') $detail.Fields['SoftIdentRaw']
-    Assert-True 'and the placeholder is resolved away for x64' `
-        ($detail.Fields['SoftIdent'] -notlike '*VWG_CurrentRegWOW*' -and $detail.Fields['SoftIdent'] -notlike '*Wow6432Node*') $detail.Fields['SoftIdent']
+    # Detection is the branding key only, so the script's VWG_SoftIdent is not
+    # read at all - a value nobody uses must not appear in the window either.
+    Assert-True 'the SoftIdent is not read from the script' (-not $detail.Fields.Contains('SoftIdent'))
+
+    # The install title is what Software Center shows. It comes from the script,
+    # never composed from the package name.
+    Assert-Equal 'script gives the install title' 'Adobe Acrobat Reader 2024.1' $detail.Fields['InstallTitle']
 
     # ---- the document is consulted for the description only
     Assert-True  'document gives the English description' ($detail.Fields['ApplicationDescriptionEN'] -like '*PDF*')
@@ -189,24 +205,224 @@ try {
 
     Assert-Equal 'every field records where it came from' $detail.Fields.Count $detail.Origin.Count
     Assert-Equal 'script fields are attributed to the script' 'script:v4' $detail.Origin['Publisher']
-    Assert-Equal 'document fields are attributed to the document' 'document' $detail.Origin['ApplicationDescriptionEN']
+    Assert-True 'document fields are attributed to the document, by name' ($detail.Origin['ApplicationDescriptionEN'] -like 'document: *Software Integration*') $detail.Origin['ApplicationDescriptionEN']
 
-    # ---- a 32-bit package: SoftIdent must gain Wow6432Node
+    # ---- a 32-bit package reads the same way; architecture changes nothing else
     $made86   = & $builder -Path $sampleRoot -PackageName 'ICZ_ADOBE_Acrobat_Reader_x86_2024.1-0003_MUL'
     $detail86 = Read-AudiPackageDetail -PackagePath $made86.Path
     Assert-Equal 'the 32-bit sample really is x86' 'x86' $detail86.Fields['Architecture']
-    Assert-True  'a 32-bit package resolves SoftIdent to Wow6432Node' `
-        ($detail86.Fields['SoftIdent'] -like '*\Wow6432Node\Microsoft\*') $detail86.Fields['SoftIdent']
-    Assert-True  'and the origin says so' ($detail86.Origin['SoftIdent'] -like '*x86*')
+    Assert-Equal 'and carries the same install title' $detail.Fields['InstallTitle'] $detail86.Fields['InstallTitle']
 
-    # the resolver on its own, both ways round
-    Assert-Equal 'resolver: x86 inserts the node' 'HKLM:\SOFTWARE\Wow6432Node\X' `
-        (Resolve-AudiSoftIdent -SoftIdent 'HKLM:\SOFTWARE\$($VWG_CurrentRegWOW)X' -Architecture 'x86')
-    Assert-Equal 'resolver: x64 removes it'       'HKLM:\SOFTWARE\X' `
-        (Resolve-AudiSoftIdent -SoftIdent 'HKLM:\SOFTWARE\$($VWG_CurrentRegWOW)X' -Architecture 'x64')
-    Assert-Equal 'resolver: the bare variable form too' 'HKLM:\SOFTWARE\Wow6432Node\X' `
-        (Resolve-AudiSoftIdent -SoftIdent 'HKLM:\SOFTWARE\$VWG_CurrentRegWOWX' -Architecture 'x86')
-    Assert-Equal 'resolver: an empty SoftIdent stays empty' '' (Resolve-AudiSoftIdent -SoftIdent '' -Architecture 'x86')
+    # ---- the description, both shapes, through the REAL reader
+    # The sample closes nothing, so the short description stands on its own -
+    # no empty "will be closed:" sentence in front of it.
+    Assert-Equal 'closing nothing: the short description alone' `
+        'Reads, prints and annotates PDF documents.' $detail.Fields['ApplicationDescriptionEN']
+    Assert-Equal 'closing nothing: the German one too' `
+        'Liest, druckt und kommentiert PDF-Dokumente.' $detail.Fields['ApplicationDescriptionDE']
+    Assert-True  'closing nothing: no process list is recorded' (-not $detail.Fields.Contains('ProcessesClosed'))
+
+    # Now the same package told to close two processes, as a real PSADT 4
+    # script does it, read again: the sentence must come FIRST, then the
+    # short description, in both languages, and the list must be recorded.
+    $closing = & $builder -Path $sampleRoot -PackageName 'INA_ADOBE_Acrobat_Reader_x64_2024.1_0004_MUL'
+    $script  = Join-Path $closing.Path 'Invoke-AppDeployToolkit.ps1'
+    $text    = [System.IO.File]::ReadAllText($script)
+    $text    = $text.Replace("    AppScriptAuthor = 'Packaging Team'", "    AppScriptAuthor = 'Packaging Team'`r`n    AppProcessesToClose = @('AcroRd32', 'AcroCEF')")
+    [System.IO.File]::WriteAllText($script, $text)
+    $detailClosing = Read-AudiPackageDetail -PackagePath $closing.Path
+    Assert-Equal 'closing processes: sentence first, then the short description' `
+        'The following applications will be closed for installation: AcroRd32,AcroCEF. Reads, prints and annotates PDF documents.' `
+        $detailClosing.Fields['ApplicationDescriptionEN']
+    Assert-Equal 'closing processes: the German sentence too' `
+        'Folgende Anwendungen werden fuer die Installation geschlossen: AcroRd32,AcroCEF. Liest, druckt und kommentiert PDF-Dokumente.' `
+        $detailClosing.Fields['ApplicationDescriptionDE']
+    Assert-Equal 'closing processes: the list is recorded' 'AcroRd32,AcroCEF' $detailClosing.Fields['ProcessesClosed']
+    Assert-True  'closing processes: the DETAILED description is still not used' `
+        ($detailClosing.Fields['ApplicationDescriptionEN'] -notlike '*Detailed*')
+    # Reading the same package twice must not stack the sentence twice.
+    $again = Read-AudiPackageDetail -PackagePath $closing.Path
+    Assert-Equal 'the sentence is never doubled' $detailClosing.Fields['ApplicationDescriptionEN'] $again.Fields['ApplicationDescriptionEN']
+
+    # ---- which Word file is the request form
+    # Audi's form now arrives as "<Product>-<Version>_Software Integration
+    # Level 3_request_(1).docx". The sample is named that way, and it must be
+    # found by that name - not by being the only, or the newest, Word file.
+    Assert-True 'the request form is found under its new Audi name' `
+        ((Split-Path -Leaf $detail.DocumentPath) -like '*Software Integration Level 3_request*') $detail.DocumentPath
+
+    $decoyed = & $builder -Path $sampleRoot -PackageName 'INA_ADOBE_Acrobat_Reader_x64_2024.1_0005_MUL' -WithDecoyDocument
+    $detailDecoy = Read-AudiPackageDetail -PackagePath $decoyed.Path
+    Assert-True  'with a NEWER vendor document beside it, the form still wins' `
+        ((Split-Path -Leaf $detailDecoy.DocumentPath) -like '*Software Integration*') $detailDecoy.DocumentPath
+    Assert-Equal 'and the description comes from the form, not the vendor sheet' `
+        'Reads, prints and annotates PDF documents.' $detailDecoy.Fields['ApplicationDescriptionEN']
+    Assert-True  'and the packager is told which file was read and which was not' `
+        (@($detailDecoy.Info | Where-Object { $_ -like 'Read from: *Software Integration*' -and $_ -notlike '*product sheet*' }).Count -eq 1) ($detailDecoy.Info -join ' | ')
+    Assert-True  'as information, not as a problem' (@($detailDecoy.Notes | Where-Object { $_ -like '*Word files*' }).Count -eq 0)
+    Assert-True  'the decoy is not the document of record' ($detailDecoy.DocumentPath -notlike '*product sheet*')
+
+    # ---- the cascade: form, then install document, then anything else.
+    # Every Word file is read; each field comes from the FIRST file that has
+    # it. With all three present the form wins; take the form away and the
+    # install document supplies the English description, and the vendor sheet
+    # - newest of all - still never does.
+    $cascade = & $builder -Path $sampleRoot -PackageName 'INA_ADOBE_Acrobat_Reader_x64_2024.1_0007_MUL' -WithDecoyDocument -WithInstallDocument
+    $c1 = Read-AudiPackageDetail -PackagePath $cascade.Path
+    Assert-Equal 'all three present: the form supplies the English description' `
+        'Reads, prints and annotates PDF documents.' $c1.Fields['ApplicationDescriptionEN']
+    Assert-True  'and says it came from the form' ($c1.Origin['ApplicationDescriptionEN'] -like 'document: *Software Integration*') $c1.Origin['ApplicationDescriptionEN']
+    Assert-True  'the info line lists the files read, form first' `
+        (@($c1.Info | Where-Object { $_ -like 'Read from: *Software Integration*' }).Count -eq 1) ($c1.Info -join ' | ')
+    Remove-Item -LiteralPath (@(Get-ChildItem -LiteralPath $cascade.Path -Filter '*Software Integration*' -Recurse)[0].FullName) -Force
+    $c2 = Read-AudiPackageDetail -PackagePath $cascade.Path
+    Assert-Equal 'form gone: the install document supplies it' 'From the install document.' $c2.Fields['ApplicationDescriptionEN']
+    Assert-True  'and says so' ($c2.Origin['ApplicationDescriptionEN'] -like 'document: install_document.docx*') $c2.Origin['ApplicationDescriptionEN']
+    Assert-True  'the newer vendor sheet still never supplies it' ($c2.Fields['ApplicationDescriptionEN'] -notlike 'WRONG*')
+    Assert-True  'the install document is now the document of record' ((Split-Path -Leaf $c2.DocumentPath) -eq 'install_document.docx') $c2.DocumentPath
+    Assert-True  'German, which no remaining file has, is simply absent' (-not $c2.Fields.Contains('ApplicationDescriptionDE'))
+    Assert-True  'and no amber note about a missing description, since one was found' `
+        (@($c2.Notes | Where-Object { $_ -like '*no description*' }).Count -eq 0) ($c2.Notes -join ' | ')
+
+    # ---- the documents location: forms kept apart from packages.
+    #   <root>\<AES-ID> <Vendor> <App> <Version>\Documentation\<form>.docx
+    # Used only when the package holds no form of its own; found by AES ID,
+    # else by vendor + product + version in the folder name.
+    $docRoot = Join-Path $sampleRoot 'Documents'
+    $aesDir  = Join-Path $docRoot 'AES-1-000123-A Adobe Acrobat Reader 2024.1\Documentation'
+    $bare    = & $builder -Path $sampleRoot -PackageName 'INA_ADOBE_Acrobat_Reader_x64_2024.1_0008_MUL' -DocumentTarget $aesDir
+    Assert-True  'the bare package holds no Word file' (@(Get-ChildItem -LiteralPath $bare.Path -Filter '*.docx' -Recurse).Count -eq 0)
+
+    $noRoot = Read-AudiPackageDetail -PackagePath $bare.Path
+    Assert-True  'without a documents location the description is missing' (-not $noRoot.Fields.Contains('ApplicationDescriptionEN'))
+    Assert-True  'and the packager is told to type it' (@($noRoot.Notes | Where-Object { $_ -like '*typed in by hand*' }).Count -gt 0)
+
+    $viaRoot = Read-AudiPackageDetail -PackagePath $bare.Path -DocumentRoot $docRoot
+    Assert-Equal 'with the documents location the description arrives' 'Reads, prints and annotates PDF documents.' $viaRoot.Fields['ApplicationDescriptionEN']
+    Assert-True  'the form was found under the AES folder''s Documentation subfolder' ($viaRoot.DocumentPath -like "*AES-1-000123-A*\Documentation\*Software Integration*") $viaRoot.DocumentPath
+    Assert-True  'the folder is reported as matched by the AES ID' (@($viaRoot.Info | Where-Object { $_ -like '*matched by the AES ID AES-1-000123-A*' }).Count -eq 1) ($viaRoot.Info -join ' | ')
+    Assert-True  'and DocumentFolder names it' ($viaRoot.DocumentFolder -like '*AES-1-000123-A Adobe Acrobat Reader 2024.1')
+
+    # A folder named without the AES ID is still found by app + version - the
+    # vendor is NOT required (Audi leave it out, shorten it or abbreviate it).
+    Rename-Item -LiteralPath (Split-Path -Parent $aesDir) -NewName 'Acrobat_Reader 2024_1 request'
+    $fuzzy = Read-AudiPackageDetail -PackagePath $bare.Path -DocumentRoot $docRoot
+    Assert-Equal 'no AES ID, no vendor in the folder name: matched by app + version' 'Reads, prints and annotates PDF documents.' $fuzzy.Fields['ApplicationDescriptionEN']
+    Assert-True  'and the answer says it was a name match' (@($fuzzy.Info | Where-Object { $_ -like '*matched by name on*' }).Count -eq 1) ($fuzzy.Info -join ' | ')
+    # Two folders match on app + version: the one that also names the vendor wins.
+    $withVendor = Join-Path $docRoot 'Adobe Acrobat Reader 2024.1 (second request)\Documentation'
+    $null = & $builder -Path $sampleRoot -PackageName 'INA_ADOBE_Acrobat_Reader_x64_2024.1_0010_MUL' -DocumentTarget $withVendor
+    (Get-Item -LiteralPath (Split-Path -Parent $withVendor)).LastWriteTime = (Get-Date).AddDays(-30)   # older, so only the vendor can win it
+    $prefer = Read-AudiPackageDetail -PackagePath $bare.Path -DocumentRoot $docRoot
+    Assert-True  'of two name matches, the folder naming the vendor is preferred' ($prefer.DocumentFolder -like '*Adobe Acrobat Reader 2024.1 (second request)') $prefer.DocumentFolder
+
+    # A package with its own form never consults the documents location.
+    $own = Read-AudiPackageDetail -PackagePath $made.Path -DocumentRoot $docRoot
+    Assert-True  'a package with its own form reads that, not the documents location' ($own.DocumentPath -like "$($made.Path)*") $own.DocumentPath
+    Assert-True  'and says nothing about the documents location' (@($own.Info | Where-Object { $_ -like '*documents location*' }).Count -eq 0)
+
+    # Nothing matching in the documents location: a clear note, no guess.
+    # (The sample script always carries Adobe's AES ID, so the test uses a
+    # documents location that holds somebody else's request only.)
+    $otherRoot = Join-Path $sampleRoot 'Documents2'
+    New-Item -ItemType Directory -Path (Join-Path $otherRoot 'AES-9-999999-Z Foo Bar 1.0\Documentation') -Force | Out-Null
+    $none = Read-AudiPackageDetail -PackagePath $bare.Path -DocumentRoot $otherRoot
+    Assert-True  'no matching folder: the note says what was looked for' (@($none.Notes | Where-Object { $_ -like '*No folder under*matches this package*' }).Count -eq 1) ($none.Notes -join ' | ')
+    Assert-True  'and no description is invented' (-not $none.Fields.Contains('ApplicationDescriptionEN'))
+
+    # ---- putting the package on the content share
+    # Two shapes: the script at the top (copy as is), or under Content\ beside
+    # Documents\ and Icons\ (copy Content\ only). The target carries the SCCM
+    # spelling, and a half-copied package never appears under the real name.
+    Write-Host ''
+    Write-Host 'Copying to the content share' -ForegroundColor Cyan
+    $share = Join-Path $sampleRoot 'ContentShare'
+    New-Item -ItemType Directory -Path $share -Force | Out-Null
+
+    Assert-Equal 'a flat package copies from its own root' $made.Path (Get-AudiPackageContentRoot -PackagePath $made.Path)
+
+    $shaped = Join-Path $sampleRoot 'INA_ADOBE_Acrobat_Reader_x64_2024.1-0011_MUL'
+    New-Item -ItemType Directory -Path (Join-Path $shaped 'Content\Files') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $shaped 'Documents') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $shaped 'Icons') -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $made.Path 'Invoke-AppDeployToolkit.ps1') -Destination (Join-Path $shaped 'Content\Invoke-AppDeployToolkit.ps1')
+    Set-Content -LiteralPath (Join-Path $shaped 'Content\Files\setup.exe') -Value 'x' -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $shaped 'Documents\notes.txt') -Value 'x' -Encoding ASCII
+    Assert-Equal 'a Content\Documents\Icons package copies Content only' (Join-Path $shaped 'Content') (Get-AudiPackageContentRoot -PackagePath $shaped)
+
+    $noScript = Join-Path $sampleRoot 'INA_AUDI_Empty_x64_1.0_0001_MUL'
+    New-Item -ItemType Directory -Path $noScript -Force | Out-Null
+    $refused = $false
+    try { $null = Get-AudiPackageContentRoot -PackagePath $noScript } catch { $refused = $true }
+    Assert-True 'a folder with no deployment script is refused, not copied' $refused
+
+    $sccm = Get-AudiSccmName -PackageName (Split-Path -Leaf $shaped)
+    $seen = New-Object System.Collections.Generic.List[string]
+    $copy = Copy-AudiPackageContent -PackagePath $shaped -ContentShare $share -SccmName $sccm -OnProgress { param($d, $t, $f) $seen.Add("$d/$t $f") }
+    Assert-True  'the package lands under its SCCM (underscore) name' (Test-Path -LiteralPath (Join-Path $share 'INA_ADOBE_Acrobat_Reader_x64_2024.1_0011_MUL'))
+    Assert-True  'with the script at the top, not under Content\' (Test-Path -LiteralPath (Join-Path $share "$sccm\Invoke-AppDeployToolkit.ps1"))
+    Assert-True  'and its files beneath it' (Test-Path -LiteralPath (Join-Path $share "$sccm\Files\setup.exe"))
+    Assert-True  'Documents and Icons are NOT copied' (-not (Test-Path -LiteralPath (Join-Path $share "$sccm\Documents")) -and -not (Test-Path -LiteralPath (Join-Path $share "$sccm\notes.txt")))
+    Assert-True  'no staging folder is left behind' (@(Get-ChildItem -LiteralPath $share -Directory -Filter '~*').Count -eq 0)
+    Assert-Equal 'progress was reported per file' 2 $seen.Count
+    Assert-True  'the copy says it copied' $copy.Copied
+    $again = Copy-AudiPackageContent -PackagePath $shaped -ContentShare $share -SccmName $sccm
+    Assert-True  'a second run finds it there and copies nothing' (-not $again.Copied)
+    $missingShare = $false
+    # ---- UPDATE CONTENT: only what differs is written; judged by size and
+    # hash, never by timestamp; timestamps are never rewritten
+    $store = Join-Path $share $sccm
+    $srcRoot = Get-AudiPackageContentRoot -PackagePath $shaped
+    $newFile = Join-Path $srcRoot 'Files\added.txt'; 'new' | Set-Content -LiteralPath $newFile -Encoding UTF8
+    $script1 = Join-Path $srcRoot 'Invoke-AppDeployToolkit.ps1'
+    $untouched = @(Get-ChildItem -LiteralPath $srcRoot -File -Recurse | Where-Object { $_.FullName -ne $script1 -and $_.FullName -ne $newFile })[0]
+    (Get-Content -LiteralPath $script1 -Raw) + "`r`n# changed" | Set-Content -LiteralPath $script1 -Encoding UTF8
+    # the untouched file gets a DIFFERENT timestamp on the source side - as it
+    # would after a copy between machines - and must still count as unchanged
+    (Get-Item -LiteralPath $untouched.FullName).LastWriteTime = (Get-Date).AddDays(-30)
+    $storeUntouchedBefore = (Get-Item -LiteralPath (Join-Path $store ($untouched.FullName.Substring($srcRoot.TrimEnd('\').Length).TrimStart('\')))).LastWriteTimeUtc
+    'old' | Set-Content -LiteralPath (Join-Path $store 'Files\stale.txt') -Encoding UTF8   # in the store, no longer in the package
+    $sync = Sync-AudiPackageContent -Source $srcRoot -Target $store
+    Assert-Equal 'update content: the changed script is replaced'      1 $sync.Replaced
+    Assert-Equal 'update content: the new file is added'               1 $sync.Added
+    Assert-Equal 'update content: the file no longer sent is removed'  1 $sync.Removed
+    Assert-True  'update content: everything else is left alone'       ($sync.Unchanged -ge 1 -and $sync.Replaced + $sync.Added + $sync.Unchanged -eq $sync.Files)
+    Assert-True  'a different timestamp alone does not make a file "changed"' ($sync.Unchanged -ge 1)
+    Assert-True  'the store copy of an unchanged file keeps its timestamp'  ((Get-Item -LiteralPath (Join-Path $store ($untouched.FullName.Substring($srcRoot.TrimEnd('\').Length).TrimStart('\')))).LastWriteTimeUtc -eq $storeUntouchedBefore)
+    Assert-True  'a replaced file carries the timestamp it has in Sources, not "now"' `
+        ([Math]::Abs(((Get-Item -LiteralPath (Join-Path $store 'Invoke-AppDeployToolkit.ps1')).LastWriteTimeUtc - (Get-Item -LiteralPath $script1).LastWriteTimeUtc).TotalSeconds) -lt 2)
+    Assert-True  'the replaced content really is the new content'      ((Get-Content -LiteralPath (Join-Path $store 'Invoke-AppDeployToolkit.ps1') -Raw) -like '*# changed*')
+    Assert-True  'no temporary file is left in the store'              (@(Get-ChildItem -LiteralPath $store -Recurse -Force | Where-Object { $_.Name -like '~*' }).Count -eq 0)
+    $again = Sync-AudiPackageContent -Source $srcRoot -Target $store
+    Assert-Equal 'a second update finds nothing to do'                 0 ($again.Replaced + $again.Added + $again.Removed)
+
+    # ---- room on the target volume is checked before a byte moves
+    $freeHere = Get-AudiFreeSpace -Path $share
+    Assert-True 'free space on a local path can be read' ($freeHere -gt 0) "$freeHere"
+    $tooBig = ''
+    try { Assert-AudiEnoughSpace -Path $share -Bytes ($freeHere + 1GB) -What 'a test package' } catch { $tooBig = $_.Exception.Message }
+    Assert-True 'a copy that would not fit is refused up front, with the numbers' ($tooBig -like 'Not enough free space*GB free*') $tooBig
+    $fits = ''
+    try { Assert-AudiEnoughSpace -Path $share -Bytes 1KB -MarginBytes 0 } catch { $fits = $_.Exception.Message }
+    Assert-True 'one that fits goes ahead' (-not $fits) $fits
+
+    try { $null = Copy-AudiPackageContent -PackagePath $shaped -ContentShare (Join-Path $sampleRoot 'NoSuchShare') -SccmName $sccm } catch { $missingShare = $true }
+    Assert-True  'an unreachable share is an error, not a silent nothing' $missingShare
+
+    # A package whose only Word file matches no name pattern is still read - a
+    # pattern picks between files, it never hides the only one there is.
+    $lone = & $builder -Path $sampleRoot -PackageName 'INA_ADOBE_Acrobat_Reader_x64_2024.1_0006_MUL'
+    $formPath = @(Get-ChildItem -LiteralPath $lone.Path -Filter '*.docx' -Recurse)[0].FullName
+    $renamed  = Join-Path (Split-Path -Parent $formPath) 'Install instruction.docx'
+    Move-Item -LiteralPath $formPath -Destination $renamed
+    $detailLone = Read-AudiPackageDetail -PackagePath $lone.Path
+    Assert-Equal 'a lone document with an unmatched name is still read' 'Install instruction.docx' (Split-Path -Leaf $detailLone.DocumentPath)
+    Assert-Equal 'and gives its description' 'Reads, prints and annotates PDF documents.' $detailLone.Fields['ApplicationDescriptionEN']
+
+    # The order in Defaults.xml is the order of preference.
+    $docSpec = (Get-AudiDefaults).PackageSource.Document
+    Assert-Equal 'Software Integration is tried first' 'Software Integration' @($docSpec.NamePatterns)[0]
+    Assert-Equal 'the install instruction second'    'Install' @($docSpec.NamePatterns)[1]
 
     # a folder with nothing in it must report that, not invent values
     $empty = Join-Path $sampleRoot 'EmptyPackage'
@@ -290,80 +506,70 @@ Assert-True  'no Windows 7 platform string remains' `
 Assert-True 'the application comment carries the job id' ($plan.ApplicationComment -like "*$($plan.JobId)*")
 Assert-True 'and the RFC'                                ($plan.ApplicationComment -like '*RFC0012345*')
 
-# ------------------------------------------------------------ detection rules
-# Two rules, both of which must hold: the branding key the package writes, and
-# the product's own uninstall entry from VWG_SoftIdent. There is deliberately no
-# separate "detection key" to keep in step with the branding key - the branding
-# key IS rule 1.
+# ------------------------------------------------------------ two spellings
+# Audi's rule: the browsed folder may carry a hyphen before the revision, but
+# everything in SCCM and the content folder on the share carry an underscore.
+# Only the branding key keeps the hyphen, because the script writes it so.
 Write-Host ''
-Write-Host 'Detection rules' -ForegroundColor Cyan
+Write-Host 'Underscore in SCCM, hyphen in the branding key' -ForegroundColor Cyan
 
-Assert-Equal 'a package with no SoftIdent gets one rule' 1 @($plan.DetectionRules).Count
+$hyphenName = 'INA_WinMerge_WinMerge_x64_2.16.58-0001_test'
+$sccmName   = 'INA_WinMerge_WinMerge_x64_2.16.58_0001_test'
+Assert-Equal 'a hyphen name spells as underscore for SCCM'   $sccmName (Get-AudiSccmName -PackageName $hyphenName)
+Assert-Equal 'an underscore name is already the SCCM name'  $sccmName (Get-AudiSccmName -PackageName $sccmName)
+Assert-Equal 'the branding key keeps the hyphen, from either' 'WinMerge_WinMerge_x64_2.16.58-0001_test' (Get-AudiBrandingKey -PackageName $hyphenName)
+Assert-Equal 'and from the underscore spelling too'          'WinMerge_WinMerge_x64_2.16.58-0001_test' (Get-AudiBrandingKey -PackageName $sccmName)
+
+$wmPlan = Get-AudiIntegrationPlan -PackageName $hyphenName -EnvironmentCode 'INA' -Rfc 'RFC0012345'
+Assert-Equal 'the plan carries the SCCM spelling'            $sccmName $wmPlan.PackageName
+Assert-Equal 'the application is named with the underscore' $sccmName $wmPlan.ApplicationName
+Assert-True  'the deployment type too'                      ($wmPlan.DeploymentType -like "$sccmName*") $wmPlan.DeploymentType
+Assert-True  'the content folder on the share too'          ($wmPlan.ContentPath -like "*\$sccmName") $wmPlan.ContentPath
+Assert-True  'every collection too'                         (@($wmPlan.Collections | Where-Object { $_.Name -notlike "*$sccmName*" }).Count -eq 0)
+Assert-True  'nothing on the SCCM side carries the hyphen'  (@($wmPlan.Collections | Where-Object { $_.Name -like '*2.16.58-0001*' }).Count -eq 0 -and $wmPlan.ContentPath -notlike '*2.16.58-0001*')
+Assert-True  'the AD group too'                             ($wmPlan.ArsGroupName -like "*$sccmName") $wmPlan.ArsGroupName
+Assert-Equal 'while detection reads the hyphen key the script writes' 'Software\VWG\CM\WinMerge_WinMerge_x64_2.16.58-0001_test' $wmPlan.DetectionRules[0].Key
+Assert-Equal 'and the revision is still the revision'       '0001' $wmPlan.DetectionRules[0].Value
+
+# ------------------------------------------------------------ detection rule
+# ONE rule: the branding key the package writes, checked on the revision. There
+# is deliberately no separate "detection key" to keep in step with the branding
+# key - the branding key IS the rule - and nothing else is detected on.
+Write-Host ''
+Write-Host 'Detection rule' -ForegroundColor Cyan
+
+Assert-Equal 'every package gets exactly one rule' 1 @($plan.DetectionRules).Count
 Assert-Equal 'and it is the branding key'   'Software\VWG\CM\AUDI_DummyTest_x86_1.0-0001_MUL' $plan.DetectionRules[0].Key
 Assert-Equal 'checked on the revision'      'Revision' $plan.DetectionRules[0].ValueName
 Assert-Equal 'against the revision itself'  '0001'     $plan.DetectionRules[0].Value
+Assert-Equal 'under HKLM'                   'HKLM'     $plan.DetectionRules[0].Hive
+Assert-Equal 'named for what it is'         'Branding key' $plan.DetectionRules[0].Source
 
-# Detection is the BRANDING KEY ONLY. A second rule that also has to be true
-# means a package which is installed, but whose vendor uninstall key moved
-# between builds, reads as not installed and reinstalls on every evaluation.
-$softPlan = Get-AudiIntegrationPlan -PackageName 'INA_ETAS_INCA_x64_7.5.7-0001_MUL' -EnvironmentCode 'INA' -Rfc 'RFC0012345' `
-                -SoftIdent 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\INCA7.5.7 [DisplayVersion=7.5.7]'
-Assert-Equal 'a SoftIdent does NOT add a second rule' 1 @($softPlan.DetectionRules).Count
-Assert-Equal 'the one rule is still the branding key' 'Branding key' $softPlan.DetectionRules[0].Source
-Assert-True  'and it is not the vendor uninstall key' `
-    ($softPlan.DetectionRules[0].Key -notlike '*Uninstall*') $softPlan.DetectionRules[0].Key
+# A real package name gives the same shape - and never a vendor uninstall key.
+$incaPlan = Get-AudiIntegrationPlan -PackageName 'INA_ETAS_INCA_x64_7.5.7-0001_MUL' -EnvironmentCode 'INA' -Rfc 'RFC0012345'
+Assert-Equal 'a second package: still one rule' 1 @($incaPlan.DetectionRules).Count
+Assert-True  'and it is not a vendor uninstall key' `
+    ($incaPlan.DetectionRules[0].Key -notlike '*Uninstall*') $incaPlan.DetectionRules[0].Key
 
-# The rule can still be BUILT - only not used. Turning enabled="true" back on in
-# Defaults.xml has to produce a correct rule, not a broken one nobody tested.
-$parsed = Split-AudiSoftIdent -SoftIdent 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\INCA7.5.7 [DisplayVersion=7.5.7]'
-Assert-Equal 'the SoftIdent parser still works, for when it is switched on' 'HKLM' $parsed.Hive
-Assert-Equal 'and reads the key'        'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\INCA7.5.7' $parsed.Key
-Assert-Equal 'and the value name'       'DisplayVersion' $parsed.ValueName
-Assert-Equal 'and the value'            '7.5.7' $parsed.Value
-
-# These check the SoftIdent RULE BUILDER, which is switched off in the plan but
-# must stay correct for the day it is switched back on. They test the parser
-# directly rather than through the plan, which now carries the branding key only.
-
-# A 32-bit package resolves the script's own placeholder, so the rule would
-# point at the view the product actually installs into. We never guess this.
-$wowParsed = Split-AudiSoftIdent -SoftIdent (
-    Resolve-AudiSoftIdent -SoftIdent 'HKLM:\SOFTWARE\$($VWG_CurrentRegWOW)Vendor\Thing [Version=1.0]' -Architecture 'x86')
-Assert-True 'a 32-bit SoftIdent resolves under Wow6432Node' `
-    ($wowParsed.Key -like 'SOFTWARE\Wow6432Node\*') $wowParsed.Key
-
-# A key with no value test is an existence check, not a value comparison.
-$existsParsed = Split-AudiSoftIdent -SoftIdent 'HKLM:\SOFTWARE\Vendor\Thing'
-Assert-Equal 'a SoftIdent with no value test carries no value name' '' $existsParsed.ValueName
-
-# Guessing at a SoftIdent nobody can parse would produce an application that
-# installs and then reports itself as not installed, so it is dropped instead.
-Assert-True 'an unrecognised SoftIdent is dropped rather than guessed at' `
-    ($null -eq (Split-AudiSoftIdent -SoftIdent 'this is not a registry path'))
-
-# And whatever the SoftIdent says, the plan still carries one rule.
-$oddPlan = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'INA' -Rfc 'R' `
-               -SoftIdent 'this is not a registry path'
-Assert-Equal 'the plan carries the branding key rule only' 1 @($oddPlan.DetectionRules).Count
-
-$unresolvedPlan = Get-AudiIntegrationPlan -PackageName 'INA_AUDI_DummyTest_x86_1.0_0001_MUL' -EnvironmentCode 'INA' -Rfc 'R' `
-                      -SoftIdent 'HKLM:\SOFTWARE\$($VWG_CurrentRegWOW)Vendor\Thing [Version=1.0]'
-Assert-Equal 'an unresolved placeholder never becomes a literal key' 1 @($unresolvedPlan.DetectionRules).Count
+# The plan no longer accepts a SoftIdent at all - a caller that still passes one
+# is a caller that has not been updated, and should fail loudly.
+$softRefused = $false
+try { $null = Get-AudiIntegrationPlan -PackageName 'INA_ETAS_INCA_x64_7.5.7-0001_MUL' -EnvironmentCode 'INA' -Rfc 'R' -SoftIdent 'HKLM:\X' }
+catch { $softRefused = $true }
+Assert-True 'a SoftIdent parameter is refused' $softRefused
+Assert-True 'and the plan carries no SoftIdent field' (-not $incaPlan.PSObject.Properties['SoftIdent'])
 
 # One rule reads as one rule - no dangling "AND" for a condition that is not
-# there. The formatter still joins with AND when there IS more than one, which
-# is what a two-rule package would need, so both shapes are checked.
-$oneLine = Format-AudiDetectionRule -Rules $softPlan.DetectionRules
+# there.
+$oneLine = Format-AudiDetectionRule -Rules $incaPlan.DetectionRules
 Assert-True 'a single rule reads back without a dangling AND' `
     ($oneLine -and $oneLine -notlike '*AND*') $oneLine
 Assert-True 'and it names the branding key it checks' ($oneLine -like '*Software\VWG\CM\*') $oneLine
 
-$twoLine = Format-AudiDetectionRule -Rules @(
-    $softPlan.DetectionRules[0],
-    [pscustomobject]@{ Source = 'SoftIdent'; Hive = 'HKLM'; Key = 'SOFTWARE\Vendor\Thing'
-                       ValueName = 'Version'; Value = '1.0'; DataType = 'String'; Is64Bit = $true; Method = 'Value' })
-Assert-True 'two rules are joined with AND, for when the second is switched on' `
-    ($twoLine -like '*AND*') $twoLine
+# Defaults.xml must not quietly grow a second rule back.
+$defaultsDoc = [xml](Get-Content -LiteralPath (Join-Path (Get-AudiConfigRoot) 'Defaults.xml') -Raw)
+Assert-True 'Defaults.xml declares no SoftIdent detection' ($null -eq $defaultsDoc.SelectSingleNode('/Defaults/SoftIdentDetection'))
+Assert-True 'and reads no SoftIdent from any script' ($null -eq $defaultsDoc.SelectSingleNode("//Field[@name='SoftIdent']"))
 
 # The test site is a plain environment file like any other - its own site code
 # and server, everything else ICZ's. Skipped once it is deleted.
@@ -463,6 +669,35 @@ $made = ($fmt.processPrefixEn.Replace('{processes}', 'plugin-container,plugin-ha
 Assert-Equal 'the description reads exactly as Audi specified' `
     'The following applications will be closed for installation: plugin-container,plugin-hang-ui,firefox. Mozilla Firefox is a free and open source web browser which is made by the Mozilla Foundation and its subsidiary, the Mozilla Corporation.' `
     $made
+
+# ---- against the real WinMerge package, with the v4.1 "Software Integration
+#      Level 3 Request" form (headings without "Short", two Word files in the
+#      package, hyphen in the folder name). Skipped where the package is absent.
+$wmPkg = 'C:\temp\INA_WinMerge_WinMerge_x64_2.16.58-0001_test'
+if (Test-Path -LiteralPath $wmPkg) {
+    Write-Host ''
+    Write-Host 'The real WinMerge package' -ForegroundColor Cyan
+    $wm = Read-AudiPackageDetail -PackagePath $wmPkg
+    Assert-True  'the Software Integration request form is the document read' `
+        ((Split-Path -Leaf $wm.DocumentPath) -like '*Software Integration Level 3_request*') $wm.DocumentPath
+    Assert-True  'not install_document.docx' ((Split-Path -Leaf $wm.DocumentPath) -ne 'install_document.docx')
+    Assert-Equal 'install title from the script' 'WinMerge 2.16.58' $wm.Fields['InstallTitle']
+    Assert-Equal 'RFC from the script'           'AES-1-020879-A'   $wm.Fields['OrderNumber']
+    Assert-Equal 'the English description: processes first, then the SHORT sentence' `
+        'The following applications will be closed for installation: WinMergeU,Winmerge. WinMerge is a free differencing and merging software tool for files and folders.' `
+        $wm.Fields['ApplicationDescriptionEN']
+    Assert-True  'the German description follows the same shape' `
+        ($wm.Fields['ApplicationDescriptionDE'] -like 'Folgende Anwendungen werden fuer die Installation geschlossen: WinMergeU,Winmerge. WinMerge ist eine freie Software*') $wm.Fields['ApplicationDescriptionDE']
+    Assert-True  'the long paragraph is NOT taken' ($wm.Fields['ApplicationDescriptionEN'] -notlike '*Open Source differencing*')
+    Assert-Equal 'both Windows versions ticked'    'Win10x64,Win11x64' (@($wm.OperatingSystems) -join ',')
+    Assert-Equal 'the predecessor package is read' 'INA_Winmerge_Winmerge_x64_2.16.46_0001_MUL' $wm.Fields['PredecessorPackage']
+    Assert-True  'and that it is to be discontinued' $wm.Fields.Contains('PredecessorDiscontinued')
+    $wmSites = @($wm.Fields.Keys | Where-Object { $_ -like 'Site:*' } | ForEach-Object { $_.Substring(5) })
+    Assert-Equal 'the five ticked sites, none of the four unticked' 'IN1/NE1,GY1,SJ1,IN9,NE9' ($wmSites -join ',')
+    Assert-Equal 'the software category'          'Learning & Collaboration' $wm.Fields['SoftwareCategory']
+    Assert-Equal 'SCCM spelling of the folder name' 'INA_WinMerge_WinMerge_x64_2.16.58_0001_test' (Get-AudiSccmName -PackageName (Split-Path -Leaf $wmPkg))
+    Assert-Equal 'branding key keeps the hyphen'    'WinMerge_WinMerge_x64_2.16.58-0001_test' (Get-AudiBrandingKey -PackageName (Split-Path -Leaf $wmPkg))
+}
 
 # ---- against the real package Audi supplied
 $realPkg = 'C:\temp\INA_Microsoft_WindowsDesktopRuntime_x86_10.0.9.50000-0001_ZXX'

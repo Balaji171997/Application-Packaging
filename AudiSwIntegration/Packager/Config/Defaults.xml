@@ -1,0 +1,517 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Values that are identical in ICZ, INA and PCZ.
+
+  In the tool being replaced these values were repeated in all 36 environment
+  files and in the script itself. Three copies of the same value drift apart,
+  which is how PCZ ended up holding INA's security scope, application folder and
+  content path. They are held once here instead.
+
+  Regex patterns below use \x22 for a double quote so the XML stays readable.
+-->
+<Defaults schemaVersion="1.0">
+
+  <!-- What the deployment type runs. repair="" leaves the Repair command empty,
+       which is what the old tool did - it had no <RepairCommandline> at all.
+       PSADT supports it, so it is offered here as one edit. -->
+  <Commands install="Invoke-AppDeployToolkit.exe Install"
+            uninstall="Invoke-AppDeployToolkit.exe Uninstall"
+            repair="Invoke-AppDeployToolkit.exe Repair"/>
+
+  <!--
+    The application's Distribution Settings tab in the console.
+
+    onDemand="true"          "Enable for on-demand distribution" - when a client
+                             asks for content that is not on its distribution
+                             point, distribute it there on demand. Their tool set
+                             this; ours did not, which is why the tick box was
+                             empty on the application it made.
+
+    prestaged="AutoDownload" the "Prestaged distribution point settings" radio:
+                               AutoDownload               automatically download
+                               DownloadOnlyContentChange  changes only
+                               ManualCopy                 copy it by hand
+                             ManualCopy is what SCCM defaults to, and it is why
+                             the third radio was selected on ours.
+  -->
+  <Distribution onDemand="true" prestaged="AutoDownload"/>
+
+  <!-- The deployment's own settings, as opposed to the deployment type's.
+       allowUserRepair="true" ticks "Allow end users to attempt to repair this
+       application" on the Deployment Settings tab. SCCM leaves it unticked, so
+       the Repair command sat on the deployment type with no way for a user to
+       run it. Only applies to Install deployments. -->
+  <Deployment allowUserRepair="true"/>
+
+  <!--
+    Steps that can be switched off for every environment at once.
+
+    createArsGroup="false" - the Active Directory access group is NOT created.
+
+    On the first real run that reached it, the directory refused the request:
+
+        malformedRequest - Some of the specified attributes for the 'group'
+        object class are not defined in the schema.
+
+    Everything in SCCM is finished and correct by the time this step runs, so
+    letting it fail would roll a good application back out over a step nobody
+    can use yet. The step still RUNS and still reports - as SKIPPED, saying the
+    group was not created - so nobody is left believing it exists.
+
+    To turn it back on: settle the attribute names with whoever owns the ARS
+    schema (the old tool sent 'description' and 'edsva-Auftragsnummer'), then
+    set this to true. Nothing else changes.
+  -->
+  <Steps createArsGroup="false"/>
+
+  <Naming brandingRegistryRoot="Software\VWG\CM\"
+          deploymentTypeSuffix="_INSTALLCOMPUTER"
+          arsGroupPrefix="G-AUDI-AG-SW-"
+          arsDescriptionPrefix="Software-Filtergroups - "/>
+
+  <Application category="Development"
+               maxRuntimeMinutes="120"
+               estimatedInstallMinutes="10"
+               defaultLanguage="en-us"/>
+
+  <!--
+    ONE detection rule: the branding key the package itself writes.
+
+        HKLM\Software\VWG\CM\<branding key>   Revision = <revision>
+
+    There is no separate "detection key" to keep in step: the branding key IS
+    the rule, with brandingRegistryRoot in front of it. Nothing else is
+    detected on - in particular not the vendor's own uninstall entry, which
+    moves between builds and would make an installed package read as missing.
+  -->
+  <Detection valueName="Revision" dataType="String" is64Bit="true" method="Value"/>
+
+  <DeploymentType distributionPointSetting="AutoDownload"
+                  slowNetworkDeploymentMode="Download"
+                  programVisibility="Hidden"
+                  installationBehaviorType="InstallForSystem"
+                  logonRequirementType="WhetherOrNotUserLoggedOn"
+                  allowClientToShareContent="false"
+                  allowClientToUseFallback="true"
+                  persistContentInClientCache="false"
+                  run32BitOn64Bit="false"/>
+
+  <!-- Windows 7 is out of support and no longer packaged for, so it is not
+       offered. Adding an operating system back is one line here, not a code
+       change. -->
+  <OperatingSystems>
+    <OperatingSystem key="Win10x64" label="Windows 10 x64"
+                     value="Windows/All_x64_Windows_10_and_higher_Clients" selectedByDefault="true"/>
+    <OperatingSystem key="Win11x64" label="Windows 11 x64"
+                     value="Windows/All_x64_Windows_11_and_higher_Clients" selectedByDefault="false"/>
+  </OperatingSystems>
+
+  <!-- Stamped onto every collection the tool creates. The old tool wrote
+       "created by manual MCB script", which said nothing useful.
+
+       NO PERSONAL NAME APPEARS HERE, BY REQUIREMENT.
+       Audi does not want the requester's name written to any SCCM object. The
+       job ID is the link instead: it is recorded here, and the tool's own log
+       on the server maps that job ID back to the person who asked. Anyone
+       auditing an object in the console looks up the job ID.
+
+       {requester} is deliberately NOT available as a placeholder. Putting it
+       back into this template does not work - the tool rejects the config file
+       at load with an explanation, so the rule cannot be undone by an edit on
+       the server. Available placeholders: {package} {jobId} {rfc} -->
+  <Comments collection="Created by the SCCM Integrator | job {jobId} | RFC {rfc}"
+            application="Created by the SCCM Integrator | job {jobId} | RFC {rfc}"/>
+
+  <!-- The RFC is RECORDED, not REQUIRED.
+
+       The application name already identifies the package uniquely - SCCM will
+       not accept two with the same name - so nothing depends on the RFC to know
+       WHAT an object is. The RFC only ever answered a different question: which
+       change request asked for it.
+
+       Audi's tool has an RFC field, so this one does too, and when a packager
+       fills it in it is written onto the application and its collections
+       alongside the job id. Left empty, the comment simply omits it.
+
+       What that costs, stated plainly so the choice stays informed: no personal
+       name is kept anywhere on the SCCM side by design, and nothing else on the
+       server records who submitted a job. With no RFC, an object in the console
+       traces back to a job id in this tool's log and no further - not to a
+       person. If Audi ever wants every change tied to a requester, this is the
+       one switch that does it. -->
+  <Audit requireRfc="false"/>
+
+  <!-- The environments the packager WINDOW offers, in this order.
+
+       The environment is the packager's explicit choice. It is NOT read from
+       the package name: an INA_ package is published into ICZ (test) first and
+       INA (production) after, under the same name. The window writes the job
+       into the chosen environment's folder under the drop root, and the
+       server's collector serves each folder with that environment's own file.
+
+       PCZ is deliberately not offered until its environment file is confirmed
+       (it is still verified="false"). Offering it is one line here, not a
+       code change. -->
+  <!-- The window never reaches the SCCM content store: package content goes
+       into the drop folder's Sources beside the job, and the SCCM server
+       copies it into the store (Content/@share in ITS environment file) as
+       the job's first step. So nothing about the store is needed here. -->
+  <ClientEnvironments>
+    <Environment code="ICZ" label="ICZ  -  Test"/>
+    <Environment code="INA" label="INA  -  Production"/>
+  </ClientEnvironments>
+
+  <!-- What Software Center shows under the application name.
+
+       When the package closes processes before installing, the user is told so
+       FIRST - somebody who has a file open in the application being replaced
+       needs that before the marketing sentence, not after it.
+
+           The following processes will be closed for installation: git-bash,
+           minty,bash. Git is a free software for distributed version control...
+
+       The list comes from VWG_ProcToCloseNonUI, falling back to VWG_ProcToClose.
+       When the package closes nothing, neither line appears and the description
+       stands on its own - no empty "will be closed:" sentence.
+
+       {processes} is the only placeholder. -->
+  <DescriptionFormat
+      processPrefixEn="The following applications will be closed for installation: {processes}. "
+      processPrefixDe="Folgende Anwendungen werden fuer die Installation geschlossen: {processes}. "/>
+
+  <!-- Package name layout.
+
+       A real Audi package folder is the SITE CODE followed by the branding key:
+           INA_ETAS_INCA_x64_7.5.7-0001_MUL
+           ^^^ ^^^^ ^^^^ ^^^ ^^^^^ ^^^^ ^^^
+           |   |    |    |   |     |    language
+           |   |    |    |   |     revision      <- joined to the version by '-'
+           |   |    |    |   version
+           |   |    |    architecture
+           |   |    product      <- may itself contain '_'
+           |   publisher
+           site
+
+       Each pattern is tried in order and the first that matches wins, so more
+       than one naming convention can be supported at once without a code
+       change. Named groups use the (?'Name'...) form so no XML escaping is
+       needed. Every group named here becomes a field the window can show. -->
+  <!-- TWO SPELLINGS OF ONE NAME - Audi's rule, 15.09.2026.
+
+         browsed folder     INA_WinMerge_WinMerge_x64_2.16.58-0001_test   (hyphen, as built)
+         in SCCM            INA_WinMerge_WinMerge_x64_2.16.58_0001_test   (underscore)
+         branding key       WinMerge_WinMerge_x64_2.16.58-0001_test       (hyphen, as the script writes it)
+
+       sccmNameFormat is what the application, its deployment type, every
+       collection, the AD group and the content folder on the share are called:
+       underscore before the revision, always. The browsed folder may be
+       spelled either way; the window shows the SCCM spelling in its header the
+       moment a package is read, and the server spells it that way again from
+       the job file, so a hyphen can never reach the site.
+
+       brandingKeyFormat keeps the hyphen because the deployment script writes
+       the branding key that way, and detection reads exactly that key. -->
+  <PackageName separator="_"
+               sccmNameFormat="{Site}_{Publisher}_{Product}_{Architecture}_{Version}_{Revision}_{Language}"
+               brandingKeyFormat="{Publisher}_{Product}_{Architecture}_{Version}-{Revision}_{Language}">
+
+    <!-- as built: version and revision joined by a hyphen -->
+    <Pattern>^(?'Site'[^_]+)_(?'Publisher'[^_]+)_(?'Product'.+)_(?'Architecture'[^_]+)_(?'Version'[^_]+)-(?'Revision'[^_-]+)_(?'Language'[^_]+)$</Pattern>
+
+    <!-- as it is in SCCM: revision as a part of its own -->
+    <Pattern>^(?'Site'[^_]+)_(?'Publisher'[^_]+)_(?'Product'.+)_(?'Architecture'[^_]+)_(?'Version'[^_]+)_(?'Revision'[^_]+)_(?'Language'[^_]+)$</Pattern>
+  </PackageName>
+
+  <!-- Where the packager window fills itself from, so nothing already recorded
+       in the package has to be retyped. Anything that does not match is simply
+       left blank and the packager completes it by hand. -->
+  <PackageSource searchDepth="3">
+
+    <!-- PSADT v4: values live in the $adtSession hashtable. -->
+    <Script generation="v4" fileName="Invoke-AppDeployToolkit.ps1">
+      <Field name="Publisher"    pattern="AppVendor\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Product"      pattern="AppName\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Version"      pattern="AppVersion\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Architecture" pattern="AppArch\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Language"     pattern="AppLang\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Revision"     pattern="AppRevision\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="ScriptAuthor" pattern="AppScriptAuthor\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <!-- The title a user sees in Software Center. The package name is a
+           filing code, not something to show somebody. -->
+      <!-- The title a user sees in Software Center. PSADT 4 writes it inside the
+           $adtSession hashtable; older packages used the friendly name. -->
+      <Field name="InstallTitle"  pattern="InstallTitle\s*=\s*['\x22]([^'\x22]+)['\x22]" lastMatchWins="false"/>
+      <Field name="InstallTitle"  pattern="AppScriptFriendlyName\s*=\s*['\x22]([^'\x22]+)['\x22]" lastMatchWins="false"/>
+      <!-- Processes PSADT closes before installing. NonUI is preferred; plain
+           ProcToClose is the fallback. -->
+      <!-- THE WHOLE RIGHT-HAND SIDE IS CAPTURED, NOT A QUOTED STRING.
+           A real package writes these as PowerShell, in three shapes:
+
+             AppProcessesToClose = @()
+             AppProcessesToClose = @(''firefox'', ''plugin-container'')
+             $Global:VWG_ProcToClose = $adtSession.AppProcessesToClose
+
+           The last is an INDIRECTION - the names are in the session hashtable,
+           not on that line - so the line is captured raw and the tool resolves
+           what it points at. \b after ProcToClose stops it matching
+           ProcToCloseNonUI, which starts with the same letters. -->
+      <Field name="AppProcessesToClose" pattern="(?m)^\s*AppProcessesToClose\s*=\s*(.+?)\s*$" lastMatchWins="false"/>
+      <Field name="ProcToCloseNonUI"    pattern="(?m)^.*VWG_ProcToCloseNonUI\s*=\s*(.+?)\s*$" lastMatchWins="false"/>
+      <Field name="ProcToClose"         pattern="(?m)^.*VWG_ProcToClose\b\s*=\s*(.+?)\s*$" lastMatchWins="false"/>
+
+      <!-- The names are the same in v3 and v4, so one pattern serves both. -->
+      <Field name="OrderNumber"  pattern="VWG_OrderNumber\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Portfolio"    pattern="VWG_Portfv\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+    </Script>
+
+    <!-- PSADT v3: values are plain variables at the top of the script. -->
+    <Script generation="v3" fileName="Deploy-Application.ps1">
+      <Field name="Publisher"    pattern="\$appVendor\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Product"      pattern="\$appName\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Version"      pattern="\$appVersion\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Architecture" pattern="\$appArch\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Language"     pattern="\$appLang\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Revision"     pattern="\$appRevision\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="ScriptAuthor" pattern="\$appScriptAuthor\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <!-- v3 had no InstallTitle; the friendly name is what Software Center showed. -->
+      <Field name="InstallTitle" pattern="\$installTitle\s*=\s*['\x22]([^'\x22]+)['\x22]" lastMatchWins="false"/>
+      <Field name="InstallTitle" pattern="\$appScriptFriendlyName\s*=\s*['\x22]([^'\x22]+)['\x22]" lastMatchWins="false"/>
+
+      <Field name="OrderNumber"  pattern="VWG_OrderNumber\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+      <Field name="Portfolio"    pattern="VWG_Portfv\s*=\s*['\x22]([^'\x22]*)['\x22]"/>
+    </Script>
+
+    <!-- The "Software Package Request" document that ships with the package.
+
+         CALIBRATED against a real Audi request form (INA_ETAS_INCA). That form
+         is a TABLE: the label sits on one line and the value on the NEXT one,
+         indented by a tab. So these patterns match a label line and then take
+         the line below it - not "label: value" on a single line.
+
+         [ \t] is used rather than \s so the match cannot run past the following
+         line and swallow the next label.
+
+         Anything that does not match is simply left blank for the packager to
+         type. Adjusting a label is an edit here, not a code change. -->
+    <!-- *.doc* deliberately, not *.docx: an old binary .doc cannot be read, but
+         it can be reported. Matching only .docx makes a package that has a .doc
+         look like a package with no document at all, which sends the packager
+         hunting for a file that is sitting right there. -->
+    <Document filter="*.doc*">
+      <!-- THE ORDER THE WORD FILES ARE READ IN.
+           Every Word file in the package is read, and each field is taken from
+           the first file that has it. Audi's request form is named like
+
+               WinMerge-2_16_58_Software Integration Level 3_request_(1).docx
+
+           so "Software Integration" comes first; the install instruction
+           ("install_document.docx", "Install instruction.docx") fills in what
+           the form left blank; any other document is a last resort. Patterns
+           are plain text, matched anywhere in the file name, case-insensitive,
+           in this order; among equals a .docx beats a .doc and newest wins. -->
+      <NamePattern>Software Integration</NamePattern>
+      <NamePattern>Install</NamePattern>
+
+      <!-- THE DESCRIPTION, AND NOTHING ELSE.
+           Everything else comes from the deployment script, which is the
+           reliable source. The document is only consulted for the wording a
+           user will read in Software Center.
+
+           Order of preference, per language:
+             1. Short description of the product
+             2. Detailed description of the product   (used only if 1 is empty)
+             3. nothing here - the window falls back to "Publisher - Product -
+                Version", the way it has always been done
+
+           If Audi later wants more from this form, add fields here. -->
+      <!-- Two generations of the form, both in use:
+
+             older  "Short description of the product in English"  +  a separate
+                    "Detailed description ..." label
+             v4.x   "Description of the product in English"  -  the SHORT sentence
+                    on the first line under the label, the long text after a
+                    blank line  (Software Integration Level 3 Request, WinMerge)
+
+           The same field name twice is deliberate: patterns are tried in order
+           and the first that yields a value wins, so whichever heading the
+           form carries, the short line is what is taken. -->
+      <Field name="ApplicationDescriptionEN"     pattern="(?im)^[ \t]*Short description of the product in English[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+      <Field name="ApplicationDescriptionEN"     pattern="(?im)^[ \t]*Description of the product in English[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+      <Field name="ApplicationDescriptionDE"     pattern="(?im)^[ \t]*Short description of the product in German[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+      <Field name="ApplicationDescriptionDE"     pattern="(?im)^[ \t]*Description of the product in German[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+      <Field name="ApplicationDescriptionENLong" pattern="(?im)^[ \t]*Detailed description of the product in English[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+      <Field name="ApplicationDescriptionDELong" pattern="(?im)^[ \t]*Detailed description of the product in German[ \t]*\r?\n[ \t]*(.+?)[ \t]*$"/>
+
+      <!-- The supported operating systems, as ticked on the form. A field named
+           OperatingSystem:<key> ticks the matching box in the window. The key
+           must match an <OperatingSystem key="..."> above. -->
+      <Field name="OperatingSystem:Win10x64" pattern="(&#9746;)[ \t]*Windows 10"/>
+      <Field name="OperatingSystem:Win11x64" pattern="(&#9746;)[ \t]*Windows 11"/>
+
+      <!-- FOR INFORMATION - shown to the packager, not acted on (yet).
+
+           Predecessor: the form names the package this one replaces and says
+           whether it is to be discontinued with the release. The window says
+           so, and the packager uses Remove on it once this one is live. -->
+      <Field name="PredecessorPackage"      pattern="(?im)^[ \t]*Name of the predecessor package[ \t]*\r?\n[ \t]*(?:G-AUDI-AG-SW-[ \t]*)?([A-Za-z0-9_.\-]+)[ \t\r]*$"/>
+      <Field name="PredecessorDiscontinued" pattern="(&#9746;)[ \t]*Predecessor package is replaced by new package and shall be discontinued"/>
+
+      <!-- The SCCM sites ticked under "In which SCCM sites should the package
+           be available?". Reported beside the environment file's collection
+           list so a difference is visible before anything is created. -->
+      <Field name="Site:IN1/NE1" pattern="(&#9746;)[ \t]*IN1/NE1"/>
+      <Field name="Site:GY1"     pattern="(&#9746;)[ \t]*GY1[ \t]"/>
+      <Field name="Site:SJ1"     pattern="(&#9746;)[ \t]*SJ1[ \t]"/>
+      <Field name="Site:IN9"     pattern="(&#9746;)[ \t]*IN9[ \t]"/>
+      <Field name="Site:NE9"     pattern="(&#9746;)[ \t]*NE9[ \t]"/>
+      <Field name="Site:PI1/PN1" pattern="(&#9746;)[ \t]*PI1/PN1"/>
+      <Field name="Site:PG1"     pattern="(&#9746;)[ \t]*PG1[ \t]"/>
+      <Field name="Site:PJ1"     pattern="(&#9746;)[ \t]*PJ1[ \t]"/>
+      <Field name="Site:PS1"     pattern="(&#9746;)[ \t]*PS1[ \t]"/>
+
+      <!-- The software category ticked on the form. Today every application
+           gets Application/@category; this is what the form asked for. -->
+      <Field name="SoftwareCategory" pattern="(?m)&#9746;[ \t]*(Learning &amp; Collaboration|Business \(Business process\)|Office Tools|Graphics / Picture editing|Internet|Developer tools|C-Layer|Administration Tools|Client based|Network)[ \t\r]*$"/>
+    </Document>
+
+  </PackageSource>
+
+  <!-- Operational behaviour.
+
+       The tool being replaced waited a flat 30 seconds after each deployment and
+       never retried anything. Here the waiting is a real check with a timeout,
+       and only failures matching TransientErrors are retried - anything else
+       fails immediately, so a genuine error is not buried under retries.
+
+       logRoot is per job: <logRoot>\<environment>\<package>\<jobId>. -->
+  <Runtime retryCount="3"
+           retryDelaySeconds="5"
+           distributionTimeoutMinutes="30"
+           distributionPollSeconds="20"
+           logRoot="%ProgramData%\Audi\SwIntegration\Logs"
+           resultTimeoutMinutes="30"
+           logRetentionDays="180"
+           lockTimeoutMinutes="60">
+    <TransientErrors>
+      <Pattern>RPC server is unavailable</Pattern>
+      <Pattern>The operation timed out</Pattern>
+      <Pattern>is busy|being used by another</Pattern>
+      <Pattern>Generic failure</Pattern>
+      <Pattern>transport connection|connection was closed</Pattern>
+      <Pattern>SMS Provider|provider is not available</Pattern>
+      <Pattern>deadlock|timeout expired</Pattern>
+    </TransientErrors>
+  </Runtime>
+
+  <!-- ==================================================================
+       WHAT THE MODIFY TAB CAN EDIT
+
+       Every setting the tool itself sets when it creates an application is
+       listed here, with the values SCCM will accept for it. The window builds
+       its editor from this list, so adding a settable option is an edit to
+       this file - not a code change, which is the same rule the environment
+       files follow.
+
+       scope     Application     = a property of the application
+                 DeploymentType  = a property of its deployment type
+       editor    Text | Number | Choice
+       property  the name to read and write on the SCCM side
+
+       Only settings this tool actually sets are here. Editing something the
+       tool never set would be changing a value nobody chose, which is how a
+       package quietly stops matching its own documentation.
+       ================================================================== -->
+  <Settings>
+
+    <!-- the application -->
+    <!-- editable="false" means: show it, but do not offer to change it.
+
+         Publisher, version and language are part of the PACKAGE NAME. Changing
+         one of them in SCCM alone would leave the application disagreeing with
+         the folder its content was built from, and with its own branding key
+         and detection rule. That is a repackage, not a modification: remove
+         this application and integrate the new one. -->
+    <Setting key="Title"       scope="Application" property="LocalizedDisplayName"
+             label="Display name (EN)"  editor="Text" editable="false"
+             lockedReason="Built from the package name. Repackage and integrate again to change it."/>
+    <Setting key="Description" scope="Application" property="LocalizedDescription"
+             label="Description (EN)"   editor="Text"
+             writeParameter="LocalizedApplicationDescription"
+             hint="Shown under the name in Software Center."/>
+    <Setting key="Publisher"   scope="Application" property="Publisher"
+             label="Publisher"          editor="Text" editable="false"
+             lockedReason="Part of the package name. A different publisher is a different package - remove this one and integrate the new one."/>
+    <Setting key="Version"     scope="Application" property="SoftwareVersion"
+             label="Version"            editor="Text" editable="false"
+             lockedReason="Part of the package name. A new version is a new package - remove this one and integrate the new one."/>
+
+    <!-- the deployment type -->
+    <Setting key="InstallCommand"   scope="DeploymentType" property="InstallCommandLine"
+             label="Install command"   editor="Text" writeParameter="InstallCommand"/>
+    <Setting key="UninstallCommand" scope="DeploymentType" property="UninstallCommandLine"
+             label="Uninstall command" editor="Text" writeParameter="UninstallCommand"/>
+    <Setting key="RepairCommand"    scope="DeploymentType" property="RepairCommandLine"
+             label="Repair command"    editor="Text" writeParameter="RepairCommand"/>
+
+    <Setting key="EstimatedRuntime" scope="DeploymentType" property="EstimatedRuntimeMins"
+             label="Estimated install time" editor="Number" unit="minutes"
+             writeParameter="EstimatedRuntimeMins"
+             hint="Shown to the user in Software Center. Does not stop anything."/>
+    <Setting key="MaximumRuntime"   scope="DeploymentType" property="MaximumRuntimeMins"
+             label="Maximum run time"      editor="Number" unit="minutes"
+             writeParameter="MaximumRuntimeMins"
+             hint="SCCM gives up on the install after this."/>
+
+    <!-- writeValue differs from value here: SDMPackageXML reports the context
+         as System/User/Any, but Set-CMScriptDeploymentType wants the
+         InstallFor... names for the same three states. Reading and writing use
+         different vocabularies for one setting, so both are recorded. -->
+    <Setting key="ExecutionContext" scope="DeploymentType" property="ExecutionContext"
+             label="Install behaviour" editor="Choice" writeParameter="InstallationBehaviorType">
+      <Option value="System" writeValue="InstallForSystem">For system - no user has to be signed in</Option>
+      <Option value="User"   writeValue="InstallForUser">For the signed-in user</Option>
+      <Option value="Any"    writeValue="InstallForSystemIfResourceIsDeviceOtherwiseInstallForUser">For system if a device, otherwise for the user</Option>
+    </Setting>
+
+    <Setting key="LogonRequirement" scope="DeploymentType" property="RequiresLogOn"
+             label="Logon requirement" editor="Choice" writeParameter="LogonRequirementType">
+      <Option value=""      writeValue="WhetherOrNotUserLoggedOn">Whether or not a user is signed in</Option>
+      <Option value="True"  writeValue="OnlyWhenUserLoggedOn">Only when a user is signed in</Option>
+      <Option value="False" writeValue="OnlyWhenNoUserLoggedOn">Only when no user is signed in</Option>
+    </Setting>
+
+    <Setting key="RebootBehavior" scope="DeploymentType" property="PostInstallBehavior"
+             label="After installing" editor="Choice" writeParameter="RebootBehavior">
+      <Option value="BasedOnExitCode">Decide from the return code</Option>
+      <Option value="NoAction">No specific action</Option>
+      <Option value="ProgramReboot">The software forces a restart</Option>
+      <Option value="ForceReboot">SCCM forces a restart</Option>
+    </Setting>
+
+    <Setting key="UserInteraction" scope="DeploymentType" property="RequireUserInteraction"
+             label="User can see the install" editor="Choice" writeParameter="RequireUserInteraction">
+      <Option value="False">No - runs hidden</Option>
+      <Option value="True">Yes</Option>
+    </Setting>
+
+    <Setting key="SlowNetwork" scope="DeploymentType" property="SlowNetworkDeploymentMode"
+             label="On a slow network" editor="Choice" writeParameter="SlowNetworkDeploymentMode">
+      <Option value="DoNothing">Do not install</Option>
+      <Option value="Download">Download and install</Option>
+      <Option value="DownloadContentForStreaming">Install straight from the distribution point</Option>
+    </Setting>
+
+    <Setting key="PersistInCache" scope="DeploymentType" property="PersistContentInCache"
+             label="Keep content in the client cache" editor="Choice"
+             writeParameter="PersistContentInClientCache">
+      <Option value="True">Yes</Option>
+      <Option value="False">No</Option>
+    </Setting>
+
+    <Setting key="ContentLocation" scope="DeploymentType" property="ContentLocation"
+             label="Content location" editor="Text" writeParameter="ContentLocation"
+             hint="Must be a UNC path the distribution point can reach."/>
+
+  </Settings>
+
+</Defaults>

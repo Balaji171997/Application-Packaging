@@ -1,0 +1,147 @@
+﻿<!--
+ <copyright file="dashboard.html" company="Microsoft">
+    Copyright (c) 2018 Microsoft Corporation.  All rights reserved.
+ </copyright>
+ <purpose>
+ </purpose>
+ <notes>
+ </notes>
+-->
+
+<!DOCTYPE html>
+
+<html ng-app="dashboard">
+<head>
+    <title>Management Insights Dashboard</title>
+    <meta charset="utf-8" />
+    <meta content="IE=edge" http-equiv="X-UA-Compatible" />
+    <meta name="description" content="Task Sequence dashboard" />
+    <meta name="keywords" content="Task Sequence, dashboard" />
+
+    <link href="css/c3.min.css" rel="stylesheet" type="text/css" />
+    <link href="css/columns.css" rel="stylesheet" type="text/css" />
+    <link href="css/styles.css" rel="stylesheet" type="text/css" />
+    <link href="../css/c3.min.css" rel="stylesheet" type="text/css" />
+    <link href="../css/columns.css" rel="stylesheet" type="text/css">
+
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="../js/utility.js" type="text/javascript"></script>
+    <script src="../js/d3.min.js" type="text/javascript"></script>
+    <script src="../js/c3.min.js" type="text/javascript"></script>
+    <script src="../js/external.js" type="text/javascript"></script>
+    <script src="js/controller.js" type="text/javascript"></script>
+
+    <noscript>Javascript is not enabled</noscript>
+</head>
+
+<body ng-controller="dashboardController">
+    <!-- Filters -->
+    <div class="tile-container-1-8-5-short">
+        <div class="tile-1-24-5-short">
+            <label class="labelStyle">
+                <span> {{ criticalString }}</span>
+                <br />
+                <input ng-model="critical" type="checkbox" name="{{ criticalString }}" value="{{ criticalString }}" [checked]="critical=='false'" ng-change="refresh();" tabindex="4" />
+            </label>
+        </div>
+        <div class="tile-1-24-5-short">
+            <label class="labelStyle">
+                <span> {{ recommendedString }}</span>
+                <br />
+                <input ng-model="recommended" type="checkbox" name="{{ recommendedString }}" value="{{ recommendedString }}" [checked]="recommended=='false'" ng-change="refresh();" tabindex="3">
+            </label>
+        </div>
+        <div class="tile-1-24-5-short">
+            <label class="labelStyle">
+                <span> {{ optionalString }}</span>
+                <br />
+                <input ng-model="optional" type="checkbox" name="{{ optionalString }}" value="{{ optionalString }}" [checked]="optional=='false'" ng-change="refresh();" tabindex="2">
+            </label>
+        </div>
+        <div class="tile-1-24-5-short">
+            <label class="labelStyle">
+                <span>{{ completedString }}</span>
+                <br />
+                <input ng-model="completed" type="checkbox" name="{{ completedString }}" value="{{ completedString }}" [checked]="completed=='false'" ng-change="refresh();" tabindex="1" />
+            </label>
+        </div>
+    </div>
+    <!-- Donut Charts -->
+    <div class="tile-container-2-6">
+        <!-- Management Insights Index -->
+        <div class="tile-2-2">
+            <h1 ng-bind="strings.ManagementInsightsIndex" tabindex="5"></h1>
+            <div id="ManagementInsightsIndexAria" tabindex="5">
+                <div id="ManagementInsightsIndex">
+
+                </div>
+            </div>
+            <br>
+            <p ng-bind="getString('ManagementInsightsIndexDescription')" tabindex="5"></p>
+            <!--<a href="https://go.microsoft.com/fwlink/?linkid=2186108"><p ng-bind="getString('LearnMore')"></p></a>-->
+        </div>
+        <!-- Management Insights Groups -->
+        <div class="tile-2-2">
+            <h1 ng-bind="getString('ManagementInsightsGroups')" tabindex="6"></h1>
+            <div id="ManagementInsightsGroupsAria" tabindex="6">
+                <div id="ManagementInsightsGroups">
+
+                </div>
+            </div>
+        </div>
+        <!-- Management Insights Priority -->
+        <div class="tile-2-2">
+            <h1 ng-bind="getString('ManagementInsightsPriority')" tabindex="7"></h1>
+            <div id="ManagementInsightsPriorityAria" tabindex="7">
+                <div id="ManagementInsightsPriority">
+
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cloud Insights Over Time by Severity (Last 60 days)-->
+    <!--
+    <div class="tile-container-2-6">
+        <div class="tile-2-6">
+            <h1 ng-bind="getString('InsightsOverTime')" tabindex="1"></h1>
+            <div id="InsightsOverTime">
+
+            </div>
+        </div>
+    </div>
+        -->
+    <!-- Recently Updated Insights -->
+    <div class="tile-container-2-6-2">
+        <div class="tile-2-6-2">
+            <h1 ng-bind="getString('RecentlyUpdatedInsights')" tabindex="8"></h1>
+            <form>
+                <div class="inner-addon">
+                    <input type="text" class="searchFilter" placeholder="{{filter}}" ng-model="search" tabindex="9" id="searchIcon" />
+                </div>
+            </form>
+
+            <table class="table table-bordered table-striped">
+                <thead>
+                    <tr>
+                        <td tabindex="10" ng-bind="getString('InsightName')"></td>
+                        <td tabindex="10" ng-bind="getString('Group')"></td>
+                        <td tabindex="10" ng-bind="getString('Priority')"></td>
+                        <td tabindex="10" ng-bind="getString('LastChange')"></td>
+                        <td tabindex="10" ng-bind="getString('Status')"></td>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr ng-repeat="insight in miRules | orderBy:['progress', '-priorityBit', 'lastChange'] | filter:search | limitTo:10" ng-click="drillThrough(insight.group)">
+                        <td tabindex="10" class="pointer">{{ insight.insightName }}</td>
+                        <td tabindex="10" class="pointer">{{ insight.group }}</td>
+                        <td tabindex="10" class="pointer">{{ insight.priority }}</td>
+                        <td tabindex="10" class="pointer">{{ insight.lastChange }}</td>
+                        <td tabindex="10" class="pointer">{{ insight.progress }}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>

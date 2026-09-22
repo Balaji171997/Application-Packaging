@@ -1,0 +1,39 @@
+# Settings for the watcher on the SCCM server (Watch-AudiSwDropFolder.ps1).
+# One setting per line, key = value. Lines starting with # are ignored.
+# Change a path here; no re-install of the scheduled task is needed.
+
+# The SCCM-side drop folder this server collects from - THIS environment's
+# subfolder, e.g. \\sccm-zone-share\SwIntegration$\INA  (or a local path when
+# the folder sits on this server). Point it at the root instead to serve every
+# environment folder underneath (one test machine only).
+DropFolder =
+
+# Where the engine is. Leave empty for the Engine\ folder beside the script.
+EngineRoot =
+
+# How many jobs one pass takes before it stops and lets the next pass start.
+MaxJobsPerRun = 10
+
+# A job that has shown no progress for this many minutes (server rebooted,
+# task killed) is closed as FAILED and reported back, so the package is free
+# again. 240 = the scheduled task's own 4-hour limit.
+StaleJobMinutes = 240
+
+# HOUSEKEEPING - how long things stay in this drop folder. The permanent
+# record of every job is the server log (C:\ProgramData\Audi\SwIntegration\
+# Logs\<env>\<package>\<jobId>\); the drop folder only feeds the window's
+# Jobs page. 0 = keep for ever.
+#   finished jobs (Done\)  move to Archive\<yyyy-MM>\ after this many days
+DoneRetentionDays = 90
+#   failed jobs (Failed\)  the same, kept longer - they are the ones people look up
+FailedRetentionDays = 180
+#   Archive\<yyyy-MM>\ folders are deleted after this many days
+ArchiveRetentionDays = 365
+#   a package's files in Sources\ with NO job waiting or running for it - left by
+#   a failed job nobody ran again - are deleted after this many days; the next
+#   Integrate copies them afresh. (Sources are cleared at once, whatever the
+#   job's outcome, as soon as the store holds a verified copy.)
+SourcesRetentionDays = 14
+#   ...and a LARGE package (this many GB or more) after this many days instead
+LargeSourcesGB = 8
+LargeSourcesRetentionDays = 2

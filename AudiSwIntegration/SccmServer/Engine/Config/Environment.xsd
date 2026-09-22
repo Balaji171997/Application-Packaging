@@ -1,0 +1,855 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Schema for the Audi SCCM Integration Tool configuration.
+
+  Two root elements:
+    <Environment>  one file per SCCM environment (ICZ.xml, INA.xml, PCZ.xml)
+    <Defaults>     one file for everything that is identical in every environment,
+                   including the rules for parsing a package name and for reading
+                   details out of a package folder.
+
+  Nothing environment-specific and no parsing rule lives in code. Adding an
+  environment is one new <Environment> file; changing how a package is read is
+  an edit to <Defaults>. Neither needs a rebuild.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified">
+
+  <xs:simpleType name="NonEmptyString">
+    <xs:restriction base="xs:string"><xs:minLength value="1"/></xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="SiteCode">
+    <xs:restriction base="xs:string"><xs:pattern value="[A-Z0-9]{3}"/></xs:restriction>
+  </xs:simpleType>
+
+  <!-- INPUT VALIDATION FOR THE JOB FILE  (xkcd 327 - "Exploits of a Mom")
+       ==================================================================
+       A job file is written by a packager's tool in another zone and read by
+       the service account on the SCCM server. Every value in it that can end
+       up in a PATH (the drop folder, Sources, the content store), in an SCCM
+       OBJECT NAME, or in a CMDLET PARAMETER is limited HERE, by character
+       class and length, before any code sees it. A file that breaks a rule
+       is rejected by the schema, filed to \Failed with the reason, and never
+       runs. Nothing is ever pieced together into a query or a command from
+       these values, so there is no injection to escape - but a name such as
+       "..\..\x" would still be a path, and this is what keeps it out. -->
+
+  <!-- The package name: site_publisher_product_arch_version-revision_language.
+       Letters, digits, dot, underscore, hyphen, plus. No slash, no backslash,
+       no space, no quote - so it can never leave the folder it is joined to. -->
+  <xs:simpleType name="PackageName">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[A-Za-z0-9][A-Za-z0-9._+\-]{2,199}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- job ids, RFC numbers, setting keys, operating-system keys -->
+  <xs:simpleType name="Identifier">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- an RFC is optional, so empty is allowed too -->
+  <xs:simpleType name="OptionalIdentifier">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="([A-Za-z0-9][A-Za-z0-9._\-]{0,63})?"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- a computer name: what NetBIOS and DNS allow, nothing else -->
+  <xs:simpleType name="HostName">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[A-Za-z0-9][A-Za-z0-9\-]{0,62}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- a collection name. The engine additionally refuses any name that is
+       not one of this package's own collections. -->
+  <xs:simpleType name="CollectionName">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[A-Za-z0-9][A-Za-z0-9 ._+\-]{0,254}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- one part of a package name as the packager corrected it on screen;
+       goes into SCCM object names, so the same characters as the name -->
+  <xs:simpleType name="NamePart">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[A-Za-z0-9 ._+\-]{0,128}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- free text that is shown in Software Center: no control characters,
+       and a length SCCM itself accepts. Passed to cmdlets as parameters,
+       never built into anything. -->
+  <xs:simpleType name="DisplayName">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[^\p{Cc}]{0,256}"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="DisplayText">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[^\p{Cc}]{0,2048}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="DeploymentAction">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="Available"/>
+      <xs:enumeration value="Required"/>
+      <xs:enumeration value="Uninstall"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- ========================================================== Environment -->
+  <xs:element name="Environment">
+    <xs:complexType>
+      <xs:sequence>
+
+        <!-- The Windows domain this environment lives in. A workstation in this
+             domain resolves to this environment. PCZ has two possible names. -->
+        <xs:element name="Domain">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Name" type="NonEmptyString" maxOccurs="unbounded"/>
+            </xs:sequence>
+            <xs:attribute name="logonPrefix" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Site">
+          <xs:complexType>
+            <xs:attribute name="code" type="SiteCode" use="required"/>
+            <xs:attribute name="server" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- The Script Runner: the machine in Zone Global that collects jobs and
+             carries them out. It is NOT the SCCM server - it connects to the SMS
+             Provider named in <Site>. The ConfigMgr console must be installed
+             here, and kept at the same build as the site. -->
+        <xs:element name="Runner">
+          <xs:complexType>
+            <xs:attribute name="host" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Which account carries the work out. Recorded for documentation and
+             for clear error messages; the tool never reads or stores a password.
+             (The flow-1 'address' and 'configurationName' attributes are gone -
+             they described a WinRM endpoint that is not being built.) -->
+        <xs:element name="Service">
+          <xs:complexType>
+            <xs:attribute name="account" type="NonEmptyString" use="required"/>
+            <xs:attribute name="allowedGroup" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- How a job reaches the server.
+               Direct      the window calls the endpoint and waits        (flow 1)
+               DropFolder  the window writes a job file and the server
+                           collects it a few minutes later               (flow 2)
+             dropFolder is required when mode is DropFolder. -->
+        <xs:element name="Transport">
+          <xs:complexType>
+            <xs:attribute name="mode" use="required">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Direct"/>
+                  <xs:enumeration value="DropFolder"/>
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="dropFolder" type="xs:string" use="optional" default=""/>
+            <xs:attribute name="resultTimeoutMinutes" type="xs:positiveInteger" use="optional" default="30"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Content">
+          <xs:complexType>
+            <xs:attribute name="share" type="NonEmptyString" use="required"/>
+            <xs:attribute name="distributionPointGroup" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="ApplicationFolder" type="NonEmptyString"/>
+
+        <!-- Collection name = prefix + package name + suffix.
+             The deployment for each collection is declared here too, so a
+             deployment can never be mismatched to the wrong collection. -->
+        <xs:element name="Collections">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Collection" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="prefix" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="suffix" type="xs:string" use="optional" default=""/>
+                  <xs:attribute name="limitingCollectionId" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="folder" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="deploymentAction" type="DeploymentAction" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="SecurityScopes">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Scope" type="NonEmptyString" maxOccurs="unbounded"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="ActiveDirectory">
+          <xs:complexType>
+            <xs:attribute name="arsProviderUrl" type="NonEmptyString" use="required"/>
+            <xs:attribute name="groupOu" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+      </xs:sequence>
+      <xs:attribute name="code" type="SiteCode" use="required"/>
+      <xs:attribute name="description" type="NonEmptyString" use="required"/>
+      <xs:attribute name="schemaVersion" type="NonEmptyString" use="required"/>
+
+      <!-- false = the values were inherited from another environment and still
+           need confirming by Audi. The tool warns before using such a file. -->
+      <xs:attribute name="verified" type="xs:boolean" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================= Defaults -->
+  <xs:element name="Defaults">
+    <xs:complexType>
+      <xs:sequence>
+
+        <xs:element name="Commands">
+          <xs:complexType>
+            <xs:attribute name="install" type="NonEmptyString" use="required"/>
+            <xs:attribute name="uninstall" type="NonEmptyString" use="required"/>
+            <!-- May be empty: the old tool set no Repair command at all. -->
+            <xs:attribute name="repair" type="xs:string" use="optional" default=""/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- The application's Distribution Settings tab. -->
+        <xs:element name="Distribution">
+          <xs:complexType>
+            <xs:attribute name="onDemand" type="xs:boolean" use="required"/>
+            <xs:attribute name="prestaged" use="required">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="AutoDownload"/>
+                  <xs:enumeration value="DownloadOnlyContentChange"/>
+                  <xs:enumeration value="ManualCopy"/>
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Steps that can be switched off for every environment at once.
+             createArsGroup="false" leaves the AD access group uncreated; the
+             step still runs and reports itself as SKIPPED, so nobody is left
+             believing the group exists. -->
+        <!-- Settings on the DEPLOYMENT, not on the deployment type. The
+             deployment type holds the Repair COMMAND; this is the tick box on
+             the deployment that lets a user run it. -->
+        <xs:element name="Deployment">
+          <xs:complexType>
+            <xs:attribute name="allowUserRepair" type="xs:boolean" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Steps">
+          <xs:complexType>
+            <xs:attribute name="createArsGroup" type="xs:boolean" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Naming">
+          <xs:complexType>
+            <xs:attribute name="brandingRegistryRoot" type="NonEmptyString" use="required"/>
+            <xs:attribute name="deploymentTypeSuffix" type="NonEmptyString" use="required"/>
+            <xs:attribute name="arsGroupPrefix" type="NonEmptyString" use="required"/>
+            <xs:attribute name="arsDescriptionPrefix" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Application">
+          <xs:complexType>
+            <xs:attribute name="category" type="NonEmptyString" use="required"/>
+            <xs:attribute name="maxRuntimeMinutes" type="xs:positiveInteger" use="required"/>
+            <xs:attribute name="estimatedInstallMinutes" type="xs:positiveInteger" use="required"/>
+            <xs:attribute name="defaultLanguage" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Detection">
+          <xs:complexType>
+            <xs:attribute name="valueName" type="NonEmptyString" use="required"/>
+            <xs:attribute name="dataType" type="NonEmptyString" use="required"/>
+            <xs:attribute name="is64Bit" type="xs:boolean" use="required"/>
+            <xs:attribute name="method" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="DeploymentType">
+          <xs:complexType>
+            <xs:attribute name="distributionPointSetting" type="NonEmptyString" use="required"/>
+            <xs:attribute name="slowNetworkDeploymentMode" type="NonEmptyString" use="required"/>
+            <xs:attribute name="programVisibility" type="NonEmptyString" use="required"/>
+            <xs:attribute name="installationBehaviorType" type="NonEmptyString" use="required"/>
+            <xs:attribute name="logonRequirementType" type="NonEmptyString" use="required"/>
+            <xs:attribute name="allowClientToShareContent" type="xs:boolean" use="required"/>
+            <xs:attribute name="allowClientToUseFallback" type="xs:boolean" use="required"/>
+            <xs:attribute name="persistContentInClientCache" type="xs:boolean" use="required"/>
+            <xs:attribute name="run32BitOn64Bit" type="xs:boolean" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="OperatingSystems">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="OperatingSystem" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="key" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="label" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="value" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="selectedByDefault" type="xs:boolean" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Written onto SCCM objects. Placeholders {package} {jobId} {rfc} are
+             filled at run time.
+
+             {requester} is NOT available: no personal name may be written to an
+             SCCM object. A template containing it is rejected at load - see
+             Test-AudiSccmCommentTemplate in Config.ps1. -->
+        <xs:element name="Comments">
+          <xs:complexType>
+            <xs:attribute name="collection" type="NonEmptyString" use="required"/>
+            <!-- The application's admin description - the Comment field in the
+                 console, not what a user sees in Software Center. The old tool
+                 wrote a fixed "created by manual MCB script" here; this carries
+                 the job and the RFC instead, so every object made by a run can
+                 be traced back to it. -->
+            <xs:attribute name="application" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- With no personal name kept on the SCCM side, the RFC number is the
+             only route back to the person who asked. -->
+        <xs:element name="Audit">
+          <xs:complexType>
+            <xs:attribute name="requireRfc" type="xs:boolean" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- The environments the packager window offers. The packager chooses;
+             the package name's prefix does not decide it. -->
+        <xs:element name="ClientEnvironments">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Environment" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="code"  type="SiteCode" use="required"/>
+                  <xs:attribute name="label" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- The sentence prepended to a description when the package closes
+             processes first. {processes} is the only placeholder. -->
+        <xs:element name="DescriptionFormat">
+          <xs:complexType>
+            <xs:attribute name="processPrefixEn" type="NonEmptyString" use="required"/>
+            <xs:attribute name="processPrefixDe" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- How a package name is composed. Parts are located either from the
+             start (index) or from the end (indexFromEnd), so a product name that
+             itself contains the separator still parses correctly. -->
+        <!-- One regex per naming convention, tried in order; the first match
+             wins. Named groups use the (?'Name'...) form, so the pattern needs
+             no XML escaping. Every named group becomes a field. -->
+        <xs:element name="PackageName">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Pattern" type="NonEmptyString" maxOccurs="unbounded"/>
+            </xs:sequence>
+            <xs:attribute name="separator" type="NonEmptyString" use="required"/>
+            <!-- Template built from the group names above, e.g.
+                 {Publisher}_{Product}_{Architecture}_{Version}-{Revision}_{Language} -->
+            <!-- the spelling every SCCM object and the content folder carry -->
+            <xs:attribute name="sccmNameFormat" type="NonEmptyString" use="required"/>
+            <xs:attribute name="brandingKeyFormat" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Where the packager window gets its values from, so the operator does
+             not retype what already exists in the package. Every pattern is a
+             .NET regex with one capture group. Missing matches are simply left
+             blank for the operator to fill in. -->
+        <xs:element name="PackageSource">
+          <xs:complexType>
+            <xs:sequence>
+              <!-- Candidate deployment scripts, tried in order. -->
+              <xs:element name="Script" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Field" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:attribute name="name" type="NonEmptyString" use="required"/>
+                        <xs:attribute name="pattern" type="NonEmptyString" use="required"/>
+                        <!-- last match wins, for scripts that redefine a variable -->
+                        <xs:attribute name="lastMatchWins" type="xs:boolean" use="optional" default="true"/>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                  <xs:attribute name="generation" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="fileName" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+
+              <!-- The install instruction document shipped with the request. -->
+              <xs:element name="Document" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <!-- Which Word file is THE request form when a package holds
+                         several. Tried in order; the first whose text appears
+                         in a file name wins. -->
+                    <xs:element name="NamePattern" type="NonEmptyString" minOccurs="0" maxOccurs="unbounded"/>
+                    <xs:element name="Field" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:attribute name="name" type="NonEmptyString" use="required"/>
+                        <xs:attribute name="pattern" type="NonEmptyString" use="required"/>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                  <!-- file name pattern to look for, e.g. *.docx -->
+                  <xs:attribute name="filter" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="searchDepth" type="xs:positiveInteger" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Operational behaviour: how hard to try, how long to wait, where the
+             audit trail is written. Tunable without a rebuild. -->
+        <xs:element name="Runtime">
+          <xs:complexType>
+            <xs:sequence>
+              <!-- Failures matching these are retried; anything else fails at
+                   once, so a genuine error is not hidden behind retries. -->
+              <xs:element name="TransientErrors">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Pattern" type="NonEmptyString" maxOccurs="unbounded"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="retryCount" type="xs:nonNegativeInteger" use="required"/>
+            <xs:attribute name="retryDelaySeconds" type="xs:positiveInteger" use="required"/>
+            <xs:attribute name="distributionTimeoutMinutes" type="xs:positiveInteger" use="required"/>
+            <xs:attribute name="distributionPollSeconds" type="xs:positiveInteger" use="required"/>
+            <xs:attribute name="logRoot" type="NonEmptyString" use="required"/>
+            <!-- How long the window waits for a result before saying the
+                 collector is not running. A WINDOW setting, so it lives here
+                 rather than in the environment files - a packager machine has
+                 none of those, by design. -->
+            <xs:attribute name="resultTimeoutMinutes" type="xs:positiveInteger" use="required"/>
+            <xs:attribute name="logRetentionDays" type="xs:positiveInteger" use="required"/>
+            <xs:attribute name="lockTimeoutMinutes" type="xs:positiveInteger" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- The settings the Modify tab may edit, and the values SCCM accepts
+             for each. Validated like everything else, so a typo in an editor
+             type or a Choice with no options is refused at load rather than
+             producing an empty dropdown in front of a packager. -->
+        <xs:element name="Settings">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Setting" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Option" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:simpleContent>
+                          <xs:extension base="NonEmptyString">
+                            <!-- value="" is legitimate: it is how "not set" is
+                                 expressed for a tri-state such as the logon
+                                 requirement. -->
+                            <xs:attribute name="value" type="xs:string" use="required"/>
+                            <!-- What the SET cmdlet wants, when that differs
+                                 from what the READ returns. SDMPackageXML says
+                                 ExecutionContext="System"; Set-CMScriptDeploymentType
+                                 wants InstallForSystem for the same thing.
+                                 Omitted means the two are identical. -->
+                            <xs:attribute name="writeValue" type="xs:string" use="optional"/>
+                          </xs:extension>
+                        </xs:simpleContent>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                  <xs:attribute name="key" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="scope" use="required">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="Application"/>
+                        <xs:enumeration value="DeploymentType"/>
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="property" type="NonEmptyString" use="required"/>
+                  <!-- The parameter name on Set-CMApplication or
+                       Set-CMScriptDeploymentType. Required for anything
+                       editable; a setting with no writeParameter can be read
+                       and shown but never written. -->
+                  <xs:attribute name="writeParameter" type="xs:string" use="optional"/>
+                  <xs:attribute name="label" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="editor" use="required">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="Text"/>
+                        <xs:enumeration value="Number"/>
+                        <xs:enumeration value="Choice"/>
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <!-- editable="false" shows the value but refuses to change
+                       it. Used for anything derived from the package name:
+                       editing it in SCCM alone would leave the application
+                       disagreeing with the folder its content came from. -->
+                  <xs:attribute name="editable" type="xs:boolean" use="optional"/>
+                  <xs:attribute name="lockedReason" type="xs:string" use="optional"/>
+                  <xs:attribute name="unit" type="xs:string" use="optional"/>
+                  <xs:attribute name="hint" type="xs:string" use="optional"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+      </xs:sequence>
+      <xs:attribute name="schemaVersion" type="NonEmptyString" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ================================================================= Job -->
+  <!-- One request, written by the packager window into the drop folder.
+       There is deliberately NO requester attribute, and none is derived on the
+       server either: Audi's requirement is that no real person's name reaches
+       the SCCM side at all. A file naming a requester is rejected outright.
+       The RFC number carries the audit trail instead. -->
+  <xs:element name="Job">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Package">
+          <xs:complexType>
+            <xs:attribute name="name" type="PackageName" use="required"/>
+            <xs:attribute name="rfc"  type="OptionalIdentifier" use="optional" default=""/>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="Localised" minOccurs="0">
+          <xs:complexType>
+            <xs:attribute name="nameEn"        type="DisplayName" use="optional" default=""/>
+            <xs:attribute name="nameDe"        type="DisplayName" use="optional" default=""/>
+            <xs:attribute name="descriptionEn" type="DisplayText" use="optional" default=""/>
+            <xs:attribute name="descriptionDe" type="DisplayText" use="optional" default=""/>
+          </xs:complexType>
+        </xs:element>
+        <!-- Exactly what the packager saw, including anything they corrected.
+             Sent so the server uses the values that were on the screen rather
+             than deriving them again. Empty attributes mean "as derived". -->
+        <!-- The collections a packager ticked in the Modify tab. Only ever used
+             by a Change job; every other action ignores them. -->
+        <xs:element name="Changes" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Add"    type="CollectionName" minOccurs="0" maxOccurs="unbounded"/>
+              <xs:element name="Remove" type="CollectionName" minOccurs="0" maxOccurs="unbounded"/>
+              <!-- A setting edit. 'key' names an entry in the Defaults.xml
+                   settings catalogue; the server looks up what that means and
+                   whether it may be written. 'from' is the value the operator
+                   saw, kept for the audit trail - the server does not trust it
+                   and re-reads the site itself. -->
+              <!-- A machine going into, or coming out of, one of this package's
+                   collections. The server checks the collection really belongs
+                   to the package before it touches anything. -->
+              <xs:element name="Member" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="collection" type="CollectionName" use="required"/>
+                  <xs:attribute name="machine"    type="HostName" use="required"/>
+                  <xs:attribute name="action"     use="required">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="Add"/>
+                        <xs:enumeration value="Remove"/>
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="Setting" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="key"  type="Identifier" use="required"/>
+                  <xs:attribute name="from" type="DisplayText" use="optional" default=""/>
+                  <xs:attribute name="to"   type="DisplayText" use="optional" default=""/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Detail" minOccurs="0">
+          <xs:complexType>
+            <xs:attribute name="publisher"    type="NamePart" use="optional" default=""/>
+            <xs:attribute name="product"      type="NamePart" use="optional" default=""/>
+            <xs:attribute name="version"      type="NamePart" use="optional" default=""/>
+            <xs:attribute name="architecture" type="NamePart" use="optional" default=""/>
+            <xs:attribute name="revision"     type="NamePart" use="optional" default=""/>
+            <xs:attribute name="language"     type="NamePart" use="optional" default=""/>
+            <!-- The branding key IS the detection rule; there is no separate
+                 detection attribute and nothing else is detected on. -->
+            <xs:attribute name="brandingKey"  type="NamePart" use="optional" default=""/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- An empty list is valid and means "use the defaults". -->
+        <xs:element name="OperatingSystems" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="OperatingSystem" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="key" type="Identifier" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Find: what to look for on the site. Wildcards are MEANT here - it
+             is a search - and this is the only place they are. The pattern is
+             never a path and never a name anything is removed by. -->
+        <xs:element name="Find" minOccurs="0">
+          <xs:complexType>
+            <xs:attribute name="pattern" type="DisplayName" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Remove with explicit targets: the exact objects a packager ticked
+             out of a Find answer. Whole names, matched exactly on the server -
+             a legacy application whose name happens to contain a * is removed
+             as that one object and nothing else. -->
+        <xs:element name="Targets" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Application" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Collection" type="DisplayName" minOccurs="0" maxOccurs="unbounded"/>
+                  </xs:sequence>
+                  <xs:attribute name="name"        type="DisplayName" use="required"/>
+                  <xs:attribute name="contentPath" type="xs:string"   use="optional" default=""/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="schemaVersion" type="NonEmptyString" use="required"/>
+      <xs:attribute name="jobId"         type="Identifier"     use="required"/>
+      <xs:attribute name="environment"   type="SiteCode"       use="required"/>
+      <xs:attribute name="created"       type="NonEmptyString" use="required"/>
+      <xs:attribute name="dryRun"        type="xs:boolean"     use="required"/>
+      <!-- Written by the SERVER only: how many times this job was put back
+           into the queue after the server stopped in the middle of it. -->
+      <xs:attribute name="retried"       type="xs:nonNegativeInteger" use="optional" default="0"/>
+      <!-- Remove only: also delete the package's folder from the content
+           store. Off unless the packager ticked it and confirmed. -->
+      <xs:attribute name="removeContent" type="xs:boolean"     use="optional" default="false"/>
+      <xs:attribute name="action" use="required">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="Integrate"/>
+            <!-- Inspect: read the site and report what is there. Creates nothing. -->
+            <xs:enumeration value="Inspect"/>
+            <!-- Change: apply exactly the collections a packager ticked. -->
+            <xs:enumeration value="Change"/>
+            <xs:enumeration value="Modify"/>
+            <xs:enumeration value="Remove"/>
+            <!-- RefreshContent: replace the package's content in the store from
+                 Sources and re-distribute it. Nothing else on the application
+                 is touched. -->
+            <xs:enumeration value="RefreshContent"/>
+            <!-- Find: list the applications on the site whose name matches a
+                 pattern, with their collections. Creates nothing. -->
+            <xs:enumeration value="Find"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ========================================================== JobResult -->
+  <!-- Written by the server when the job has finished. It records the executor
+       (the shared service account) and the RFC. It does NOT record a person -
+       nothing on the SCCM side is allowed to. -->
+  <xs:element name="JobResult">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Message" type="xs:string"/>
+        <!-- What a failed run undid before giving up. Empty on success, and on a
+             failure that had created nothing yet. -->
+        <!-- What Inspect found on the site. Empty for every other action. -->
+        <xs:element name="State" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Collection" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Machine" type="NonEmptyString" minOccurs="0" maxOccurs="unbounded"/>
+                  </xs:sequence>
+                  <xs:attribute name="memberNote"    type="xs:string" use="optional" default=""/>
+                  <xs:attribute name="name"          type="NonEmptyString" use="required"/>
+                  <xs:attribute name="wanted"        type="xs:boolean"     use="required"/>
+                  <xs:attribute name="exists"        type="xs:boolean"     use="required"/>
+                  <xs:attribute name="hasDeployment" type="xs:boolean"     use="required"/>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="Scope" type="NonEmptyString" minOccurs="0" maxOccurs="unbounded"/>
+
+              <!-- A setting as the server found it, with everything the window
+                   needs to offer an editor for it. The options travel too: the
+                   client and the server are different machines, and a stale
+                   Defaults.xml on the client would otherwise offer choices the
+                   site will not accept. -->
+              <!-- A machine going into, or coming out of, one of this package's
+                   collections. The server checks the collection really belongs
+                   to the package before it touches anything. -->
+              <xs:element name="Member" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="collection" type="NonEmptyString" use="required"/>
+                  <xs:attribute name="machine"    type="NonEmptyString" use="required"/>
+                  <xs:attribute name="action"     use="required">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="Add"/>
+                        <xs:enumeration value="Remove"/>
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="Setting" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Option" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:simpleContent>
+                          <xs:extension base="xs:string">
+                            <xs:attribute name="value" type="xs:string" use="required"/>
+                          </xs:extension>
+                        </xs:simpleContent>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                  <xs:attribute name="key"          type="NonEmptyString" use="required"/>
+                  <xs:attribute name="label"        type="NonEmptyString" use="required"/>
+                  <xs:attribute name="scope"        type="NonEmptyString" use="required"/>
+                  <xs:attribute name="editor"       type="NonEmptyString" use="required"/>
+                  <xs:attribute name="current"      type="xs:string"      use="optional" default=""/>
+                  <xs:attribute name="currentLabel" type="xs:string"      use="optional" default=""/>
+                  <xs:attribute name="editable"     type="xs:boolean"     use="required"/>
+                  <xs:attribute name="readable"     type="xs:boolean"     use="required"/>
+                  <xs:attribute name="lockedReason" type="xs:string"      use="optional" default=""/>
+                  <xs:attribute name="unit"         type="xs:string"      use="optional" default=""/>
+                  <xs:attribute name="hint"         type="xs:string"      use="optional" default=""/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="application" type="xs:boolean" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- What a Find job found: every application whose name matched, with
+             the collections it is deployed to and where its content is. The
+             window shows these for the packager to tick; nothing here is a
+             decision. -->
+        <xs:element name="Found" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Application" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Collection" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+                  </xs:sequence>
+                  <xs:attribute name="name"        type="NonEmptyString" use="required"/>
+                  <xs:attribute name="contentPath" type="xs:string"      use="optional" default=""/>
+                  <xs:attribute name="deployments" type="xs:int"         use="optional" default="0"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="RolledBack" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Item" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="Steps">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Step" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="key"     type="NonEmptyString" use="required"/>
+                  <xs:attribute name="ok"      type="xs:boolean"     use="required"/>
+                  <xs:attribute name="message" type="xs:string"      use="optional" default=""/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="schemaVersion" type="NonEmptyString" use="required"/>
+      <xs:attribute name="jobId"         type="NonEmptyString" use="required"/>
+      <xs:attribute name="environment"   type="SiteCode"       use="required"/>
+      <xs:attribute name="package"       type="NonEmptyString" use="required"/>
+      <xs:attribute name="rfc"           type="xs:string"      use="optional" default=""/>
+      <xs:attribute name="executor"      type="NonEmptyString" use="required"/>
+      <xs:attribute name="completed"     type="NonEmptyString" use="required"/>
+      <xs:attribute name="dryRun"        type="xs:boolean"     use="required"/>
+      <!-- How many steps the run has in total. Only set while it is Running, so
+           the window can show a real progress bar instead of a spinner. -->
+      <xs:attribute name="stepCount"     type="xs:int"         use="optional" default="0"/>
+      <xs:attribute name="outcome" use="required">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="Succeeded"/>
+            <xs:enumeration value="Failed"/>
+            <!-- Written while the job is still being worked on, so the window
+                 can show what the server is doing without connecting to it.
+                 Replaced by Succeeded or Failed when the job ends. -->
+            <xs:enumeration value="Running"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

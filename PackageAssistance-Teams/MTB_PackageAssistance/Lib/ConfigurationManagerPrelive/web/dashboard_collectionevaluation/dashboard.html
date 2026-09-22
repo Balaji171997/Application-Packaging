@@ -1,0 +1,106 @@
+﻿<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html ng-app="dashboard" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Collection Evaluation Dashboard</title>
+    <meta charset="UTF-8">
+    <meta content="IE=edge" http-equiv="X-UA-Compatible">
+    <meta name="description" content="Collection Evaluation Dashboard">
+    <meta name="keywords" content="Software Distribution, Collection Evaluation, Dashboard">
+
+    <link href="../css/c3.min.css" rel="stylesheet" type="text/css">
+    <link href="../css/columns.css" rel="stylesheet" type="text/css">
+    <link href="css/styles.css" rel="stylesheet" type="text/css">
+
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="../js/d3.min.js" type="text/javascript"></script>
+    <script src="../js/c3.min.js" type="text/javascript"></script>
+    <script src="../js/utility.js" type="text/javascript"></script>
+    <script src="js/controller.js" type="text/javascript"></script>
+    
+    <noscript>Javascript is not enabled</noscript>
+</head>
+
+<body id="dashboardBody" ng-controller="dashboardController">
+    <div ng-class="'stat on'">
+        <div class="toggle" ng-click="toggle($event)" ng-keypress="keyPressToggle($event)" tabindex="1">
+            <p class="statTitle" ng-bind="getPropertyValue('SummaryTotalTitle')" />
+            <hr />
+        </div>
+        <div>
+            <ul>
+                <li ng-class="bullet" ng-bind="getPropertyValue('TotalCollectionNumber')" tabindex="1" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('TotalQueueLength')" tabindex="1" />
+            </ul>
+            <div style="clear: both;"></div>
+        </div>
+    </div>
+
+    <div ng-class="'stat on'">
+        <div class="toggle" ng-click="toggle($event)" ng-keypress="keyPressToggle($event)" tabindex="2">
+            <p class="statTitle" ng-bind="getPropertyValue('SummaryManualTitle')" />
+            <hr />
+        </div>
+        <div>
+            <ul>
+                <li ng-class="bullet" ng-bind="getPropertyValue('ManualCollectionNumber')" tabindex="2" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('ManualQueueLength')" tabindex="2" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('ManualCollectionName')" tabindex="2" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('ManualStartedOn')" tabindex="2" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('ManualElapsed')" tabindex="2" />
+            </ul>
+            <div style="clear: both;"></div>
+        </div>
+    </div>
+
+    <div ng-class="'stat on'">
+        <div class="toggle" ng-click="toggle($event)" ng-keypress="keyPressToggle($event)" tabindex="3">
+            <p class="statTitle" ng-bind="getPropertyValue('SummaryNewTitle')" />
+            <hr />
+        </div>
+        <div>
+            <ul>
+                <li ng-class="bullet" ng-bind="getPropertyValue('NewCollectionNumber')" tabindex="3" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('NewQueueLength')" tabindex="3" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('NewCollectionName')" tabindex="3" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('NewStartedOn')" tabindex="3" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('NewElapsed')" tabindex="3" />
+            </ul>
+            <div style="clear: both;"></div>
+        </div>
+    </div>
+
+    <div ng-class="'stat on'">
+        <div class="toggle" ng-click="toggle($event)" ng-keypress="keyPressToggle($event)" tabindex="4">
+            <p class="statTitle" ng-bind="getPropertyValue('SummaryFullTitle')" />
+            <hr />
+        </div>
+        <div>
+            <ul>
+                <li ng-class="bullet" ng-bind="getPropertyValue('FullCollectionNumber')" tabindex="4" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('FullQueueLength')" tabindex="4" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('FullCollectionName')" tabindex="4" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('FullStartedOn')" tabindex="4" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('FullElapsed')" tabindex="4" />
+            </ul>
+            <div style="clear: both;"></div>
+        </div>
+    </div>
+
+    <div ng-class="'stat on'">
+        <div class="toggle" ng-click="toggle($event)" ng-keypress="keyPressToggle($event)" tabindex="5">
+            <p class="statTitle" ng-bind="getPropertyValue('SummaryIncrementalTitle')" />
+            <hr />
+        </div>
+        <div>
+            <ul>
+                <li ng-class="bullet" ng-bind="getPropertyValue('IncrementalCollectionNumber')" tabindex="5" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('IncrementalQueueLength')" tabindex="5" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('IncrementalCollectionName')" tabindex="5" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('IncrementalStartedOn')" tabindex="5" />
+                <li ng-class="bullet" ng-bind="getPropertyValue('IncrementalElapsed')" tabindex="5" />
+            </ul>
+            <div style="clear: both;"></div>
+        </div>
+    </div>
+</body>
+</html>

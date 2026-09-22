@@ -1,0 +1,25 @@
+﻿Installing assembly 'C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.WqlQueryEngine.dll'.
+Affected parameters are:
+   showcallstack = 
+   logfile = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.WqlQueryEngine.InstallLog
+   assemblypath = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.WqlQueryEngine.dll
+   logtoconsole = 
+Creating performance counter category ConfigMgr 2012 Console - WMI Query Engine.
+Committing assembly 'C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.WqlQueryEngine.dll'.
+Affected parameters are:
+   showcallstack = 
+   logfile = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.WqlQueryEngine.InstallLog
+   assemblypath = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.WqlQueryEngine.dll
+   logtoconsole = 
+Installing assembly 'C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.WqlQueryEngine.dll'.
+Affected parameters are:
+   logtoconsole = 
+   showcallstack = 
+   assemblypath = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.WqlQueryEngine.dll
+   logfile = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.WqlQueryEngine.InstallLog
+Committing assembly 'C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.WqlQueryEngine.dll'.
+Affected parameters are:
+   logtoconsole = 
+   showcallstack = 
+   assemblypath = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.WqlQueryEngine.dll
+   logfile = C:\Program Files (x86)\Microsoft Endpoint Manager PreLive\bin\AdminUI.WqlQueryEngine.InstallLog

@@ -3691,3 +3691,72 @@ Surgical over rewrites; working over polished; play back bug understanding befor
 before guessing. No global version bump without boundaries; uninstall block in its own lane;
 never parse multiple ProductCodes in an uninstall body. Validate on real v3/v4. Keep maintainer
 access open; hide complexity from the team via the exe, not obfuscation.
+
+
+## 20 Sep 2026 - Enterprise shell for GPF and PAG (GUI.ps1 + Theme.ps1 identical in both; MTB unchanged)
+
+- Left rail GONE. Header = PACKAGE ASSISTANCE | package name (Consolas, copyable) | <order-number label> value | BRAND (only when the family has several targets). Step strip of four pills (Info / Installation / Editor / Create & Publish) with a state line each (Get-StepState: 'name needed', 'source fetched · predecessor 2.16.58-0001', 'MSI + MST · 2 properties', '3 to review', 'created'); current = teal pill, done = light, pending = muted; pills clickable (same Step-1 gates as Next). Right end of the strip = `Source: <folder>   Predecessor: <package>` with full paths on hover (user: no platform / target / share kind for GPF and Porsche - only where the files came from).
+- Pages: Step 1 two columns (Package | Source and predecessor panel with empty-state sentences); Step 2 titled sections (Installer / MST cleanup and properties / Silent switches / Analysis / KB card / Per-installer / Loose files) that follow the visibility Populate-Step2 already decides (SecMsi/SecExe/SecAnalysis/SecMulti); Editor toolbar with glyph buttons + SECTIONS caption; Step 4 = section headers, teal tab pills, the lone tab strip hidden when only Review & Create is on, publish/status strip collapsed until it has text. Bottom bar: glyph buttons + status line (LblStatusBar, empty when idle).
+- Dialogs: Set-PBDialogChrome header band on every code-built dialog (predecessor picker, installer picker, review, MSI properties, MST plan, bundled MSIs, input, certificate, text, analyzer, capture MSI); New-PBGlyphButton / New-PBCaption; Show-ConfirmTextDialog available for long confirmations. Analyzer: captioned phases with glyph buttons, instruction moved to the hover.
+- Busy card on its own UI thread (Start-PBBusyHost) wired into build script, load predecessor, fetch source, create package; DisableProcessWindowsGhosting so the window never reads "Not Responding". Text tiers: no #888 / #939BA7 left (tertiary = #A0A8B4).
+- Theme.ps1 = MTB's (superset: PbCopyText, PbGlyph, PbSectionTitle/Desc/Rule, PbText2, 12.5 pt controls).
+- DEV mode now dot-sources BrandGpf.ps1 and Screenshots.ps1 like the pak does (running GUI.ps1 from source failed on Get-GpfDefaultTargetTag).
+- Verified: scratchpad Smoke-GPF.ps1 drives the real window off-screen (renders each page + the analyzer to PNG, no desktop capture) - GPF and PAG both clean; Test-Build ALL PASSED; Release-Check green (100/100 fresh + reuse, pak round-trip); portable GPF_PackageAssistance pak synced.
+
+
+## 22 Sep 2026 - Porsche (PAG) team review (checked in the tool, small settings-driven additions; GPF settings untouched)
+
+Already in place: Order ID label + free text (all brands, 20.09); PAG-only outgoing prefix; the reuse+snapshot+screenshots
+crash (19.09 Win32 hide); unblock after package creation (Assemble.ps1 last step); template change (config/icons/header
+comments) - the tool reads markers + the variable block only.
+Added:
+- `Brand.AuthorOrder = "FirstLast"` (PAG): Format-AuthorName swaps the directory's "Last, First" to "First Last".
+- `Brand.NameLengthLimit = 34` (PAG): `Update-NameLengthCounter` under the name box, LIVE on TextChanged from the first
+  character (partial names counted without '_' separators, the arch token and the -0001 release; exact
+  Get-GpfVwgNameLength once the name is complete). Green up to 34, red over: "N of 34 characters used (Manufacturer +
+  Product + Version + Language) - K over the limit; consider a shorter name". Never a popup, never a block. 34 = the same
+  count as GPF's VWG hard stop; GPF keeps the hard stop and shows no counter.
+- `Brand.NameAllowSpecialChars = true` (PAG): Parse-Current refuses only folder-illegal characters (\ / : * ? " < > |);
+  everything else is accepted and carried into the package name as typed. The space-next-to-underscore rule stays.
+  GPF keeps letters/digits/. - _ space only.
+- Predecessor location with other credentials: `Get-PredecessorRoots` (Predecessor.ps1) hands a root it cannot open to the
+  window's `Connect-PBShare -Path -Purpose` (GUI.ps1: clears a stale 1219 session, Get-Credential up to 3x,
+  New-PSDrive -Credential, asked once per server per session); headless runs skip it. Search order unchanged: request's
+  own Predecessor\ -> settings PredecessorPath -> "browse to folder / pick .zip" prompt.
+Verified: PAG + GPF window driver (counter live from the first character + soft on a 60-char name, special characters
+accepted on PAG / refused on GPF, folder-illegal + space-before-underscore refused on both, carry-forward switch off/on,
+hide + analyzer close); Format-AuthorName on both brands; Test-Build ALL PASSED both; PackageAssistance-Teams refreshed.
+- Name characters, checked 22.09 against Parse-PackageName: hyphens are accepted everywhere in both brands (vendor, app,
+  inside the version "1.0-beta" - the -0001 release is still found). `*` is refused on PAG too: it is folder-illegal on
+  Windows and the name is the package folder; wildcard versions are written "1.x" (parses and builds).
+- Review acknowledgement ported from MTB (22.09): the Review popup lists every item with a "Confirmed" tick + "Confirm all"
+  (State.ReviewAck, keyed by item text; Test-/Set-ReviewAck, Get-OpenReview). Confirmed items drop out of the amber count on
+  the Review button, the Create page block ("N already confirmed" / "all confirmed") and the strip state ("reviewed").
+  Reset of Step 3 clears it. Handlers are PLAIN scriptblocks (a closure cannot see Set-ReviewAck).
+- MTB polish replicated 1:1 (22.09, "the way MTB polished the UI - don't miss anything other than functional"): a diff of
+  the main-window XAML and of every shared function against MTB-PackageAssistance\GUI.ps1 was walked and the non-functional
+  differences ported. Configure page: MST section as MTB's two-column grid (Keep toggles | extra properties), section
+  order Silent switches -> Knowledge base (titled section) -> Per-installer -> Analysis -> Loose files (SecLoose wrapper),
+  status/hint labels are copyable TextBoxes (LblMatchMst, LblSnapshot, LblBundled, LblKb*), glyph on "Match predecessor
+  MST". Editor: toolbar paddings, 170-px SECTIONS column, Snippets expander with glyph + hint, glyph on "Insert at
+  cursor". Create page: MTB's "Build summary" label/value grid (Set-SummaryRows - Package / order number / Output /
+  Brand (GPF only, when several targets) / Installer / Predecessor / MST / Loose files / Per-user / Script ready or not)
+  with the review items in the amber card underneath (open items only, "N already confirmed"), MTB's test-row layout.
+  Dialog chrome carries MTB's titles/subtitles/accent primary (predecessor picker, installer picker, MSI properties,
+  Match predecessor MST, bundled MSIs, run & capture, snippet + log pickers). Snapshot tree functions
+  (New-SnapTreeBody/-NodeUI/-RowBorder/-RegValueRows/-ListLeafUI, Update-SnapInlineTree, Show-SnapshotTreeView) and
+  Show-MstPlanDialog are MTB's verbatim - this also FIXED a real bug: New-SnapTreeBody had lost its $fCache/$fcount/
+  $rcount lines, so category counts were empty and every node re-walked its subtree. Show-Step repaints the status bar;
+  Reset all clears it. Kept on purpose (functional or newer than MTB): Generate MST + Carry-forward switches, the brand
+  row, the screenshot note, Show-ConfirmTextDialog (parameterised), Show-TextDialog order, the glyph Review button.
+  UTF-8 BOM added to the .ps1 files that carry non-ASCII text (Intune/Snapshot/Test-Build here; GUI/Build/Intune/Snapshot
+  in MTB) so DEV-mode dot-sourcing reads them as the pak does.
+- Access problems = sign-in offered EVERYWHERE (22.09, Porsche): Connect-PBShare -Retry asks even when the share root
+  opens (a folder inside is denied) and Invoke-PBWithShareAccess runs a step, and on an access-type error
+  (Test-PBAccessError: access denied / Zugriff verweigert, logon failure, 1219, network path/name not found, English +
+  German) offers the sign-in and runs the step once more. Wired into: Fetch (Incoming root opened first, the request
+  search, Set-ResolvedSource), Stage-SourceLocal (the copy from the share), Predecessor (candidate search, reading the
+  chosen package; the roots were already covered), Copy to Outgoing (root opened first; robocopy exit >= 8 or a denied
+  folder create -> sign-in -> copy again). Nothing changes when access is fine.
+Verified: window driver on GPF and PAG (all pages + populated Configure page + analyzer + review popup rendered, no
+errors, main window alive after the analyzer closes), Test-Build ALL PASSED both, PackageAssistance-Teams refreshed.

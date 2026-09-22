@@ -1,0 +1,1547 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Audi SCCM Integration Tool" MinHeight="720" MinWidth="1180"
+        WindowStartupLocation="CenterScreen" Background="{DynamicResource Bg}"
+        FontFamily="Segoe UI" FontSize="12"
+        SizeToContent="Manual" ResizeMode="CanResize" UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display">
+
+  <!--
+    LAYOUT
+      header   brand + the three things every job carries: package, RFC, environment
+      rail     one entry per thing a packager does: Integrate, Modify, Members,
+               Remove, Jobs. The dry-run switch and the theme live at its foot.
+      page     one per rail entry; each has its own action bar at the bottom,
+               so there is exactly one primary button on screen at a time
+      status   the selectable status line, the job progress bar, the log button
+
+    THEME
+      Every colour is a DynamicResource keyed brush. The script holds the two
+      palettes (dark by default) and swaps the brushes in Window.Resources, so
+      nothing here is a literal colour and the toggle needs no reload.
+
+    The script sets only Text, Visibility, IsEnabled, IsChecked, IsSelected,
+    ItemsSource and txtStatus.Foreground; every x:Name below is what it expects.
+  -->
+  <Window.Resources>
+
+    <!-- ===================================================== palette (light values; the script overrides) -->
+    <SolidColorBrush x:Key="Bg"           Color="#FFF3F5F6"/>
+    <SolidColorBrush x:Key="Card"         Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="CardBorder"   Color="#FFD5DCE0"/>
+    <SolidColorBrush x:Key="Field"        Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="FieldBorder"  Color="#FFC3CCD1"/>
+    <SolidColorBrush x:Key="FieldFocus"   Color="#FFF9FCFC"/>
+    <SolidColorBrush x:Key="Ink"          Color="#FF16242A"/>
+    <SolidColorBrush x:Key="InkMuted"     Color="#FF4C6870"/>
+    <SolidColorBrush x:Key="Brand"        Color="#FF002733"/>
+    <SolidColorBrush x:Key="BrandInk"     Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="BrandSub"     Color="#FF99D1CD"/>
+    <SolidColorBrush x:Key="Rail"         Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="RailBorder"   Color="#FFD5DCE0"/>
+    <SolidColorBrush x:Key="RailInk"      Color="#FF4C6870"/>
+    <SolidColorBrush x:Key="RailActive"   Color="#FFE3F3F1"/>
+    <SolidColorBrush x:Key="RailActiveInk" Color="#FF002733"/>
+    <SolidColorBrush x:Key="Teal"         Color="#FF008C82"/>
+    <SolidColorBrush x:Key="TealDeep"     Color="#FF00706A"/>
+    <SolidColorBrush x:Key="TealPale"     Color="#FFE3F3F1"/>
+    <SolidColorBrush x:Key="Mint"         Color="#FF99D1CD"/>
+    <SolidColorBrush x:Key="Danger"       Color="#FFB3261E"/>
+    <SolidColorBrush x:Key="DangerPale"   Color="#FFFBEAE8"/>
+    <SolidColorBrush x:Key="DangerLine"   Color="#FFE7B4B0"/>
+    <SolidColorBrush x:Key="Amber"        Color="#FF8A5300"/>
+    <SolidColorBrush x:Key="AmberPale"    Color="#FFFFF6E5"/>
+    <SolidColorBrush x:Key="AmberLine"    Color="#FFE0A93C"/>
+    <SolidColorBrush x:Key="AmberInk"     Color="#FF5C3A00"/>
+    <SolidColorBrush x:Key="Strip"        Color="#FFE9EDEF"/>
+    <SolidColorBrush x:Key="PrimaryBg"    Color="#FF002733"/>
+    <SolidColorBrush x:Key="PrimaryFg"    Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="PrimaryHover" Color="#FF008C82"/>
+    <SolidColorBrush x:Key="GhostHover"   Color="#FFF3F5F6"/>
+    <SolidColorBrush x:Key="RowAlt"       Color="#FFF8FAFB"/>
+    <SolidColorBrush x:Key="GridLine"     Color="#FFEDF0F2"/>
+    <SolidColorBrush x:Key="Track"        Color="#FFDCE2E5"/>
+    <SolidColorBrush x:Key="Thumb"        Color="#FFB9C4CA"/>
+    <SolidColorBrush x:Key="SandboxBg"    Color="#FFF2B400"/>
+    <SolidColorBrush x:Key="SandboxInk"   Color="#FF002733"/>
+
+    <!-- ===================================================== text -->
+    <Style TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="TextOptions.TextRenderingMode" Value="ClearType"/>
+    </Style>
+
+    <Style x:Key="Label" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource InkMuted}"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="Margin" Value="0,0,12,0"/>
+      <Setter Property="TextAlignment" Value="Right"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+    </Style>
+
+    <Style x:Key="SectionTitle" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource InkMuted}"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Margin" Value="0,0,0,2"/>
+    </Style>
+
+    <Style x:Key="PageTitle" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="FontSize" Value="18"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+
+    <Style x:Key="SubHeading" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource InkMuted}"/>
+      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Margin" Value="0,0,0,6"/>
+    </Style>
+
+    <Style x:Key="Hint" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource InkMuted}"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+
+    <Style x:Key="Mono" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="Consolas"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="Foreground" Value="{DynamicResource TealDeep}"/>
+    </Style>
+
+    <!-- The "what to do next" strip at the top of a page: three or four short
+         steps, the current one lit. The script fills the runs. -->
+    <Style x:Key="NextStep" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource InkMuted}"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="Margin" Value="0,0,0,14"/>
+    </Style>
+
+    <!-- A disclosure: a text link that shows or hides the panel under it.
+         Rarely-needed rows live behind one, so a page opens with only what
+         a first-time user has to look at. The panel's Visibility is bound
+         to the toggle by ElementName where it is used. -->
+    <Style x:Key="Disclosure" TargetType="ToggleButton">
+      <Setter Property="Foreground" Value="{DynamicResource TealDeep}"/>
+      <Setter Property="FontSize" Value="11.5"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="HorizontalAlignment" Value="Left"/>
+      <Setter Property="Margin" Value="0,10,0,0"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ToggleButton">
+            <StackPanel Orientation="Horizontal" Background="Transparent">
+              <TextBlock x:Name="arrow" Text="&#9656;" Foreground="{TemplateBinding Foreground}" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center"/>
+              <ContentPresenter VerticalAlignment="Center"/>
+            </StackPanel>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="arrow" Property="Text" Value="&#9662;"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+
+    <!-- ===================================================== scrollbars -->
+    <!-- The stock scrollbar is a light Win32-looking strip that fights a dark
+         page. A thin themed track and thumb, nothing else. -->
+    <Style x:Key="ScrollThumb" TargetType="Thumb">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Thumb">
+            <Border Background="{DynamicResource Thumb}" CornerRadius="3" Margin="2"/>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="ScrollBar">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Width" Value="10"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ScrollBar">
+            <Grid Background="{DynamicResource Bg}">
+              <Track x:Name="PART_Track" IsDirectionReversed="True">
+                <Track.DecreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False"/>
+                </Track.DecreaseRepeatButton>
+                <Track.Thumb>
+                  <Thumb Style="{StaticResource ScrollThumb}"/>
+                </Track.Thumb>
+                <Track.IncreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False"/>
+                </Track.IncreaseRepeatButton>
+              </Track>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="Orientation" Value="Horizontal">
+                <Setter Property="Width" Value="Auto"/>
+                <Setter Property="Height" Value="10"/>
+                <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- ===================================================== inputs -->
+    <Style TargetType="TextBox">
+      <Setter Property="Background" Value="{DynamicResource Field}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="CaretBrush" Value="{DynamicResource Teal}"/>
+      <Setter Property="SelectionBrush" Value="{DynamicResource Mint}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource FieldBorder}"/>
+      <Setter Property="Padding" Value="7,4,7,4"/>
+      <Setter Property="Margin" Value="0,0,0,6"/>
+      <Setter Property="MinHeight" Value="28"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TextBox">
+            <Border x:Name="b" CornerRadius="2" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                    SnapsToDevicePixels="True">
+              <!-- PART_ContentHost must STRETCH. Binding its VerticalAlignment
+                   to VerticalContentAlignment centres it, which can leave the
+                   text area with no height to click into. Vertical centring
+                   comes from Padding instead. -->
+              <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
+                            VerticalAlignment="Stretch" HorizontalAlignment="Stretch"
+                            Focusable="False"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource InkMuted}"/>
+              </Trigger>
+              <Trigger Property="IsFocused" Value="True">
+                <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource Teal}"/>
+                <Setter TargetName="b" Property="Background" Value="{DynamicResource FieldFocus}"/>
+              </Trigger>
+              <Trigger Property="IsReadOnly" Value="True">
+                <Setter TargetName="b" Property="Background" Value="{DynamicResource Bg}"/>
+                <Setter Property="Foreground" Value="{DynamicResource InkMuted}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Flat ComboBox. The stock template ignores Background and draws its own
+         chrome. One template serves the header selector, the Members page and
+         the editors in the Modify grid; SelectionBoxItemTemplate keeps
+         DisplayMemberPath working. -->
+    <Style TargetType="ComboBoxItem">
+      <Setter Property="Padding" Value="8,5,8,5"/>
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBoxItem">
+            <Border x:Name="b" Background="Transparent" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+              <ContentPresenter VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsHighlighted" Value="True">
+                <Setter TargetName="b" Property="Background" Value="{DynamicResource TealPale}"/>
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="b" Property="Background" Value="{DynamicResource TealPale}"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="ComboBox">
+      <Setter Property="Height" Value="28"/>
+      <Setter Property="Margin" Value="0"/>
+      <Setter Property="Padding" Value="8,0,28,0"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Background" Value="{DynamicResource Field}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource FieldBorder}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="SnapsToDevicePixels" Value="True"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBox">
+            <Grid>
+              <ToggleButton x:Name="toggle" Focusable="False" ClickMode="Press"
+                            IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                <ToggleButton.Template>
+                  <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="bd" CornerRadius="2" BorderThickness="1"
+                            Background="{Binding Background, RelativeSource={RelativeSource AncestorType=ComboBox}}"
+                            BorderBrush="{Binding BorderBrush, RelativeSource={RelativeSource AncestorType=ComboBox}}">
+                      <Path HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,1,10,0"
+                            Data="M0,0 L4,4 L8,0" Stroke="{DynamicResource InkMuted}" StrokeThickness="1.5"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Teal}"/>
+                      </Trigger>
+                      <Trigger Property="IsChecked" Value="True">
+                        <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Teal}"/>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </ToggleButton.Template>
+              </ToggleButton>
+              <ContentPresenter IsHitTestVisible="False" Margin="{TemplateBinding Padding}"
+                                Content="{TemplateBinding SelectionBoxItem}"
+                                ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                VerticalAlignment="Center" HorizontalAlignment="Left"/>
+              <Popup x:Name="PART_Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}"
+                     AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
+                <Border Background="{DynamicResource Card}" BorderBrush="{DynamicResource CardBorder}" BorderThickness="1"
+                        CornerRadius="2" Margin="0,2,0,0" SnapsToDevicePixels="True"
+                        MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                  <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
+                  </ScrollViewer>
+                </Border>
+              </Popup>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.5"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="CheckBox">
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="Margin" Value="0,0,18,6"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <!-- ===================================================== buttons -->
+    <Style x:Key="BtnBase" TargetType="Button">
+      <Setter Property="Height" Value="30"/>
+      <Setter Property="Padding" Value="16,0,16,0"/>
+      <Setter Property="Margin" Value="0,0,10,0"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="b" CornerRadius="2" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" SnapsToDevicePixels="True">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                Margin="{TemplateBinding Padding}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="b" Property="Opacity" Value="0.75"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="b" Property="Opacity" Value="0.35"/>
+                <Setter Property="Cursor" Value="Arrow"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- The one filled button on a page. -->
+    <Style x:Key="BtnPrimary" TargetType="Button" BasedOn="{StaticResource BtnBase}">
+      <Setter Property="Background" Value="{DynamicResource PrimaryBg}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource PrimaryBg}"/>
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryFg}"/>
+      <Setter Property="MinWidth" Value="120"/>
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter Property="Background" Value="{DynamicResource PrimaryHover}"/>
+          <Setter Property="BorderBrush" Value="{DynamicResource PrimaryHover}"/>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+
+    <Style x:Key="BtnGhost" TargetType="Button" BasedOn="{StaticResource BtnBase}">
+      <Setter Property="Background" Value="{DynamicResource Card}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource FieldBorder}"/>
+      <Setter Property="MinWidth" Value="110"/>
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter Property="Background" Value="{DynamicResource GhostHover}"/>
+          <Setter Property="BorderBrush" Value="{DynamicResource InkMuted}"/>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+
+    <!-- Filled red: the one destructive primary, on the Remove page only. -->
+    <Style x:Key="BtnDanger" TargetType="Button" BasedOn="{StaticResource BtnBase}">
+      <Setter Property="Background" Value="{DynamicResource Danger}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Danger}"/>
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryFg}"/>
+      <Setter Property="MinWidth" Value="150"/>
+    </Style>
+
+    <!-- Square icon button for the theme toggle. -->
+    <Style x:Key="BtnIcon" TargetType="Button" BasedOn="{StaticResource BtnBase}">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource RailBorder}"/>
+      <Setter Property="Foreground" Value="{DynamicResource RailInk}"/>
+      <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
+      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="Width" Value="32"/>
+      <Setter Property="Height" Value="32"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="Margin" Value="0"/>
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter Property="Background" Value="{DynamicResource RailActive}"/>
+          <Setter Property="Foreground" Value="{DynamicResource RailActiveInk}"/>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+
+    <!-- ===================================================== navigation rail -->
+    <!-- A RadioButton per page. The template is the whole item: glyph, label,
+         and a 3 px accent bar on the left when it is the current page. -->
+    <Style x:Key="NavItem" TargetType="RadioButton">
+      <Setter Property="Foreground" Value="{DynamicResource RailInk}"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Height" Value="44"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RadioButton">
+            <Border x:Name="b" Background="Transparent" BorderBrush="Transparent" BorderThickness="3,0,0,0"
+                    Padding="17,0,12,0" SnapsToDevicePixels="True">
+              <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock x:Name="glyph" Text="{TemplateBinding Tag}" FontFamily="Segoe MDL2 Assets" FontSize="15"
+                           Foreground="{TemplateBinding Foreground}" Margin="0,0,14,0" VerticalAlignment="Center"/>
+                <ContentPresenter VerticalAlignment="Center"/>
+              </StackPanel>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="b" Property="Background" Value="{DynamicResource GhostHover}"/>
+                <Setter Property="Foreground" Value="{DynamicResource RailActiveInk}"/>
+              </Trigger>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="b" Property="Background" Value="{DynamicResource RailActive}"/>
+                <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource Teal}"/>
+                <Setter Property="Foreground" Value="{DynamicResource RailActiveInk}"/>
+                <Setter TargetName="glyph" Property="Foreground" Value="{DynamicResource Teal}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- ===================================================== card -->
+    <Style x:Key="CardStyle" TargetType="Border">
+      <Setter Property="Background" Value="{DynamicResource Card}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CardBorder}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="2"/>
+      <Setter Property="Padding" Value="20,16,20,16"/>
+    </Style>
+
+    <Style x:Key="InsetStyle" TargetType="Border">
+      <Setter Property="Background" Value="{DynamicResource Bg}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CardBorder}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="2"/>
+      <Setter Property="Padding" Value="12,9,12,9"/>
+    </Style>
+
+    <!-- The page's own action bar: top border, primary on the right. -->
+    <Style x:Key="ActionBar" TargetType="Border">
+      <Setter Property="Background" Value="{DynamicResource Card}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CardBorder}"/>
+      <Setter Property="BorderThickness" Value="0,1,0,0"/>
+      <Setter Property="Padding" Value="24,12,24,12"/>
+    </Style>
+
+    <!-- ===================================================== grids -->
+    <Style x:Key="GridStyle" TargetType="DataGrid">
+      <Setter Property="Background" Value="{DynamicResource Field}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CardBorder}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="RowBackground" Value="{DynamicResource Field}"/>
+      <Setter Property="AlternatingRowBackground" Value="{DynamicResource RowAlt}"/>
+      <Setter Property="GridLinesVisibility" Value="Horizontal"/>
+      <Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource GridLine}"/>
+      <Setter Property="HeadersVisibility" Value="Column"/>
+      <Setter Property="CanUserAddRows" Value="False"/>
+      <Setter Property="IsReadOnly" Value="True"/>
+      <Setter Property="AutoGenerateColumns" Value="False"/>
+      <!-- MinRowHeight, not RowHeight: a fixed height would clip a wrapped
+           Detail cell back to a single line. -->
+      <Setter Property="MinRowHeight" Value="28"/>
+      <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+      <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+    </Style>
+
+    <Style TargetType="DataGridColumnHeader">
+      <Setter Property="Background" Value="{DynamicResource Bg}"/>
+      <Setter Property="Foreground" Value="{DynamicResource InkMuted}"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Padding" Value="10,8,10,8"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CardBorder}"/>
+      <Setter Property="BorderThickness" Value="0,0,0,1"/>
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+    </Style>
+
+    <Style TargetType="DataGridRow">
+      <Setter Property="Background" Value="{DynamicResource Field}"/>
+      <Style.Triggers>
+        <Trigger Property="IsSelected" Value="True">
+          <Setter Property="Background" Value="{DynamicResource TealPale}"/>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+
+    <Style TargetType="DataGridCell">
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="10,0,10,0"/>
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="DataGridCell">
+            <Border Background="Transparent" Padding="{TemplateBinding Padding}">
+              <ContentPresenter VerticalAlignment="Center"/>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Wrapping, muted cell text for the descriptive columns. -->
+    <Style x:Key="CellWrapMuted" TargetType="TextBlock">
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="Foreground" Value="{DynamicResource InkMuted}"/>
+      <Setter Property="Margin" Value="0,4,6,4"/>
+      <Setter Property="VerticalAlignment" Value="Top"/>
+    </Style>
+    <Style x:Key="CellWrap" TargetType="TextBlock">
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="Margin" Value="0,4,6,4"/>
+      <Setter Property="VerticalAlignment" Value="Top"/>
+    </Style>
+    <!-- Add in teal, Remove in red - the same in every grid that has an Action. -->
+    <Style x:Key="CellAction" TargetType="TextBlock">
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding Action}" Value="Remove">
+          <Setter Property="Foreground" Value="{DynamicResource Danger}"/>
+          <Setter Property="FontWeight" Value="SemiBold"/>
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Action}" Value="Add">
+          <Setter Property="Foreground" Value="{DynamicResource TealDeep}"/>
+          <Setter Property="FontWeight" Value="SemiBold"/>
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+
+    <!-- Result badge: OK teal, FAILED red, anything else neutral. -->
+    <Style x:Key="ResultBadge" TargetType="Border">
+      <Setter Property="Background" Value="{DynamicResource Bg}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CardBorder}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="2"/>
+      <Setter Property="Padding" Value="8,2,8,2"/>
+      <Setter Property="HorizontalAlignment" Value="Left"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="Margin" Value="0,4,0,4"/>
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding Result}" Value="OK">
+          <Setter Property="Background" Value="{DynamicResource TealPale}"/>
+          <Setter Property="BorderBrush" Value="{DynamicResource Mint}"/>
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Result}" Value="Succeeded">
+          <Setter Property="Background" Value="{DynamicResource TealPale}"/>
+          <Setter Property="BorderBrush" Value="{DynamicResource Mint}"/>
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Result}" Value="FAILED">
+          <Setter Property="Background" Value="{DynamicResource DangerPale}"/>
+          <Setter Property="BorderBrush" Value="{DynamicResource DangerLine}"/>
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Result}" Value="Failed">
+          <Setter Property="Background" Value="{DynamicResource DangerPale}"/>
+          <Setter Property="BorderBrush" Value="{DynamicResource DangerLine}"/>
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+    <Style x:Key="ResultBadgeText" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="Foreground" Value="{DynamicResource InkMuted}"/>
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding Result}" Value="OK">
+          <Setter Property="Foreground" Value="{DynamicResource TealDeep}"/>
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Result}" Value="Succeeded">
+          <Setter Property="Foreground" Value="{DynamicResource TealDeep}"/>
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Result}" Value="FAILED">
+          <Setter Property="Foreground" Value="{DynamicResource Danger}"/>
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Result}" Value="Failed">
+          <Setter Property="Foreground" Value="{DynamicResource Danger}"/>
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+
+    <Style TargetType="ProgressBar">
+      <Setter Property="Background" Value="{DynamicResource Track}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Teal}"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Height" Value="3"/>
+    </Style>
+
+    <!-- The TabControl is the page host only. Its headers are hidden; the rail
+         drives it and the script keeps the two in step. -->
+    <Style TargetType="TabControl">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TabControl">
+            <Grid Background="Transparent">
+              <TabPanel IsItemsHost="True" Visibility="Collapsed"/>
+              <ContentPresenter ContentSource="SelectedContent"/>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+  </Window.Resources>
+
+  <Grid Background="{DynamicResource Bg}">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <!-- ================================================== HEADER -->
+    <Border Grid.Row="0" Background="{DynamicResource Brand}" BorderBrush="{DynamicResource Teal}"
+            BorderThickness="0,0,0,3" Padding="20,0,24,0" Height="64">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0" Width="34" Height="34" Background="{DynamicResource Teal}" CornerRadius="2" VerticalAlignment="Center">
+          <TextBlock Text="SI" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource BrandInk}"
+                     HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Border>
+        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="14,0,28,0">
+          <TextBlock Text="SCCM Integration Tool" FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource BrandInk}"/>
+          <TextBlock Text="AUDI  &#183;  SOFTWARE PACKAGING" FontSize="10" Foreground="{DynamicResource BrandSub}" Margin="0,1,0,0"/>
+        </StackPanel>
+
+        <!-- The three things every job carries. Set once, used by every page. -->
+        <StackPanel Grid.Column="3" VerticalAlignment="Center" Margin="0,0,16,0">
+          <TextBlock Text="PACKAGE" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource BrandSub}" Margin="0,0,0,3"/>
+          <TextBox x:Name="txtPackage" Width="380" FontFamily="Consolas" Margin="0"
+                   ToolTip="Filled in when you read a package folder. Type a name here instead when there is no folder - Modify, Members, Remove and Jobs need only the name."/>
+        </StackPanel>
+        <StackPanel Grid.Column="4" VerticalAlignment="Center" Margin="0,0,16,0">
+          <TextBlock Text="RFC" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource BrandSub}" Margin="0,0,0,3"/>
+          <TextBox x:Name="txtRfc" Width="150" FontFamily="Consolas" Margin="0"
+                   ToolTip="Required. Read from VWG_OrderNumber in the deployment script. Written onto every object the job creates - it is the only link back to the change request, because no person is recorded on the server."/>
+        </StackPanel>
+        <StackPanel Grid.Column="5" VerticalAlignment="Center" Margin="0,0,20,0">
+          <TextBlock Text="ENVIRONMENT" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource BrandSub}" Margin="0,0,0,3"/>
+          <ComboBox x:Name="cboEnvironment" Width="150" ToolTip="Where this job goes. ICZ to test, INA for production. Nothing can be submitted until one is chosen - the package name does not decide it."/>
+        </StackPanel>
+
+        <Border Grid.Column="6" x:Name="brdMode" CornerRadius="2" Background="{DynamicResource SandboxBg}"
+                Padding="10,3,10,3" VerticalAlignment="Center" Visibility="Collapsed">
+          <TextBlock x:Name="txtMode" Text="SANDBOX" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource SandboxInk}"/>
+        </Border>
+      </Grid>
+    </Border>
+
+    <!-- ================================================== BODY: rail + page -->
+    <Grid Grid.Row="1">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="176"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+
+      <!-- ============================================== RAIL -->
+      <Border Grid.Column="0" Background="{DynamicResource Rail}" BorderBrush="{DynamicResource RailBorder}" BorderThickness="0,0,1,0">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+
+          <StackPanel Grid.Row="0" Margin="0,14,0,0">
+            <RadioButton x:Name="navIntegrate" Style="{StaticResource NavItem}" GroupName="nav" Tag="&#xE710;" Content="Integrate" IsChecked="True"
+                         ToolTip="Create the application in SCCM from a package folder."/>
+            <RadioButton x:Name="navModify"    Style="{StaticResource NavItem}" GroupName="nav" Tag="&#xE70F;" Content="Modify"
+                         ToolTip="See what an existing application has on the site and change its settings or collections."/>
+            <RadioButton x:Name="navMembers"   Style="{StaticResource NavItem}" GroupName="nav" Tag="&#xE716;" Content="Members"
+                         ToolTip="Put machines into, or take them out of, this package's collections."/>
+            <RadioButton x:Name="navRemove"    Style="{StaticResource NavItem}" GroupName="nav" Tag="&#xE74D;" Content="Remove"
+                         ToolTip="Take the application, its collections and deployments out of SCCM."/>
+            <RadioButton x:Name="navJobs"      Style="{StaticResource NavItem}" GroupName="nav" Tag="&#xE823;" Content="Jobs"
+                         ToolTip="What the server is doing right now, and everything it has done for this package."/>
+          </StackPanel>
+
+          <StackPanel Grid.Row="1" Margin="14,0,14,14">
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock Grid.Column="0" x:Name="txtVersion_Tool" Text="v2.0" FontSize="10" Foreground="{DynamicResource InkMuted}" VerticalAlignment="Center"/>
+              <Button Grid.Column="1" x:Name="btnTheme" Style="{StaticResource BtnIcon}" Content="&#xE706;" ToolTip="Switch between dark and light"/>
+            </Grid>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <!-- ============================================== PAGES -->
+      <TabControl Grid.Column="1" x:Name="tabMain">
+
+        <!-- ============================ INTEGRATE ============================ -->
+        <TabItem x:Name="tabIntegrate" Header="Integrate">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="*"/>
+              <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False" Padding="24,18,24,18">
+              <StackPanel>
+                <TextBlock Style="{StaticResource PageTitle}" Text="Integrate a package"/>
+                <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,10"
+                           Text="Pick the package folder, read it, check what came out, press Integrate. The server does the rest and reports every step."/>
+                <!-- what to do next, in order - the script lights the current step -->
+                <TextBlock x:Name="txtNextStep" Style="{StaticResource NextStep}" Text="1  Choose the environment      2  Pick the package folder      3  Read details      4  Integrate"/>
+
+                <Border x:Name="brdWarning" CornerRadius="2" Background="{DynamicResource AmberPale}" BorderBrush="{DynamicResource AmberLine}"
+                        BorderThickness="4,1,1,1" Padding="14,10,14,10" Margin="0,0,0,16" Visibility="Collapsed">
+                  <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#9888;" FontSize="15" Foreground="{DynamicResource Amber}" Margin="0,0,12,0" VerticalAlignment="Top"/>
+                    <TextBlock x:Name="txtWarning" TextWrapping="Wrap" Foreground="{DynamicResource AmberInk}"/>
+                  </StackPanel>
+                </Border>
+
+                <!-- 01 the package folder. Only the folder row shows; the two
+                     rarely-needed rows sit behind a disclosure. -->
+                <Border Style="{StaticResource CardStyle}">
+                  <StackPanel>
+                    <Grid>
+                      <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                      </Grid.RowDefinitions>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="130"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Row="0" Grid.ColumnSpan="4" Style="{StaticResource SectionTitle}" Margin="0,0,0,12">
+                        <Run Text="01" Foreground="{DynamicResource Teal}"/><Run Text="   THE PACKAGE"/>
+                      </TextBlock>
+                      <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource Label}" Text="Package folder"/>
+                      <TextBox   Grid.Row="1" Grid.Column="1" x:Name="txtPackagePath" Margin="0,0,12,0"
+                                 ToolTip="The folder that holds the deployment script - and, when the package ships with it, the request document. Its name becomes the package name in the header."/>
+                      <Button    Grid.Row="1" Grid.Column="2" x:Name="btnBrowse" Style="{StaticResource BtnGhost}" Content="Browse&#8230;" MinWidth="110" Margin="0,0,10,0"/>
+                      <Button    Grid.Row="1" Grid.Column="3" x:Name="btnRead"   Style="{StaticResource BtnPrimary}" Content="Read details" MinWidth="130" Margin="0" HorizontalAlignment="Left"
+                                 ToolTip="Reads the deployment script and the request form, and fills in everything below."/>
+                    </Grid>
+
+                    <ToggleButton x:Name="tglMorePlaces" Style="{StaticResource Disclosure}" Content="Documents kept elsewhere?  Where the files go?" IsChecked="False"/>
+                    <Grid Visibility="{Binding IsChecked, ElementName=tglMorePlaces, Converter={StaticResource BoolToVis}}" Margin="0,10,0,0">
+                      <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                      </Grid.RowDefinitions>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="130"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                      </Grid.ColumnDefinitions>
+                      <!-- The second place the request form may live, one folder per
+                           request. Looked at only when the package folder has no form. -->
+                      <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource Label}" Text="Documents location"/>
+                      <TextBox   Grid.Row="0" Grid.Column="1" x:Name="txtDocumentRoot" Margin="0,0,12,8"
+                                 ToolTip="Where request forms are kept apart from packages: one folder per request, named with the AES ID, vendor, app and version, with a Documentation folder inside. Used only when the package folder holds no Software Integration form. Remembered for you."/>
+                      <Button    Grid.Row="0" Grid.Column="2" x:Name="btnBrowseDocuments" Style="{StaticResource BtnGhost}" Content="Browse&#8230;" MinWidth="110" Margin="0,0,10,8"/>
+                      <TextBlock Grid.Row="0" Grid.Column="3" x:Name="txtDocumentRootNote" Style="{StaticResource Hint}" VerticalAlignment="Center" MinWidth="130" MaxWidth="300" Margin="0,0,0,8" Text="used when the package has no form"/>
+                      <!-- Where the package content goes with the job: the drop
+                           folder's Sources. Integrate copies it when it is not
+                           there; the button does the same on its own. -->
+                      <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource Label}" Text="Files go to"/>
+                      <TextBox   Grid.Row="1" Grid.Column="1" x:Name="txtContentTarget" Margin="0,0,12,0" IsReadOnly="True" FontFamily="Consolas"
+                                 ToolTip="Where the package files go with the job: the drop folder's Sources for the chosen environment, under the SCCM (underscore) name. The SCCM server copies them from there into the content store as the job's first step - this window never reaches the store."/>
+                      <Button    Grid.Row="1" Grid.Column="2" x:Name="btnCopyContent" Style="{StaticResource BtnGhost}" Content="Copy now" MinWidth="110" Margin="0,0,10,0" IsEnabled="False"
+                                 ToolTip="Copies the package files into the drop folder now, without submitting anything. Integrate does this by itself when they are not there yet."/>
+                      <TextBlock Grid.Row="1" Grid.Column="3" x:Name="txtContentState" Style="{StaticResource Hint}" VerticalAlignment="Center" MinWidth="130" MaxWidth="300" Text=""/>
+                    </Grid>
+                  </StackPanel>
+                </Border>
+
+                <!-- 02 and 03 -->
+                <Grid Margin="0,16,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="16"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+
+                  <Border Grid.Column="0" Style="{StaticResource CardStyle}" VerticalAlignment="Stretch">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="100"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="18"/>
+                        <ColumnDefinition Width="100"/>
+                        <ColumnDefinition Width="*"/>
+                      </Grid.ColumnDefinitions>
+                      <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                      </Grid.RowDefinitions>
+
+                      <TextBlock Grid.Row="0" Grid.ColumnSpan="5" Style="{StaticResource SectionTitle}" Margin="0,0,0,4">
+                        <Run Text="02" Foreground="{DynamicResource Teal}"/><Run Text="   FROM THE DEPLOYMENT SCRIPT"/>
+                      </TextBlock>
+                      <TextBlock Grid.Row="1" Grid.ColumnSpan="5" Style="{StaticResource Hint}" Margin="0,0,0,14"
+                                 Text="Correct anything that is wrong - what you leave here is what the server uses."/>
+
+                      <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource Label}" Text="Publisher"/>
+                      <TextBox   Grid.Row="2" Grid.Column="1" x:Name="txtPublisher"/>
+                      <TextBlock Grid.Row="2" Grid.Column="3" Style="{StaticResource Label}" Text="Version"/>
+                      <TextBox   Grid.Row="2" Grid.Column="4" x:Name="txtVersion"/>
+
+                      <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource Label}" Text="Product"/>
+                      <TextBox   Grid.Row="3" Grid.Column="1" x:Name="txtProduct"/>
+                      <TextBlock Grid.Row="3" Grid.Column="3" Style="{StaticResource Label}" Text="Architecture"/>
+                      <TextBox   Grid.Row="3" Grid.Column="4" x:Name="txtArchitecture"/>
+
+                      <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource Label}" Text="Revision"/>
+                      <TextBox   Grid.Row="4" Grid.Column="1" x:Name="txtRevision"/>
+                      <TextBlock Grid.Row="4" Grid.Column="3" Style="{StaticResource Label}" Text="Language"/>
+                      <TextBox   Grid.Row="4" Grid.Column="4" x:Name="txtLanguage"/>
+
+                      <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource Label}" Text="Branding key"/>
+                      <TextBox   Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="4" x:Name="txtBranding" FontFamily="Consolas" Margin="0"
+                                 ToolTip="The registry key the package writes under HKLM\Software\VWG\CM. This IS the detection rule - see 04."/>
+                    </Grid>
+                  </Border>
+
+                  <Border Grid.Column="2" Style="{StaticResource CardStyle}" VerticalAlignment="Stretch">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="120"/>
+                        <ColumnDefinition Width="*"/>
+                      </Grid.ColumnDefinitions>
+                      <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                      </Grid.RowDefinitions>
+
+                      <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Style="{StaticResource SectionTitle}" Margin="0,0,0,4">
+                        <Run Text="03" Foreground="{DynamicResource Teal}"/><Run Text="   SHOWN IN SOFTWARE CENTER"/>
+                      </TextBlock>
+                      <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource Hint}" Margin="0,0,0,14"
+                                 Text="The install title comes from the deployment script; the descriptions and the Windows versions from the request form."/>
+
+                      <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource Label}" Text="Install title (EN)"/>
+                      <TextBox   Grid.Row="2" Grid.Column="1" x:Name="txtNameEN"
+                                 ToolTip="InstallTitle from the deployment script. This is the application's display name in SCCM and Software Center."/>
+                      <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource Label}" Text="Install title (DE)"/>
+                      <TextBox   Grid.Row="3" Grid.Column="1" x:Name="txtNameDE"
+                                 ToolTip="The German display name. Starts equal to the English one."/>
+
+                      <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource Label}" Text="Description (EN)" VerticalAlignment="Top" Margin="0,8,12,0"/>
+                      <TextBox   Grid.Row="4" Grid.Column="1" x:Name="txtDescEN" MinHeight="44" TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top"/>
+                      <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource Label}" Text="Description (DE)" VerticalAlignment="Top" Margin="0,8,12,0"/>
+                      <TextBox   Grid.Row="5" Grid.Column="1" x:Name="txtDescDE" MinHeight="44" TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top"/>
+
+                      <!-- One tick box per Windows version in Defaults.xml, built by
+                           the script, ticked from the request form. These become the
+                           deployment type's operating system requirement. -->
+                      <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource Label}" Text="Windows versions" VerticalAlignment="Top" Margin="0,6,12,0"/>
+                      <StackPanel Grid.Row="6" Grid.Column="1" Margin="0,4,0,0">
+                        <WrapPanel x:Name="pnlOperatingSystems" Orientation="Horizontal"/>
+                        <TextBlock x:Name="txtOperatingSystemsNote" Style="{StaticResource Hint}" Margin="0,2,0,0"
+                                   Text="Ticked as the request form says. Only the ticked versions can install the application."/>
+                      </StackPanel>
+                    </Grid>
+                  </Border>
+                </Grid>
+
+                <!-- 04 the one detection rule -->
+                <Border Style="{StaticResource CardStyle}" Margin="0,16,0,0" Padding="20,12,20,12">
+                  <StackPanel>
+                    <TextBlock Style="{StaticResource SectionTitle}" Margin="0,0,0,6"
+                               ToolTip="Not a field: it follows the branding key and revision above, so a typo shows here rather than on a client three days later.">
+                      <Run Text="04" Foreground="{DynamicResource Teal}"/><Run Text="   HOW SCCM WILL DETECT IT"/>
+                    </TextBlock>
+                    <TextBlock x:Name="txtRule1" Style="{StaticResource Mono}"/>
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0"
+                               Text="The branding key is the only detection rule. The package writes it on install; SCCM reads it back and compares the revision."/>
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+            </ScrollViewer>
+
+            <Border Grid.Row="1" Style="{StaticResource ActionBar}">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Style="{StaticResource Hint}" VerticalAlignment="Center"
+                           Text="New package: Integrate.   New files for a package already in SCCM: Update content.   Details, collections and machines of an existing application: the Modify and Members pages.   Every one asks first and tells you exactly what it will do."/>
+                <Button Grid.Column="1" x:Name="btnRefreshContent" Style="{StaticResource BtnGhost}" Content="Update content" MinWidth="140"
+                        ToolTip="Replaces what differs between the package folder and the store - file by file, by content, never by timestamp - and tells the distribution points to fetch the change. Nothing else on the application changes."/>
+                <Button Grid.Column="2" x:Name="btnIntegrate" Style="{StaticResource BtnPrimary}" Content="Integrate" MinWidth="150" Margin="0"
+                        ToolTip="Creates the application in the chosen environment: the server picks the job up from the drop folder and reports every step here."/>
+              </Grid>
+            </Border>
+          </Grid>
+        </TabItem>
+
+        <!-- ============================ MODIFY ============================ -->
+        <!-- The window holds no SCCM connection. "Read from SCCM" submits an
+             Inspect job; the answer comes back through the drop folder like any
+             result. Ticking rows and pressing Apply submits a Change job. -->
+        <TabItem x:Name="tabModify" Header="Modify">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="*"/>
+              <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="24,18,24,18">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+
+              <TextBlock Grid.Row="0" Style="{StaticResource PageTitle}" Text="Modify an application"/>
+              <TextBlock Grid.Row="1" x:Name="txtModifyState" Style="{StaticResource Hint}" Margin="0,4,0,14"
+                         Text="1  Read from SCCM      2  Change a setting or tick a collection      3  Apply changes"/>
+
+              <Grid Grid.Row="2">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="1*" MinWidth="420"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="1*" MinWidth="380"/>
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Style="{StaticResource CardStyle}" Padding="16,12,16,12">
+                  <Grid>
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Style="{StaticResource SectionTitle}" Margin="0,0,0,8">
+                      <Run Text="05" Foreground="{DynamicResource Teal}"/><Run Text="   SETTINGS ON THE SITE"/>
+                    </TextBlock>
+                    <DataGrid Grid.Row="1" x:Name="lstSettings" Style="{StaticResource GridStyle}" CanUserAddRows="False" IsReadOnly="False">
+                      <DataGrid.Columns>
+                        <DataGridTextColumn Header="Setting" Width="150" Binding="{Binding Label}" IsReadOnly="True"/>
+                        <DataGridTextColumn Header="Now" Width="1.3*" Binding="{Binding CurrentLabel}" IsReadOnly="True"
+                                            ElementStyle="{StaticResource CellWrapMuted}"/>
+                        <!-- One column, three appearances, chosen by the row:
+                             Choice = dropdown, Text/Number = box, locked = the
+                             reason in words. -->
+                        <DataGridTemplateColumn Header="Change to" Width="*" MinWidth="180" CanUserSort="False">
+                          <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                              <Grid Margin="0,3,6,3">
+                                <TextBlock x:Name="locked" Text="{Binding LockedReason}" Style="{StaticResource CellWrapMuted}"
+                                           FontSize="11" FontStyle="Italic" Margin="0" VerticalAlignment="Center" Visibility="Collapsed"/>
+                                <ComboBox x:Name="choice" ItemsSource="{Binding Options}"
+                                          DisplayMemberPath="Label" SelectedValuePath="Value"
+                                          SelectedValue="{Binding NewValue, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                          FontWeight="Normal" Visibility="Collapsed"/>
+                                <TextBox x:Name="freeText" Margin="0"
+                                         Text="{Binding NewValue, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                         Visibility="Collapsed"/>
+                              </Grid>
+                              <DataTemplate.Triggers>
+                                <DataTrigger Binding="{Binding Editable}" Value="False">
+                                  <Setter TargetName="locked" Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                                <MultiDataTrigger>
+                                  <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding Editable}" Value="True"/>
+                                    <Condition Binding="{Binding Editor}"   Value="Choice"/>
+                                  </MultiDataTrigger.Conditions>
+                                  <Setter TargetName="choice" Property="Visibility" Value="Visible"/>
+                                </MultiDataTrigger>
+                                <MultiDataTrigger>
+                                  <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding Editable}" Value="True"/>
+                                    <Condition Binding="{Binding Editor}"   Value="Text"/>
+                                  </MultiDataTrigger.Conditions>
+                                  <Setter TargetName="freeText" Property="Visibility" Value="Visible"/>
+                                </MultiDataTrigger>
+                                <MultiDataTrigger>
+                                  <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding Editable}" Value="True"/>
+                                    <Condition Binding="{Binding Editor}"   Value="Number"/>
+                                  </MultiDataTrigger.Conditions>
+                                  <Setter TargetName="freeText" Property="Visibility" Value="Visible"/>
+                                </MultiDataTrigger>
+                              </DataTemplate.Triggers>
+                            </DataTemplate>
+                          </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTextColumn Header="" Width="56" Binding="{Binding Unit}" IsReadOnly="True"/>
+                      </DataGrid.Columns>
+                    </DataGrid>
+                  </Grid>
+                </Border>
+
+                <GridSplitter Grid.Column="1" Width="12" HorizontalAlignment="Stretch" Background="Transparent" ShowsPreview="True"/>
+
+                <Border Grid.Column="2" Style="{StaticResource CardStyle}" Padding="16,12,16,12">
+                  <Grid>
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="*"/>
+                      <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Style="{StaticResource SectionTitle}" Margin="0,0,0,8">
+                      <Run Text="06" Foreground="{DynamicResource Teal}"/><Run Text="   COLLECTIONS AND DEPLOYMENTS"/>
+                    </TextBlock>
+                    <!-- A CheckBox in a CellTemplate, not a CheckBoxColumn: a
+                         CheckBoxColumn needs two clicks (edit mode, then tick). -->
+                    <DataGrid Grid.Row="1" x:Name="lstModify" Style="{StaticResource GridStyle}" CanUserAddRows="False" IsReadOnly="False">
+                      <DataGrid.Columns>
+                        <DataGridTemplateColumn Header="Do it" Width="52" CanUserSort="False">
+                          <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                              <CheckBox IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                        IsEnabled="{Binding Actionable}" Margin="0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </DataTemplate>
+                          </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTextColumn Header="Action" Width="66" Binding="{Binding Action}" IsReadOnly="True" ElementStyle="{StaticResource CellAction}"/>
+                        <DataGridTextColumn Header="Collection" Width="*" Binding="{Binding Name}" IsReadOnly="True" ElementStyle="{StaticResource CellWrap}"/>
+                        <DataGridTextColumn Header="State" Width="96" Binding="{Binding State}" IsReadOnly="True" ElementStyle="{StaticResource CellWrapMuted}"/>
+                      </DataGrid.Columns>
+                    </DataGrid>
+                    <TextBlock Grid.Row="2" x:Name="txtModifyHint" Style="{StaticResource Hint}" Margin="0,8,0,0"
+                               Text="Tick the rows to act on. Only ticked rows are touched; nothing else on the site is altered. Machines are on the Members page."/>
+                  </Grid>
+                </Border>
+              </Grid>
+            </Grid>
+
+            <Border Grid.Row="1" Style="{StaticResource ActionBar}">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Style="{StaticResource Hint}" VerticalAlignment="Center"
+                           Text="Read from SCCM creates and changes nothing. Apply sends exactly what you changed or ticked."/>
+                <Button Grid.Column="1" x:Name="btnInspect" Style="{StaticResource BtnGhost}" Content="Read from SCCM" MinWidth="140"
+                        ToolTip="Asks the server what exists for this package right now."/>
+                <Button Grid.Column="2" x:Name="btnApplyChanges" Style="{StaticResource BtnPrimary}" Content="Apply changes" MinWidth="150" Margin="0" IsEnabled="False"
+                        ToolTip="Sends a job that writes the changed settings, creates the ticked missing collections and removes the ticked unwanted ones."/>
+              </Grid>
+            </Border>
+          </Grid>
+        </TabItem>
+
+        <!-- ============================ MEMBERS ============================ -->
+        <!-- Machines in this package's collections. Its own page, because it
+             reaches real computers: a machine added to an install collection
+             installs the software. The shape follows the tool packagers know
+             from the console's right-click tools - pick the collection, paste
+             the names, review, apply. -->
+        <TabItem x:Name="tabMembers" Header="Members">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="*"/>
+              <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="24,18,24,18">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+
+              <TextBlock Grid.Row="0" Style="{StaticResource PageTitle}" Text="Machines in a collection"/>
+              <TextBlock Grid.Row="1" x:Name="txtMembersState" Style="{StaticResource Hint}" Margin="0,4,0,14"
+                         Text="1  Read from SCCM      2  Pick a collection      3  Add or remove machines      4  Apply"/>
+
+              <!-- 07 which collection -->
+              <Border Grid.Row="2" Style="{StaticResource CardStyle}" Padding="16,12,16,12" Margin="0,0,0,14">
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}" Margin="0,0,20,0" VerticalAlignment="Center">
+                    <Run Text="07" Foreground="{DynamicResource Teal}"/><Run Text="   COLLECTION"/>
+                  </TextBlock>
+                  <ComboBox Grid.Column="1" x:Name="cboMemberCollection" MinWidth="420" FontFamily="Consolas" FontWeight="Normal"
+                            ToolTip="Only collections that exist on the site are offered. A collection that is not there yet is created on the Modify page first."/>
+                  <TextBlock Grid.Column="3" x:Name="txtMembersNote" Style="{StaticResource Hint}" Foreground="{DynamicResource Amber}" VerticalAlignment="Center" MaxWidth="420" TextAlignment="Right"/>
+                </Grid>
+              </Border>
+
+              <Grid Grid.Row="3">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="3*" MinWidth="420"/>
+                  <ColumnDefinition Width="16"/>
+                  <ColumnDefinition Width="2*" MinWidth="300"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- 08 the machines -->
+                <Border Grid.Column="0" Style="{StaticResource CardStyle}" Padding="16,12,16,12">
+                  <Grid>
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="*"/>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}">
+                        <Run Text="08" Foreground="{DynamicResource Teal}"/><Run Text="   MACHINES IN THIS COLLECTION"/>
+                      </TextBlock>
+                      <TextBlock Grid.Column="1" x:Name="txtMembersCount" Style="{StaticResource Hint}" Text=""/>
+                    </Grid>
+                    <!-- One list, three plain states, no tick boxes:
+                           on site           what the collection holds now
+                           will be added     pasted on the right, not sent yet
+                           will be removed   marked with the button below, not sent yet
+                         Select rows (click, Ctrl-click, Shift-click) and press
+                         the button that says what should happen to them. -->
+                    <DataGrid Grid.Row="1" x:Name="lstMembers" Style="{StaticResource GridStyle}" CanUserAddRows="False" SelectionMode="Extended" SelectionUnit="FullRow">
+                      <DataGrid.Columns>
+                        <DataGridTextColumn Header="Machine" Width="*" Binding="{Binding Machine}" FontFamily="Consolas">
+                          <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                              <Style.Triggers>
+                                <DataTrigger Binding="{Binding Status}" Value="will be removed">
+                                  <Setter Property="Foreground" Value="{DynamicResource Danger}"/>
+                                  <Setter Property="TextDecorations" Value="Strikethrough"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Status}" Value="will be added">
+                                  <Setter Property="Foreground" Value="{DynamicResource TealDeep}"/>
+                                  <Setter Property="FontWeight" Value="SemiBold"/>
+                                </DataTrigger>
+                              </Style.Triggers>
+                            </Style>
+                          </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                        <DataGridTextColumn Header="Status" Width="150" Binding="{Binding Status}">
+                          <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource CellWrapMuted}">
+                              <Style.Triggers>
+                                <DataTrigger Binding="{Binding Status}" Value="will be removed">
+                                  <Setter Property="Foreground" Value="{DynamicResource Danger}"/>
+                                  <Setter Property="FontWeight" Value="SemiBold"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Status}" Value="will be added">
+                                  <Setter Property="Foreground" Value="{DynamicResource TealDeep}"/>
+                                  <Setter Property="FontWeight" Value="SemiBold"/>
+                                </DataTrigger>
+                              </Style.Triggers>
+                            </Style>
+                          </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                      </DataGrid.Columns>
+                    </DataGrid>
+                    <Grid Grid.Row="2" Margin="0,10,0,0">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                      </Grid.ColumnDefinitions>
+                      <Button Grid.Column="0" x:Name="btnRemoveSelected" Style="{StaticResource BtnGhost}" Content="Remove selected" MinWidth="140"
+                              ToolTip="Marks the selected machines to be taken out of the collection when you Apply. A machine that was only 'will be added' is simply dropped from the list."/>
+                      <Button Grid.Column="1" x:Name="btnKeepSelected" Style="{StaticResource BtnGhost}" Content="Keep selected" MinWidth="120"
+                              ToolTip="Undoes 'will be removed' on the selected machines."/>
+                      <Button Grid.Column="3" x:Name="btnRemoveAll" Style="{StaticResource BtnGhost}" Content="Remove all" MinWidth="110" Margin="0"
+                              ToolTip="Marks every machine now in the collection to be removed when you Apply. Nothing is sent until then."/>
+                    </Grid>
+                    <TextBlock Grid.Row="3" Style="{StaticResource Hint}" Margin="0,8,0,0"
+                               Text="Only direct members are listed. A machine that arrives through a query rule cannot be removed here - it would come straight back."/>
+                  </Grid>
+                </Border>
+
+                <!-- 09 add machines -->
+                <Border Grid.Column="2" Style="{StaticResource CardStyle}" Padding="16,12,16,12">
+                  <Grid>
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="*"/>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Style="{StaticResource SectionTitle}" Margin="0,0,0,4">
+                      <Run Text="09" Foreground="{DynamicResource Teal}"/><Run Text="   ADD MACHINES"/>
+                    </TextBlock>
+                    <TextBlock Grid.Row="1" Style="{StaticResource Hint}" Margin="0,0,0,8"
+                               Text="One name per line, or separated by commas - paste straight out of a ticket or a mail. Names already in the collection are skipped."/>
+                    <TextBox Grid.Row="2" x:Name="txtAddMachines" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Consolas"
+                             VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top" MinHeight="120" Margin="0"/>
+                    <Button Grid.Row="3" x:Name="btnQueueAdd" Style="{StaticResource BtnGhost}" Content="Add" HorizontalAlignment="Right" Margin="0,10,0,0" MinWidth="110"
+                            ToolTip="Puts these machines in the list on the left as 'will be added'. Nothing reaches SCCM until Apply."/>
+                    <Border Grid.Row="4" Style="{StaticResource InsetStyle}" Margin="0,12,0,0">
+                      <StackPanel>
+                        <TextBlock Text="NOT YET APPLIED" Style="{StaticResource SubHeading}" Margin="0,0,0,3"/>
+                        <TextBlock x:Name="txtMembersSummary" Text="No changes." TextWrapping="Wrap"/>
+                      </StackPanel>
+                    </Border>
+                  </Grid>
+                </Border>
+              </Grid>
+            </Grid>
+
+            <Border Grid.Row="1" Style="{StaticResource ActionBar}">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Style="{StaticResource Hint}" VerticalAlignment="Center"
+                           Text="A machine added to an install collection will install this software. Every change is confirmed by name before it is sent, and the list updates itself from the server's answer."/>
+                <Button Grid.Column="1" x:Name="btnMembersRead" Style="{StaticResource BtnGhost}" Content="Read from SCCM" MinWidth="140"
+                        ToolTip="Loads this package's collections and their direct members. Creates and changes nothing."/>
+                <Button Grid.Column="2" x:Name="btnMembersDiscard" Style="{StaticResource BtnGhost}" Content="Discard changes" MinWidth="130"
+                        ToolTip="Forgets every 'will be added' and 'will be removed' on this page. Nothing was sent."/>
+                <Button Grid.Column="3" x:Name="btnApplyMembers" Style="{StaticResource BtnPrimary}" Content="Apply" MinWidth="150" Margin="0" IsEnabled="False"
+                        ToolTip="Sends one job with every addition and removal shown in the list."/>
+              </Grid>
+            </Border>
+          </Grid>
+        </TabItem>
+
+        <!-- ============================ REMOVE ============================ -->
+        <!-- Destructive, so it has its own page and a typed confirmation: the
+             button stays off until the package name has been typed back. -->
+        <TabItem x:Name="tabRemove" Header="Remove">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="*"/>
+              <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False" Padding="24,18,24,18">
+              <StackPanel MaxWidth="820" HorizontalAlignment="Left">
+                <TextBlock Style="{StaticResource PageTitle}" Text="Remove an application"/>
+                <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,10"
+                           Text="Takes the package out of SCCM in the chosen environment. Only the package name in the header is needed."/>
+                <TextBlock Style="{StaticResource NextStep}" Text="1  Name the package in the header      2  Check the list below      3  Type the name back      4  Remove"/>
+
+                <Border Style="{StaticResource CardStyle}">
+                  <StackPanel>
+                    <TextBlock Style="{StaticResource SectionTitle}" Margin="0,0,0,10">
+                      <Run Text="10" Foreground="{DynamicResource Teal}"/><Run Text="   EXACTLY WHAT GOES"/>
+                    </TextBlock>
+                    <TextBlock x:Name="txtRemoveTarget" Style="{StaticResource Mono}" Text="- no package named -" Margin="0,0,0,10"/>
+                    <TextBlock x:Name="txtRemoveObjects" Style="{StaticResource Mono}" TextWrapping="Wrap" Text="" Margin="0,0,0,10"/>
+                    <TextBlock Style="{StaticResource Hint}"
+                               Text="Whole names, one object each - never a pattern. Each collection goes with its deployment; the application with its deployment type. Not touched: the files in the store (unless you say so below), hand-made collections, anything else on the site, anything already installed on a machine."/>
+                  </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardStyle}" Margin="0,16,0,0" BorderBrush="{DynamicResource DangerLine}">
+                  <Grid>
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Style="{StaticResource SectionTitle}" Margin="0,0,0,10">
+                      <Run Text="11" Foreground="{DynamicResource Danger}"/><Run Text="   CONFIRM"/>
+                    </TextBlock>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource Label}" Text="Type the package name" Margin="0,0,12,0"/>
+                    <TextBox   Grid.Row="1" Grid.Column="1" x:Name="txtRemoveConfirm" FontFamily="Consolas" Margin="0"
+                               ToolTip="The Remove button stays off until this matches the package name in the header exactly."/>
+                  </Grid>
+                </Border>
+
+                <!-- The two things most removals do not need sit behind a
+                     disclosure each: the files in the store (a separate
+                     decision, off by default - a removal in SCCM is undone by
+                     integrating again, deleted files are not) and Find (for
+                     applications the tool did not create). -->
+                <ToggleButton x:Name="tglRemoveContent" Style="{StaticResource Disclosure}" Content="Also delete the files from the store?" IsChecked="False" Margin="0,14,0,0"/>
+                <Border Style="{StaticResource CardStyle}" Margin="0,8,0,0" Visibility="{Binding IsChecked, ElementName=tglRemoveContent, Converter={StaticResource BoolToVis}}">
+                  <StackPanel>
+                    <CheckBox x:Name="chkRemoveContent" Content="Yes - also delete this package's folder from the content store" IsChecked="False" Margin="0,0,0,6"/>
+                    <TextBlock Style="{StaticResource Hint}"
+                               Text="Only the one folder named above, only after SCCM has let go of the application, and you are asked once more with the exact path. Left off, the files stay and the package can be integrated again without a new copy."/>
+                  </StackPanel>
+                </Border>
+
+                <ToggleButton x:Name="tglFind" Style="{StaticResource Disclosure}" Content="Not made by this tool?  Find it on the site" IsChecked="False" Margin="0,10,0,0"/>
+                <Border Style="{StaticResource CardStyle}" Margin="0,8,0,0" Visibility="{Binding IsChecked, ElementName=tglFind, Converter={StaticResource BoolToVis}}">
+                  <Grid>
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"
+                               Text="Type a name or a pattern such as INA_ADOBE_* and press Find. The server lists every application that matches, with its collections. Tick what goes, then Remove ticked. Only the ticked names are removed - a pattern never is, and a name with a * in it is treated as one application."/>
+                    <Grid Grid.Row="1" Margin="0,0,0,10">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Column="0" Style="{StaticResource Label}" Text="Name or pattern" Margin="0,0,12,0"/>
+                      <TextBox   Grid.Column="1" x:Name="txtFindPattern" FontFamily="Consolas" Margin="0,0,10,0" ToolTip="e.g. INA_ADOBE_*  or the exact name of an application"/>
+                      <Button    Grid.Column="2" x:Name="btnFind" Style="{StaticResource BtnGhost}" Content="Find on the site" MinWidth="140" Margin="0"/>
+                    </Grid>
+                    <DataGrid Grid.Row="2" x:Name="lstFound" Style="{StaticResource GridStyle}" CanUserAddRows="False" IsReadOnly="False" MaxHeight="260">
+                      <DataGrid.Columns>
+                        <DataGridTemplateColumn Header="Remove" Width="64" CanUserSort="False">
+                          <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                              <CheckBox IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Margin="0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </DataTemplate>
+                          </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTextColumn Header="Application (exact name)" Width="*" Binding="{Binding Name}" IsReadOnly="True" ElementStyle="{StaticResource CellWrap}"/>
+                        <DataGridTextColumn Header="Deployed to" Width="2*" Binding="{Binding CollectionList}" IsReadOnly="True" ElementStyle="{StaticResource CellWrapMuted}"/>
+                        <DataGridTextColumn Header="Content" Width="2*" Binding="{Binding ContentPath}" IsReadOnly="True" ElementStyle="{StaticResource CellWrapMuted}"/>
+                      </DataGrid.Columns>
+                    </DataGrid>
+                  </Grid>
+                </Border>
+              </StackPanel>
+            </ScrollViewer>
+
+            <Border Grid.Row="1" Style="{StaticResource ActionBar}">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" x:Name="txtRemoveHint" Style="{StaticResource Hint}" VerticalAlignment="Center"
+                           Text="Type the package name above to enable Remove."/>
+                <Button Grid.Column="1" x:Name="btnRemoveFound" Style="{StaticResource BtnDanger}" Content="Remove ticked" MinWidth="140" IsEnabled="False"
+                        ToolTip="Removes exactly the applications ticked in the Find list, each with the collections shown. Asks first, naming every one."/>
+                <Button Grid.Column="2" x:Name="btnRemove" Style="{StaticResource BtnDanger}" Content="Remove from SCCM" Margin="0" IsEnabled="False"/>
+              </Grid>
+            </Border>
+          </Grid>
+        </TabItem>
+
+        <!-- ============================ JOBS ============================ -->
+        <TabItem x:Name="tabJobs" Header="Jobs">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="*"/>
+              <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="24,18,24,18">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+              <TextBlock Grid.Row="0" Style="{StaticResource PageTitle}" Text="Jobs"/>
+              <TextBlock Grid.Row="1" Style="{StaticResource Hint}" Margin="0,4,0,14"
+                         Text="What the server is doing, or did, for the package in the header. You can close this window - the job carries on, and the result is here when you come back."/>
+
+              <!-- The last run of this package, read back from the drop folder. -->
+              <Border Grid.Row="2" Style="{StaticResource InsetStyle}" Margin="0,0,0,12">
+                <StackPanel>
+                  <TextBlock Text="CURRENT / LAST RUN" Style="{StaticResource SubHeading}" Margin="0,0,0,3"/>
+                  <TextBlock x:Name="txtHistory" Text="No earlier run of this package in this environment." TextWrapping="Wrap"/>
+
+                  <!-- The two machines behind the drop folder, read from the
+                       status files they write back. This is all a packager can
+                       ever see of them, so it is always on this page. -->
+                  <TextBlock Text="CONNECTION" Style="{StaticResource SubHeading}" Margin="0,12,0,3"/>
+                  <Grid>
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Ellipse Grid.Row="0" Grid.Column="0" x:Name="dotSync" Width="9" Height="9" Margin="0,0,10,3" VerticalAlignment="Center" Fill="{DynamicResource InkMuted}"/>
+                    <TextBlock Grid.Row="0" Grid.Column="1" Text="Middle server" Foreground="{DynamicResource InkMuted}" Margin="0,0,14,3" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Row="0" Grid.Column="2" x:Name="txtSyncHealth" Text="Not seen yet." TextWrapping="Wrap" Margin="0,0,0,3"/>
+                    <Ellipse Grid.Row="1" Grid.Column="0" x:Name="dotWatcher" Width="9" Height="9" Margin="0,0,10,0" VerticalAlignment="Center" Fill="{DynamicResource InkMuted}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="1" Text="SCCM server" Foreground="{DynamicResource InkMuted}" Margin="0,0,14,0" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Row="1" Grid.Column="2" x:Name="txtWatcherHealth" Text="Not seen yet." TextWrapping="Wrap"/>
+                  </Grid>
+                </StackPanel>
+              </Border>
+
+              <Border Grid.Row="3" Style="{StaticResource CardStyle}" Padding="16,12,16,12">
+                <Grid>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                  </Grid.RowDefinitions>
+                  <TextBlock Grid.Row="0" Style="{StaticResource SectionTitle}" Margin="0,0,0,8">
+                    <Run Text="12" Foreground="{DynamicResource Teal}"/><Run Text="   STEPS"/>
+                  </TextBlock>
+                  <!-- Ctrl+C copies rows; the right-click menu is for anyone who
+                       does not know that. An error you cannot paste into a ticket
+                       has to be retyped from a screenshot. -->
+                  <DataGrid Grid.Row="1" x:Name="lstResults" Style="{StaticResource GridStyle}"
+                            SelectionMode="Extended" SelectionUnit="FullRow" ClipboardCopyMode="IncludeHeader">
+                    <DataGrid.ContextMenu>
+                      <ContextMenu>
+                        <MenuItem x:Name="mnuCopyRows" Header="Copy selected row(s)"/>
+                        <MenuItem x:Name="mnuCopyAll"  Header="Copy everything"/>
+                      </ContextMenu>
+                    </DataGrid.ContextMenu>
+                    <DataGrid.Columns>
+                      <DataGridTextColumn Header="Step" Width="170" Binding="{Binding Step}">
+                        <DataGridTextColumn.ElementStyle>
+                          <Style TargetType="TextBlock"><Setter Property="FontWeight" Value="SemiBold"/></Style>
+                        </DataGridTextColumn.ElementStyle>
+                      </DataGridTextColumn>
+                      <DataGridTemplateColumn Header="Result" Width="110" ClipboardContentBinding="{Binding Result}">
+                        <DataGridTemplateColumn.CellTemplate>
+                          <DataTemplate>
+                            <Border Style="{StaticResource ResultBadge}">
+                              <TextBlock Text="{Binding Result}" Style="{StaticResource ResultBadgeText}"/>
+                            </Border>
+                          </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                      </DataGridTemplateColumn>
+                      <DataGridTemplateColumn Header="Detail" Width="*" ClipboardContentBinding="{Binding Message}">
+                        <DataGridTemplateColumn.CellTemplate>
+                          <DataTemplate>
+                            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" Margin="0,5,8,5" VerticalAlignment="Top"/>
+                          </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                      </DataGridTemplateColumn>
+                    </DataGrid.Columns>
+                  </DataGrid>
+                </Grid>
+              </Border>
+            </Grid>
+
+            <Border Grid.Row="1" Style="{StaticResource ActionBar}">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Style="{StaticResource Hint}" VerticalAlignment="Center"
+                           Text="Updates itself every few seconds. After a failure, Run again or Clean up appear here."/>
+                <Button Grid.Column="1" x:Name="btnOpenLog" Style="{StaticResource BtnGhost}" Content="Open log folder" MinWidth="140" IsEnabled="False"/>
+                <Button Grid.Column="2" x:Name="btnCleanUp" Style="{StaticResource BtnGhost}" Content="Clean up" MinWidth="110" IsEnabled="False"
+                        ToolTip="A failed Integrate left its application on the site. Opens the Remove page for this package: type the name back to remove exactly this package's objects, then Integrate again."/>
+                <Button Grid.Column="3" x:Name="btnRunAgain" Style="{StaticResource BtnGhost}" Content="Run again" MinWidth="120" IsEnabled="False"
+                        ToolTip="Submit the failed job again, exactly as it was. Steps already done are skipped and the rest is completed. Asks first."/>
+                <Button Grid.Column="4" x:Name="btnFetchStatus" Style="{StaticResource BtnGhost}" Content="Fetch status" MinWidth="130"
+                        ToolTip="Read the drop folder now: queued, handed to the server, running (which step), or finished."/>
+                <Button Grid.Column="5" x:Name="btnHistory" Style="{StaticResource BtnPrimary}" Content="Show all runs" MinWidth="150" Margin="0"
+                        ToolTip="Every job this tool has run for this package in this environment - what was done, when, and whether it worked."/>
+              </Grid>
+            </Border>
+          </Grid>
+        </TabItem>
+      </TabControl>
+    </Grid>
+
+    <!-- ================================================== STATUS BAR -->
+    <Border Grid.Row="2" Background="{DynamicResource Strip}" BorderBrush="{DynamicResource CardBorder}" BorderThickness="0,1,0,0">
+      <Grid>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <ProgressBar Grid.Row="0" x:Name="prgRun" Minimum="0" Maximum="8" Value="0"/>
+        <Grid Grid.Row="1" Margin="24,8,24,8">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <!-- A read-only TextBox, not a TextBlock, so an error can be selected
+               and copied. Style="{x:Null}" opts out of the implicit TextBox
+               style, whose IsReadOnly trigger would repaint it as a grey field
+               and override the colour the script sets. -->
+          <TextBox Grid.Column="0" x:Name="txtStatus" Style="{x:Null}"
+                   Text="Ready." TextWrapping="Wrap"
+                   VerticalAlignment="Center" Margin="0,0,16,0" Padding="0"
+                   IsReadOnly="True" IsReadOnlyCaretVisible="False"
+                   Background="Transparent" BorderThickness="0"
+                   Foreground="{DynamicResource Ink}" Cursor="IBeam">
+            <TextBox.ContextMenu>
+              <ContextMenu>
+                <MenuItem x:Name="mnuCopyStatus" Header="Copy this message"/>
+              </ContextMenu>
+            </TextBox.ContextMenu>
+          </TextBox>
+          <TextBlock Grid.Column="1" x:Name="txtStep" Text="" FontWeight="SemiBold" FontSize="11" Foreground="{DynamicResource TealDeep}"/>
+        </Grid>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

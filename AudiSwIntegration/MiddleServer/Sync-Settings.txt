@@ -1,0 +1,13 @@
+# Settings for the drop folder sync on the middle server (Sync-AudiSwDropFolders.ps1).
+# One setting per line, key = value. Lines starting with # are ignored.
+# Change a path here; no re-install of the scheduled task is needed.
+
+# The packager-side drop folder root (the share the packagers write to).
+ClientRoot =
+
+# The SCCM-side drop folder root (the share in the SCCM zone the watcher reads).
+ServerRoot =
+
+# Carry only this environment's folder (e.g. INA). Leave empty to carry every
+# environment folder found under ClientRoot.
+EnvironmentCode =

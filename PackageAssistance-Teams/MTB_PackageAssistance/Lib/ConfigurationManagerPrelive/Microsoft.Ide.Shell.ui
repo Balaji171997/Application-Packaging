@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UI xmlns="http://schemas.microsoft.com/IDE/UI">
+  <CommandGroups>
+    <CommandGroup Name="MainMenu">
+      <CommandGroup Name="File" DisplayName="_File">
+        <CommandGroup Name="ExitGroup" After="MRUGroup">
+          <Command Name="File.Exit" DisplayName="E_xit" />
+        </CommandGroup>
+      </CommandGroup>
+      <CommandGroup Name="View" DisplayName="_View" After="File">
+        <CommandGroup Name="UI">
+          <Command Name="View.Toolbars" DisplayName="_Toolbars" />
+          <!--<Command Name="View.DemoMode" DisplayName="_Demo mode" Checked="Shell.DemoMode" />-->
+        </CommandGroup>
+      </CommandGroup>
+      <CommandGroup Name="Tools" DisplayName="_Tools" After="View">
+        <CommandGroup Name="MacroGroup">
+          <CommandGroup Name="Macros" DisplayName="_Macros">
+            <Command Name="Tools.RunTemporaryMacro" DisplayName="_Run Temporary Macro" Visible="Macro.CanRun" />
+            <Command Name="Tools.RecordTemporaryMacro" DisplayName="Re_cord Temporary Macro" Visible="Macro.NotRecording" />
+            <Command Name="Tools.RecordTemporaryMacro" DisplayName="Stop Recording" Visible="Macro.Recording" />
+          </CommandGroup>
+        </CommandGroup>
+      </CommandGroup>
+      <CommandGroup Name="Help" DisplayName="_Help" After="Tools">
+        <CommandGroup Name="HelpMainGroup">
+          <Command Name="Help.LaunchInBrowser" DisplayName="_View Help" />
+          <Command Name="Help.Feedback" DisplayName="Feedback" />
+          <Command Name="Help.OpenLogFile" DisplayName="Open log file" />
+          <Command Name="Help.OpenLogsDirectory" DisplayName="Open log directory" />
+          <Command Name="Help.UploadLogs" DisplayName="Upload logs" />
+        </CommandGroup>
+        <CommandGroup Name="HelpUpdatesGroup">
+          <Command Name="Help.CheckForUpdates" DisplayName="Check for Updates..." />
+        </CommandGroup>
+        <CommandGroup Name="HelpAboutGroup">
+          <Command Name="Help.About" DisplayName="_About"/>
+        </CommandGroup>
+      </CommandGroup>
+    </CommandGroup>
+    <CommandGroup Name="Toolbars">
+      <CommandGroup Name="Macros" DisplayName="Macros" Band="1" Visible="Macro.Recording">
+        <Command Name="Tools.RecordTemporaryMacro" DisplayName="Stop Recording" Enabled="Macro.Recording" />
+      </CommandGroup>
+    </CommandGroup>
+    <CommandGroup Name="ToolWindows">
+      <CommandGroup Name="FindResultsTabToolbar">
+        <CommandGroup Name="RefreshGroup" Visible="Find.FindToolbarButtonsVisible">
+          <Command Name="Edit.RefreshFindResults" DisplayName="Rerun search" Visible="Edit.RefreshFindResults.Visible" Enabled="Find.CanRefreshFindResults" />
+        </CommandGroup>
+        <CommandGroup Name="GoToLocationGroup" Visible="Find.FindToolbarButtonsVisible">
+          <Command Name="Edit.GoToFindResultsLocation" DisplayName="Go to the location on the current line" Visible="Find.FindToolbarButtonsVisible"/>
+        </CommandGroup>
+        <CommandGroup Name="PreviousNextGroup" Visible="Find.FindToolbarButtonsVisible">
+          <Command Name="Edit.GoToPrevLocation" DisplayName="Go to the previous location in the list" Visible="Find.FindToolbarButtonsVisible" />
+          <Command Name="Edit.GoToNextLocation" DisplayName="Go to the next location in the list" Visible="Find.FindToolbarButtonsVisible" />
+        </CommandGroup>
+        <CommandGroup Name="CopyGroup" Visible="Find.FindToolbarButtonsVisible">
+          <Command Name="Edit.CopyAll" DisplayName="Copy all results to clipboard" Visible="Find.FindToolbarButtonsVisible" />
+          <Command Name="Edit.CopyAllPaths" DisplayName="Copy file paths" Visible="Find.FindToolbarButtonsVisible" />
+        </CommandGroup>
+        <CommandGroup Name="ClearGroup" Visible="Find.FindToolbarButtonsVisible">
+          <Command Name="Edit.Delete" DisplayName="Remove result from the list" Visible="Find.FindToolbarButtonsVisible"/>
+        </CommandGroup>
+        <CommandGroup Name="ExpandCollapseGroup" Visible="Find.FindToolbarButtonsVisible">
+          <Command Name="Tree.CollapseAll" DisplayName="Collapse All" Visible="Find.FindToolbarButtonsVisible" />
+          <Command Name="Tree.ExpandAll" DisplayName="Expand All" Visible="Find.FindToolbarButtonsVisible" />
+        </CommandGroup>
+        <CommandGroup>
+          <Command Name="Find.ResultFilter" DisplayName="Filter files (prefix with - to exclude matching files, such as -.json)" Visible="Find.FindToolbarButtonsVisible" />
+        </CommandGroup>
+        <CommandGroup Name="StopSearchGroup" Visible="Find.CurrentSearchInProgress">
+          <Command Name="Edit.StopSearch" DisplayName="Stop search" Style="ImageAndText" Enabled="Edit.StopSearch.Enabled" Visible="Find.CurrentSearchInProgress" />
+        </CommandGroup>
+      </CommandGroup>
+      <CommandGroup Name="OutputWindowToolBar">
+        <CommandGroup Name="ShowOutputFromGroup">
+          <Command Name="OutputWindow.Channel" DisplayName="Show output from:" />
+        </CommandGroup>
+        <CommandGroup Name="ClearAllGroup">
+          <Command Name="Edit.ClearAll" DisplayName="Clear All" />
+        </CommandGroup>
+        <CommandGroup Name="ToggleWordWrapGroup">
+          <Command Name="Edit.ToggleWordWrap" DisplayName="Toggle Word Wrap" Checked="Editor.WordWrap" />
+        </CommandGroup>
+      </CommandGroup>
+    </CommandGroup>
+    <CommandGroup Name="ContextMenus">
+      <CommandGroup Name="FileContextMenu">
+        <Command Name="Edit.Copy" DisplayName="Copy"/>
+        <Command Name="Edit.Delete" DisplayName="_Delete" />
+      </CommandGroup>
+      <CommandGroup Name="FolderContextMenu">
+        <Command Name="Edit.Copy" DisplayName="Copy"/>
+        <Command Name="Edit.Delete" DisplayName="_Delete" />
+        <Command Name="Edit.FindInFolder" DisplayName="Find in this Folder..." />
+      </CommandGroup>
+    </CommandGroup>
+  </CommandGroups>
+  <Shortcuts>
+    <Shortcut Command="Edit.GoToNextLocation">F8</Shortcut>
+    <Shortcut Command="Edit.GoToPrevLocation">Shift+F8</Shortcut>
+    <Shortcut Command="Tools.ForceGC">Ctrl+Alt+Shift+F12</Shortcut>
+    <Shortcut Command="Tools.RecordTemporaryMacro">Ctrl+Shift+R</Shortcut>
+    <Shortcut Command="Tools.RunTemporaryMacro">Ctrl+Shift+P</Shortcut>
+    <Shortcut Command="View.Backward">Alt+Left</Shortcut>
+    <Shortcut Command="View.ErrorList">Ctrl+W,E</Shortcut>
+    <Shortcut Command="View.Forward">Alt+Right</Shortcut>
+    <Shortcut Command="View.NavigateBackward">Ctrl+-</Shortcut>
+    <Shortcut Command="View.NavigateForward">Ctrl+Shift+-</Shortcut>
+    <Shortcut Command="View.Output">Ctrl+W,O</Shortcut>
+    <Shortcut Command="View.PropertiesWindow">F4</Shortcut>
+    <Shortcut Command="View.PropertiesWindow">Ctrl+W,P</Shortcut>
+    <Shortcut Command="View.TaskList">Ctrl+W,T</Shortcut>
+    <Shortcut Command="Window.NextDocumentWindowNav">Ctrl+Tab</Shortcut>
+    <Shortcut Command="Window.PreviousDocumentWindowNav">Ctrl+Shift+Tab</Shortcut>
+  </Shortcuts>
+  <Icons>
+    <Icon Command="Edit.CopyAll">Copy</Icon>
+    <Icon Command="Edit.RefreshFindResults">Refresh</Icon>
+    <Icon Command="Help.LaunchInBrowser">StatusHelp</Icon>
+    <Icon Command="Tools.RecordTemporaryMacro">Record</Icon>
+    <Icon Command="Tree.CollapseAll">CollapseAll</Icon>
+    <Icon Command="Tree.ExpandAll">ExpandAll</Icon>
+    <Icon Command="View.ErrorList">BuildErrorList</Icon>
+    <Icon Command="View.FindResults">FindInFile</Icon>
+    <Icon Command="View.NavigateBackward">Backwards</Icon>
+    <Icon Command="View.NavigateForward">Forwards</Icon>
+    <Icon Command="View.Output">Output</Icon>
+    <Icon Command="View.PropertiesWindow">Property</Icon>
+    <Icon Command="View.Refresh">Refresh</Icon>
+    <Icon Command="View.TaskList">TaskList</Icon>
+  </Icons>
+  <States>
+    <State Name="Macro.NotCanRun" Not="Macro.CanRun" />
+    <State Name="Macro.NotRecording" Not="Macro.Recording" />
+    <State Name="Find.FindToolbarButtonsVisible" RequiredFor="Edit.RefreshFindResults.Visible" />
+    <State Name="Find.SupportsRefreshFindResults" RequiredFor="Edit.RefreshFindResults.Visible" />
+  </States>
+  <Options>
+    <Option Key="ViewManager.ShowAutoHiddenWindowsOnHover"
+            DisplayName="Show auto-hidden windows on mouse over"
+            Path="Environment/TabsAndWindows"
+            Type="Boolean"
+            DefaultValue="false"
+            Keywords="show auto hidden windows on mouse over hover"
+            Description="Show an auto-hidden window when the mouse hovers over its tab">
+    </Option>
+  </Options>
+</UI>

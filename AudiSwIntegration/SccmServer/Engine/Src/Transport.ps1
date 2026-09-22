@@ -1,0 +1,835 @@
+# ==============================================================================
+#  Audi SCCM Integration Tool - job transport
+# ==============================================================================
+#  Flow 2 (drop folder): the window writes a job file, the server collects it,
+#  the server writes a result file, the window reads it back.
+#
+#  THE IDENTITY RULE - NO PERSON REACHES THE SERVER
+#  ------------------------------------------------
+#  Audi's requirement: a real person's name must not appear anywhere on the
+#  SCCM side. Not on an SCCM object, and not in the tool's own log or job
+#  record on the server.
+#
+#  So the server never establishes who asked. The job file carries no
+#  requester, nothing reads the file's NTFS owner, and no result or log line
+#  names a person. Every record is keyed by JOB ID.
+#
+#  THE RFC IS RECORDED, NOT REQUIRED
+#  ---------------------------------
+#  The application name already identifies a package uniquely - SCCM will not
+#  accept two applications with the same name - so nothing here depends on an
+#  RFC to know WHAT an object is. Audi's own tool has an RFC field, so this one
+#  does too: when a packager fills it in it is written onto the application and
+#  its collections beside the job id, and when they do not, the comment simply
+#  omits it.
+#
+#  What that costs, stated plainly: with no RFC, an object in the console traces
+#  back to a job id in this tool's log and no further - not to a person, because
+#  by design nothing on this side records one. Setting Audit/@requireRfc to true
+#  in Defaults.xml turns the RFC back into a hard requirement on both the window
+#  and the server.
+#
+#  One residual trace: the job file in \New is written by the packager, so
+#  Windows stamps THEIR name on it as the NTFS owner. Nothing reads it, but it
+#  is metadata on a file in the secure zone. The collector therefore re-writes
+#  the archive copy as the service account and deletes the original, so no
+#  person-owned file is left behind on the server.
+#
+#  ASCII only.
+# ==============================================================================
+
+Set-StrictMode -Version 2.0
+
+function Get-AudiDropFolderPath {
+    <#  ONE drop folder for every environment.
+
+            <root>\<ENV>\New     \<Package>\<package>_<jobid>.xml
+                        \Working \<Package>\...
+                        \Done    \<Package>\...
+                        \Failed  \<Package>\...
+
+        The environment is a folder, not a separate share, so the window is
+        given one path and the watcher watches one path. Which environment a
+        job belongs to is decided by the package name, and the folder follows
+        from that - nobody has to configure a path per environment, and a job
+        cannot be dropped into the wrong environment's queue by choosing the
+        wrong shortcut.
+
+        The package folder inside each state keeps one package's job and result
+        files together. A queue with three hundred loose XML files in it is
+        unreadable the first time something needs looking at by hand.
+
+        EnvironmentCode and PackageName are both optional so the older flat
+        shape still resolves - a drop folder already in use does not have to be
+        emptied before this version runs.  #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$DropFolder,
+        [string]$EnvironmentCode,
+        [string]$PackageName
+    )
+
+    $base = $DropFolder
+    if ($EnvironmentCode) { $base = Join-Path $DropFolder $EnvironmentCode }
+
+    $leaf = { param($state)
+        $p = Join-Path $base $state
+        if ($PackageName) { $p = Join-Path $p $PackageName }
+        return $p
+    }
+
+    return [pscustomobject]@{
+        Root        = $base           # the environment's own folder
+        DropRoot    = $DropFolder     # the one path everybody is given
+        Environment = $EnvironmentCode
+        Package     = $PackageName
+        New     = (& $leaf 'New')
+        Working = (& $leaf 'Working')
+        Done    = (& $leaf 'Done')
+        Failed  = (& $leaf 'Failed')
+        # The package CONTENT, put here by the window beside its job. The SCCM
+        # server copies it from here into the content store as the first step
+        # of the job - the window never reaches the store itself.
+        Sources = (& $leaf 'Sources')
+    }
+}
+
+function Initialize-AudiDropFolder {
+    <#  Creates whatever is missing, first time a package is submitted. Nobody
+        pre-creates a folder per environment or per package by hand.  #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$DropFolder,
+        [string]$EnvironmentCode,
+        [string]$PackageName
+    )
+    $paths = Get-AudiDropFolderPath -DropFolder $DropFolder -EnvironmentCode $EnvironmentCode -PackageName $PackageName
+
+    # The five STATE folders always exist - they are the structure, and the
+    # collector and the middle server expect them.
+    $states = Get-AudiDropFolderPath -DropFolder $DropFolder -EnvironmentCode $EnvironmentCode
+    foreach ($p in @($states.New, $states.Working, $states.Done, $states.Failed, $states.Sources)) {
+        if (-not (Test-Path -LiteralPath $p)) { New-Item -ItemType Directory -Path $p -Force | Out-Null }
+    }
+
+    # The PACKAGE folder is made only where the file is about to be put. Making
+    # all four up front left an empty Failed\<package>\ behind on every job that
+    # succeeded - a folder implying a failure that never happened.
+    if ($PackageName -and -not (Test-Path -LiteralPath $paths.New)) {
+        New-Item -ItemType Directory -Path $paths.New -Force | Out-Null
+    }
+    return $paths
+}
+
+function New-AudiJobFolder {
+    <#  Makes sure a file's folder exists just before it is written there.  #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $parent = Split-Path -Parent $Path
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+}
+
+function Remove-AudiEmptyPackageFolder {
+    <#  Deletes a package folder once its last file has moved on.
+
+        A job file travels New -> Working -> Done, and the package folder it was
+        sitting in stays behind empty at each step. After a few weeks the queue
+        is a list of hundreds of empty folders with the real work hidden among
+        them, which is the opposite of what the package folders were for.
+
+        Only ever removes a folder that is EMPTY, and never the state folder
+        itself - so a result that is still there, or a second job for the same
+        package, keeps its folder.  #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not $Path) { return }
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+
+    # Never the state folder. New/Working/Done/Failed are structure, not a
+    # package's leftovers, and the collector expects them to exist.
+    if ((Split-Path -Leaf $Path) -in @('New', 'Working', 'Done', 'Failed', 'Sources')) { return }
+
+    try {
+        if (@(Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop).Count -eq 0) {
+            Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+        }
+    }
+    catch { }   # tidying up must never fail a job that has already succeeded
+}
+
+function New-AudiSwJobFile {
+    <#  Builds the job XML. Written by the packager window.  #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$PackageName,
+        [Parameter(Mandatory = $true)][string]$EnvironmentCode,
+                # Inspect reads the site and reports; Change applies exactly the
+        # collections a packager ticked in the Modify tab.
+        [ValidateSet('Integrate', 'Modify', 'Remove', 'Inspect', 'Change', 'RefreshContent', 'Find')][string]$Action = 'Integrate',
+        # Find: the pattern to look for on the site (wildcards meant)
+        [string]$FindPattern = '',
+        # Remove: exact applications ticked out of a Find answer, as objects
+        # carrying Name / ContentPath / Collections
+        [object[]]$Targets = @(),
+        # Remove: also delete the package folder from the content store
+        [switch]$RemoveContent,
+        [string[]]$AddCollections = @(),
+        [string[]]$RemoveCollections = @(),
+        # Setting edits, as objects carrying Key/From/To. From is recorded for
+        # the audit trail only - the server never trusts it, it re-reads the
+        # site itself.
+        [object[]]$SettingChanges = @(),
+        # Machines to put into or take out of this package's collections.
+        [object[]]$MemberChanges = @(),
+        [string]$Rfc = '',
+        [string]$NameEn = '', [string]$NameDe = '',
+        [string]$DescriptionEn = '', [string]$DescriptionDe = '',
+        # What the packager saw and, where they corrected it, what they changed
+        # it to. Sent so the server uses exactly what was on the screen rather
+        # than deriving it again and possibly differing.
+        [hashtable]$Detail = @{},
+        [string[]]$OperatingSystems = @(),
+        [switch]$DryRun,
+        [string]$JobId,
+        # "Run again" on the Jobs page: how many earlier attempts this repeats
+        [int]$Retried = 0
+    )
+
+    if ([string]::IsNullOrWhiteSpace($JobId)) { $JobId = [guid]::NewGuid().ToString() }
+
+    $doc = New-Object System.Xml.XmlDocument
+    $null = $doc.AppendChild($doc.CreateXmlDeclaration('1.0', 'utf-8', $null))
+    $job = $doc.CreateElement('Job')
+    $job.SetAttribute('schemaVersion', '1.0')
+    $job.SetAttribute('jobId', $JobId)
+    $job.SetAttribute('environment', $EnvironmentCode)
+    $job.SetAttribute('action', $Action)
+    $job.SetAttribute('created', (Get-Date).ToString('o'))
+    $job.SetAttribute('dryRun', $(if ($DryRun) { 'true' } else { 'false' }))
+    if ($Retried -gt 0) { $job.SetAttribute('retried', [string]$Retried) }
+    $null = $doc.AppendChild($job)
+
+    $package = $doc.CreateElement('Package')
+    $package.SetAttribute('name', $PackageName)
+    $package.SetAttribute('rfc', $Rfc)
+    $null = $job.AppendChild($package)
+
+    $localised = $doc.CreateElement('Localised')
+    $localised.SetAttribute('nameEn', $NameEn)
+    $localised.SetAttribute('nameDe', $NameDe)
+    $localised.SetAttribute('descriptionEn', $DescriptionEn)
+    $localised.SetAttribute('descriptionDe', $DescriptionDe)
+    $null = $job.AppendChild($localised)
+
+    # The collections a packager ticked in the Modify tab. Written before Detail
+    # to match the order the schema declares.
+    if (@($AddCollections).Count -gt 0 -or @($RemoveCollections).Count -gt 0 -or
+        @($SettingChanges).Count -gt 0 -or @($MemberChanges).Count -gt 0) {
+        $changesNode = $doc.CreateElement('Changes')
+        foreach ($name in @($AddCollections))    { $e = $doc.CreateElement('Add');    $e.InnerText = $name; $null = $changesNode.AppendChild($e) }
+        foreach ($name in @($RemoveCollections)) { $e = $doc.CreateElement('Remove'); $e.InnerText = $name; $null = $changesNode.AppendChild($e) }
+        foreach ($change in @($SettingChanges)) {
+            $e = $doc.CreateElement('Setting')
+            $e.SetAttribute('key', [string]$change.Key)
+            $e.SetAttribute('from', [string]$change.From)
+            $e.SetAttribute('to',   [string]$change.To)
+            $null = $changesNode.AppendChild($e)
+        }
+        foreach ($change in @($MemberChanges)) {
+            $e = $doc.CreateElement('Member')
+            $e.SetAttribute('collection', [string]$change.Collection)
+            $e.SetAttribute('machine',    [string]$change.Machine)
+            $e.SetAttribute('action',     [string]$change.Action)
+            $null = $changesNode.AppendChild($e)
+        }
+        $null = $job.AppendChild($changesNode)
+    }
+
+    $detailNode = $doc.CreateElement('Detail')
+    foreach ($name in 'Publisher','Product','Version','Architecture','Revision','Language','BrandingKey') {
+        $value = if ($Detail.Contains($name)) { [string]$Detail[$name] } else { '' }
+        $detailNode.SetAttribute($name.Substring(0,1).ToLowerInvariant() + $name.Substring(1), $value)
+    }
+    $null = $job.AppendChild($detailNode)
+
+    $osList = $doc.CreateElement('OperatingSystems')
+    foreach ($key in $OperatingSystems) {
+        $os = $doc.CreateElement('OperatingSystem')
+        $os.SetAttribute('key', $key)
+        $null = $osList.AppendChild($os)
+    }
+    $null = $job.AppendChild($osList)
+
+    # Find: the search pattern. The one value in a job file where a wildcard
+    # means a wildcard.
+    if ($FindPattern) {
+        $find = $doc.CreateElement('Find')
+        $find.SetAttribute('pattern', $FindPattern)
+        $null = $job.AppendChild($find)
+    }
+
+    # Remove with explicit targets: exact names the packager ticked.
+    if (@($Targets).Count -gt 0) {
+        $targetsNode = $doc.CreateElement('Targets')
+        foreach ($t in @($Targets)) {
+            $a = $doc.CreateElement('Application')
+            $a.SetAttribute('name', [string]$t.Name)
+            $a.SetAttribute('contentPath', [string]$(if ($t.PSObject.Properties['ContentPath']) { $t.ContentPath } else { '' }))
+            foreach ($c in @($(if ($t.PSObject.Properties['Collections']) { $t.Collections } else { @() }))) {
+                $e = $doc.CreateElement('Collection'); $e.InnerText = [string]$c; $null = $a.AppendChild($e)
+            }
+            $null = $targetsNode.AppendChild($a)
+        }
+        $null = $job.AppendChild($targetsNode)
+    }
+    if ($RemoveContent) { $job.SetAttribute('removeContent', 'true') }
+
+    return $doc
+}
+
+function Submit-AudiSwJob {
+    <#  Writes the job into <dropFolder>\New and returns where it went.
+
+        Written to a .tmp name first and then renamed, so the watcher can never
+        pick up a half-written file.  #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$DropFolder,
+        [Parameter(Mandatory = $true)][System.Xml.XmlDocument]$Job
+    )
+
+    # The job file already says which environment and which package it is for,
+    # so the folder is derived from the job rather than passed in beside it -
+    # the two cannot then disagree.
+    $jobId   = $Job.Job.jobId
+    $package = $Job.Job.Package.name
+    $code    = $Job.Job.environment
+
+    $paths = Initialize-AudiDropFolder -DropFolder $DropFolder -EnvironmentCode $code -PackageName $package
+    $name  = "{0}_{1}.xml" -f $package, $jobId
+    $final = Join-Path $paths.New $name
+    $temp  = "$final.tmp"
+
+    $Job.Save($temp)
+    Move-Item -LiteralPath $temp -Destination $final -Force
+
+    # WHO submitted it - kept on the packagers' side only. See
+    # Write-AudiSwPackagerRecord: the record never reaches the SCCM zone.
+    Write-AudiSwPackagerRecord -DropFolder $DropFolder -Job $Job
+
+    return [pscustomobject]@{
+        JobId       = $jobId
+        Environment = $code
+        Package     = $package
+        Path        = $final
+        ResultPath  = (Join-Path $paths.Done ($name -replace '\.xml$', '.result.xml'))
+        FailedPath  = (Join-Path $paths.Failed ($name -replace '\.xml$', '.result.xml'))
+    }
+}
+
+function Write-AudiSwPackagerRecord {
+    <#  The packagers' own record of who submitted which job - and NOTHING of
+        it crosses to the SCCM side.
+
+        Audi's rule is that no person's name or account is recorded anywhere
+        in the SCCM zone (not in a job file, a result, an SCCM object or the
+        server log). The packagers still need to know, among themselves, who
+        did what. So one line per submission goes into
+            <packager drop folder root>\Record\<yyyy-MM>.txt
+            time | account | machine | environment | package | action | RFC | job id
+        That folder is on the packagers' share, has no New\ inside it, and the
+        middle server's sync carries only environment folders (those with a
+        New\) - so it never leaves the packager zone. The job file itself
+        stays as it was: no requester, ever.
+
+        Best effort: a record that cannot be written (share full, another
+        packager appending at the same instant, rights) is retried a few
+        times and then dropped with a warning - it must never stop a job.  #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$DropFolder,
+        [Parameter(Mandatory = $true)][System.Xml.XmlDocument]$Job
+    )
+    try {
+        $j = $Job.Job
+        $line = ("{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}" -f (Get-Date).ToString('o'),
+                 [System.Security.Principal.WindowsIdentity]::GetCurrent().Name, $env:COMPUTERNAME,
+                 $j.environment, $j.Package.name, $(if ($j.HasAttribute('action')) { $j.action } else { 'Integrate' }),
+                 $(if ($j.Package.HasAttribute('rfc') -and $j.Package.rfc) { $j.Package.rfc } else { '-' }), $j.jobId) -replace '[\r\n]+', ' '
+        $folder = Join-Path $DropFolder 'Record'
+        if (-not (Test-Path -LiteralPath $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
+        $file = Join-Path $folder ((Get-Date).ToString('yyyy-MM') + '.txt')
+        for ($try = 1; $try -le 5; $try++) {
+            try {
+                $stream = New-Object System.IO.FileStream($file, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+                try {
+                    $bytes = [System.Text.Encoding]::UTF8.GetBytes($line + "`r`n")
+                    $stream.Write($bytes, 0, $bytes.Length)
+                } finally { $stream.Dispose() }
+                return
+            }
+            catch [System.IO.IOException] { if ($try -eq 5) { throw }; Start-Sleep -Milliseconds (100 * $try) }
+        }
+    }
+    catch { Write-Warning "The packager record could not be written ($($_.Exception.Message)) - the job itself was submitted." }
+}
+
+function Read-AudiSwJobFile {
+    <#  Loads and validates a job file. Returns @{ Ok; Errors; Job }.
+
+        Note what is NOT here: the file's owner is never read, and no requester
+        is established. See the identity rule at the top of this file - the
+        server is not permitted to know which person asked.  #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Path, [string]$Root)
+
+    $result = Test-AudiConfigFile -Path $Path -SchemaPath (Join-Path (Get-AudiConfigRoot -Root $Root) 'Environment.xsd')
+    if (-not $result.Ok) { return @{ Ok = $false; Errors = $result.Errors; Job = $null } }
+
+    # Only when the environment is configured to require one. It is recorded
+    # by default, not required - the application name is already unique.
+    #
+    # Inspect is exempt: it reads the site and changes nothing, so there is
+    # nothing to trace back to a requester. Demanding an RFC before somebody may
+    # LOOK at a package teaches people to type a fake one, which is worse for
+    # the audit trail than not asking.
+    $audit = (Get-AudiDefaults -Root $Root).Audit
+    if ($audit.RequireRfc -and $result.Document.Job.action -ne 'Inspect' -and
+        [string]::IsNullOrWhiteSpace($result.Document.Job.Package.rfc)) {
+        return @{ Ok = $false; Job = $null; Errors = @(
+            'This environment is configured to require an RFC number (Audit/@requireRfc in Defaults.xml) and this job carries none.') }
+    }
+
+    $j  = $result.Document.Job
+    $os = @($result.Document.SelectNodes('/Job/OperatingSystems/OperatingSystem') | ForEach-Object { $_.key })
+
+    $job = [pscustomobject]@{
+        JobId         = $j.jobId
+        Environment   = $j.environment
+        Action        = $j.action
+        # the collections a packager ticked in the Modify tab
+        AddCollections    = @($result.Document.SelectNodes('/Job/Changes/Add')    | ForEach-Object { $_.InnerText })
+        RemoveCollections = @($result.Document.SelectNodes('/Job/Changes/Remove') | ForEach-Object { $_.InnerText })
+        MemberChanges     = @($result.Document.SelectNodes('/Job/Changes/Member') | ForEach-Object {
+                                [pscustomobject]@{ Collection = $_.collection; Machine = $_.machine; Action = $_.action } })
+        SettingChanges    = @($result.Document.SelectNodes('/Job/Changes/Setting') | ForEach-Object {
+                                [pscustomobject]@{ Key = $_.key; From = $_.from; To = $_.to } })
+        Created       = $j.created
+        DryRun        = [bool]::Parse($j.dryRun)
+        # how many times a packager chose "Run again" for this job; 0 normally
+        Retried       = $(if ($j.GetAttribute('retried')) { [int]$j.GetAttribute('retried') } else { 0 })
+        RemoveContent = ($j.GetAttribute('removeContent') -eq 'true')
+        FindPattern   = $(
+            $f = $result.Document.SelectSingleNode('/Job/Find')
+            if ($f) { $f.GetAttribute('pattern') } else { '' })
+        Targets       = @($result.Document.SelectNodes('/Job/Targets/Application') | ForEach-Object {
+                            [pscustomobject]@{ Name = $_.GetAttribute('name'); ContentPath = $_.GetAttribute('contentPath')
+                                               Collections = @($_.SelectNodes('Collection') | ForEach-Object { $_.InnerText }) } })
+        PackageName   = $j.Package.name
+        Rfc           = $j.Package.rfc
+        NameEn        = $(if ($j.Localised) { $j.Localised.nameEn } else { '' })
+        NameDe        = $(if ($j.Localised) { $j.Localised.nameDe } else { '' })
+        DescriptionEn = $(if ($j.Localised) { $j.Localised.descriptionEn } else { '' })
+        DescriptionDe = $(if ($j.Localised) { $j.Localised.descriptionDe } else { '' })
+        OperatingSystems = $os
+        Detail        = $(
+            $d = @{}
+            if ($result.Document.Job.Detail) {
+                foreach ($name in 'Publisher','Product','Version','Architecture','Revision','Language','BrandingKey') {
+                    $attr = $name.Substring(0,1).ToLowerInvariant() + $name.Substring(1)
+                    $d[$name] = [string]$result.Document.Job.Detail.$attr
+                }
+            }
+            $d
+        )
+        Path          = $Path
+    }
+    return @{ Ok = $true; Errors = @(); Job = $job }
+}
+
+function Test-AudiResultMember {
+    <#  Does this result carry that member? A heartbeat is a plain object with
+        only the few fields it needs, while a finished run is the engine's full
+        result - and under StrictMode reading a member that is not there throws. #>
+    [CmdletBinding()]
+    param($Result, [string]$Name)
+    if ($null -eq $Result) { return $false }
+    if ($Result -is [hashtable]) { return $Result.ContainsKey($Name) }
+    return [bool]$Result.PSObject.Properties[$Name]
+}
+
+function Write-AudiSwJobResult {
+    <#  Writes the result XML beside the finished job.  #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)]$Job,
+        [Parameter(Mandatory = $true)][string]$Executor,
+        [Parameter(Mandatory = $true)]$Result,
+        # 'Running' while the job is still being worked on - see
+        # Write-AudiSwJobProgress. Left alone, the outcome follows Result.Ok.
+        [ValidateSet('', 'Succeeded', 'Failed', 'Running')][string]$Outcome = '',
+        # only meaningful while Running - lets the window size its progress bar
+        [int]$StepCount = 0
+    )
+
+    $doc = New-Object System.Xml.XmlDocument
+    $null = $doc.AppendChild($doc.CreateXmlDeclaration('1.0', 'utf-8', $null))
+    $root = $doc.CreateElement('JobResult')
+    $root.SetAttribute('schemaVersion', '1.0')
+    $root.SetAttribute('jobId', $Job.JobId)
+    $root.SetAttribute('environment', $Job.Environment)
+    $root.SetAttribute('package', $Job.PackageName)
+    $root.SetAttribute('rfc', [string]$Job.Rfc)   # the audit link, in place of a name
+    $root.SetAttribute('executor', $Executor)
+    $root.SetAttribute('completed', (Get-Date).ToString('o'))
+    $root.SetAttribute('dryRun', $(if ($Result.DryRun) { 'true' } else { 'false' }))
+    $root.SetAttribute('outcome', $(if ($Outcome) { $Outcome } elseif ($Result.Ok) { 'Succeeded' } else { 'Failed' }))
+    if ($StepCount -gt 0) { $root.SetAttribute('stepCount', [string]$StepCount) }
+    $null = $doc.AppendChild($root)
+
+    $message = $doc.CreateElement('Message')
+    $message.InnerText = [string]$Result.Message
+    $null = $root.AppendChild($message)
+
+    # What Inspect found on the site. This is what the Modify tab draws its
+    # three lists from - in place, missing, not asked for.
+    if ((Test-AudiResultMember -Result $Result -Name 'State') -and $Result.State) {
+        $stateNode = $doc.CreateElement('State')
+        $stateNode.SetAttribute('application', $(if ($Result.State.Application) { 'true' } else { 'false' }))
+        foreach ($collection in @($Result.State.Collections) + @($Result.State.Extra)) {
+            $e = $doc.CreateElement('Collection')
+            $e.SetAttribute('name',          [string]$collection.Name)
+            $e.SetAttribute('wanted',        $(if ($collection.Wanted) { 'true' } else { 'false' }))
+            $e.SetAttribute('exists',        $(if ($collection.Exists) { 'true' } else { 'false' }))
+            $e.SetAttribute('hasDeployment', $(if ($collection.HasDeployment) { 'true' } else { 'false' }))
+            # The machines in it. Without these the window can list collections
+            # but not who is in them, which is most of what Modify is for.
+            if (Test-AudiResultMember -Result $collection -Name 'MemberNote') {
+                $e.SetAttribute('memberNote', [string]$collection.MemberNote)
+            }
+            if (Test-AudiResultMember -Result $collection -Name 'Members') {
+                foreach ($machine in @($collection.Members)) {
+                    $m = $doc.CreateElement('Machine')
+                    $m.InnerText = [string]$machine
+                    $null = $e.AppendChild($m)
+                }
+            }
+            $null = $stateNode.AppendChild($e)
+        }
+        foreach ($scope in @($Result.State.SecurityScopes)) {
+            $e = $doc.CreateElement('Scope'); $e.InnerText = [string]$scope; $null = $stateNode.AppendChild($e)
+        }
+
+        # The settings, and everything the window needs to draw an editor for
+        # them: the current value, whether it may be changed, and the values
+        # SCCM would accept instead.
+        #
+        # All of it travels. The window could look the labels and options up in
+        # its own copy of Defaults.xml, but the client and the server are
+        # different machines in flow 2 - a stale copy on one of them would offer
+        # a packager choices the site will not accept. What is on screen is what
+        # the server actually read.
+        if ((Test-AudiResultMember -Result $Result.State -Name 'Settings')) {
+            foreach ($setting in @($Result.State.Settings)) {
+                $e = $doc.CreateElement('Setting')
+                $e.SetAttribute('key',          [string]$setting.Key)
+                $e.SetAttribute('label',        [string]$setting.Label)
+                $e.SetAttribute('scope',        [string]$setting.Scope)
+                $e.SetAttribute('editor',       [string]$setting.Editor)
+                $e.SetAttribute('current',      [string]$setting.Current)
+                $e.SetAttribute('currentLabel', [string]$setting.CurrentLabel)
+                $e.SetAttribute('editable',     $(if ($setting.Editable) { 'true' } else { 'false' }))
+                $e.SetAttribute('readable',     $(if ($setting.Readable) { 'true' } else { 'false' }))
+                $e.SetAttribute('lockedReason', [string]$setting.LockedReason)
+                $e.SetAttribute('unit',         [string]$setting.Unit)
+                $e.SetAttribute('hint',         [string]$setting.Hint)
+                foreach ($option in @($setting.Options)) {
+                    $o = $doc.CreateElement('Option')
+                    $o.SetAttribute('value', [string]$option.Value)
+                    $o.InnerText = [string]$option.Label
+                    $null = $e.AppendChild($o)
+                }
+                $null = $stateNode.AppendChild($e)
+            }
+        }
+        $null = $root.AppendChild($stateNode)
+    }
+
+    # What a Find job found - the list the packager ticks from.
+    if ((Test-AudiResultMember -Result $Result -Name 'Found') -and @($Result.Found).Count -gt 0) {
+        $foundNode = $doc.CreateElement('Found')
+        foreach ($app in @($Result.Found)) {
+            $a = $doc.CreateElement('Application')
+            $a.SetAttribute('name',        [string]$app.Name)
+            $a.SetAttribute('contentPath', [string]$app.ContentPath)
+            $a.SetAttribute('deployments', [string]@($app.Collections).Count)
+            foreach ($c in @($app.Collections)) { $e = $doc.CreateElement('Collection'); $e.InnerText = [string]$c; $null = $a.AppendChild($e) }
+            $null = $foundNode.AppendChild($a)
+        }
+        $null = $root.AppendChild($foundNode)
+    }
+
+    # What a failed run undid. Without this the packager is told the run failed
+    # and left to guess whether an application is sitting half-made on the site.
+    $rolledBack = $doc.CreateElement('RolledBack')
+    if (Test-AudiResultMember -Result $Result -Name 'RolledBack') {
+        foreach ($item in @($Result.RolledBack)) {
+            $entry = $doc.CreateElement('Item')
+            $entry.InnerText = [string]$item
+            $null = $rolledBack.AppendChild($entry)
+        }
+    }
+    $null = $root.AppendChild($rolledBack)
+
+    $steps = $doc.CreateElement('Steps')
+    foreach ($s in @($Result.Steps)) {
+        $step = $doc.CreateElement('Step')
+        $step.SetAttribute('key', [string]$s.Step)
+        $step.SetAttribute('ok', $(if ($s.Ok) { 'true' } else { 'false' }))
+        $step.SetAttribute('message', [string]$s.Message)
+        $null = $steps.AppendChild($step)
+    }
+    $null = $root.AppendChild($steps)
+
+    # 'FileSystem::' because the heartbeat is written DURING a run, while the
+    # current location is the site drive. A UNC drop folder - which is what
+    # production uses - has no drive qualifier, so without this the ConfigMgr
+    # provider tries to resolve it and the write fails. $doc.Save is .NET and
+    # takes the plain path.
+    $folder = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath "FileSystem::$folder")) { New-Item -ItemType Directory -Path "FileSystem::$folder" -Force | Out-Null }
+    $doc.Save($Path)
+    return $Path
+}
+
+function Write-AudiSwJobProgress {
+    <#  A heartbeat the collector drops beside the job while it is still working.
+
+        This is what lets the window feel connected to a server it never talks
+        to. The collector writes one of these after every step; the window reads
+        the folder and shows how far the job has got - live, and again after the
+        window has been closed and reopened.
+
+        Same shape as the finished result, with outcome="Running", so there is
+        one schema, one parser and one code path in the window. It is replaced by
+        the real result when the job ends.  #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)]$Job,
+        [Parameter(Mandatory = $true)][string]$Executor,
+        [Parameter(Mandatory = $true)][string]$CurrentStep,
+        [int]$StepNumber,
+        [int]$StepCount,
+        $Completed,
+        [switch]$DryRun
+    )
+
+    $text = if ($StepCount -gt 0) { "Working on the server - {0} ({1} of {2})" -f $CurrentStep, $StepNumber, $StepCount }
+            else                  { "Working on the server - $CurrentStep" }
+
+    $progress = [pscustomobject]@{ Ok = $false; DryRun = [bool]$DryRun; Message = $text; Steps = @($Completed) }
+
+    # A half-written heartbeat must never be read as the truth, so it goes to a
+    # temporary name and is renamed into place.
+    $temp = "$Path.writing"
+    try {
+        $null = Write-AudiSwJobResult -Path $temp -Job $Job -Executor $Executor -Result $progress `
+                                      -Outcome 'Running' -StepCount $StepCount
+        Move-Item -LiteralPath "FileSystem::$temp" -Destination "FileSystem::$Path" -Force
+    }
+    catch {
+        # progress is a convenience - it must never stop the job it reports on
+        Write-Verbose "Could not write progress for job $($Job.JobId): $($_.Exception.Message)"
+        if (Test-Path -LiteralPath "FileSystem::$temp") { Remove-Item -LiteralPath "FileSystem::$temp" -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Get-AudiSwPendingJob {
+    <#  The jobs for one package that are still waiting (\New) or being run
+        (\Working) - the ones a second submission would collide with.
+
+        Two packagers integrating the same package minutes apart used to
+        produce two queued jobs; the second then failed on the server with
+        "already exists" after the first had run. The window asks this before
+        it submits, and refuses while anything is pending. The collector asks
+        it too, and refuses a duplicate that got in some other way.
+
+        Returns @{ JobId; Action; Rfc; State (Queued|Running); Submitted; Path }
+        per job, oldest first.  #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$DropFolder,
+        [Parameter(Mandatory = $true)][string]$PackageName,
+        [string]$EnvironmentCode
+    )
+
+    $paths = Get-AudiDropFolderPath -DropFolder $DropFolder -EnvironmentCode $EnvironmentCode -PackageName $PackageName
+    $found = New-Object System.Collections.Generic.List[object]
+    foreach ($pair in @(@{ Folder = $paths.New; State = 'Queued' }, @{ Folder = $paths.Working; State = 'Running' })) {
+        if (-not (Test-Path -LiteralPath $pair.Folder)) { continue }
+        # the job files only - a heartbeat beside a running job is *.result.xml
+        $files = @(Get-ChildItem -LiteralPath $pair.Folder -Filter "$PackageName*.xml" -File -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Name -notlike '*.result.xml' -and $_.Name -notlike '*.tmp' })
+        foreach ($file in $files) {
+            $jobId = ''; $action = ''; $rfc = ''
+            try {
+                # GetAttribute, not dotted access: an attribute that is absent
+                # (no RFC) throws under StrictMode with the dot and returns ''
+                # with the method.
+                $doc = New-Object System.Xml.XmlDocument; $doc.Load($file.FullName)
+                $jobId  = $doc.DocumentElement.GetAttribute('jobId')
+                $action = $doc.DocumentElement.GetAttribute('action')
+                $rfc    = $doc.DocumentElement.GetAttribute('rfc')
+            } catch { $jobId = $file.BaseName }   # half-written: still a job in the way
+            $found.Add([pscustomobject]@{
+                JobId = $jobId; Action = $action; Rfc = $rfc; State = $pair.State
+                Submitted = $file.CreationTime; Path = $file.FullName }) | Out-Null
+        }
+    }
+    return @($found | Sort-Object Submitted)
+}
+
+function Get-AudiSwJobHistory {
+    <#  Every result the drop folder holds for one package, newest first.
+
+        The window does not have to stay open waiting. The collector writes the
+        result whether anyone is watching or not, so a packager can close the
+        tool, come back later, type the package name and see what happened.
+
+        Returns @{ Outcome; Completed; JobId; Rfc; Executor; DryRun; Message;
+                   Steps; Path } per run.  #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$DropFolder,
+        [Parameter(Mandatory = $true)][string]$PackageName,
+        [string]$EnvironmentCode,
+        [int]$Newest = 20
+    )
+
+    $paths = Get-AudiDropFolderPath -DropFolder $DropFolder -EnvironmentCode $EnvironmentCode -PackageName $PackageName
+    $runs  = New-Object System.Collections.Generic.List[object]
+
+    # \Working first: a job being worked on right now matters more than one that
+    # finished yesterday, and its heartbeat is what makes the window look live.
+    foreach ($folder in @($paths.Working, $paths.Done, $paths.Failed)) {
+        if (-not (Test-Path -LiteralPath $folder)) { continue }
+        $files = @(Get-ChildItem -LiteralPath $folder -Filter "$PackageName*.result.xml" -File -ErrorAction SilentlyContinue)
+        foreach ($file in $files) {
+            try {
+                $doc = New-Object System.Xml.XmlDocument
+                $doc.Load($file.FullName)
+                $r = $doc.JobResult
+                $runs.Add([pscustomobject]@{
+                    Outcome   = $r.outcome
+                    Completed = $(try { [datetime]$r.completed } catch { $file.LastWriteTime })
+                    JobId     = $r.jobId
+                    # Which environment this run was against. Queues are split
+                    # per environment now, so a row that does not say which one
+                    # it came from cannot be checked against the folder it was
+                    # read from.
+                    Environment = $(if ($r.HasAttribute('environment')) { $r.environment } else { $EnvironmentCode })
+                    Package   = $(if ($r.HasAttribute('package')) { $r.package } else { $PackageName })
+                    Rfc       = $(if ($r.HasAttribute('rfc')) { $r.rfc } else { '' })
+                    Executor  = $r.executor
+                    DryRun    = [bool]::Parse($r.dryRun)
+                    StepCount = $(if ($r.HasAttribute('stepCount')) { [int]$r.stepCount } else { 0 })
+                    RolledBack = @($doc.SelectNodes('/JobResult/RolledBack/Item') | ForEach-Object { $_.InnerText })
+                    Message   = $doc.SelectSingleNode('/JobResult/Message').InnerText
+                    Steps     = @($doc.SelectNodes('/JobResult/Steps/Step') | ForEach-Object {
+                                    [pscustomobject]@{ Step = $_.key; Ok = [bool]::Parse($_.ok); Message = $_.message } })
+                    Path      = $file.FullName
+                }) | Out-Null
+            }
+            catch { }   # a half-written or hand-edited result is skipped, not fatal
+        }
+    }
+
+    return @($runs | Sort-Object Completed -Descending | Select-Object -First $Newest)
+}
+
+function Wait-AudiSwJobResult {
+    <#  Polls for the result file. Used by the packager window after submitting.
+        Returns @{ Ok; Found; Outcome; Message; Rfc; Executor; Steps }.  #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Submission,
+        [int]$TimeoutMinutes = 30,
+        [int]$PollSeconds = 10,
+        [scriptblock]$OnWait
+    )
+
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    while ($true) {
+        foreach ($candidate in @($Submission.ResultPath, $Submission.FailedPath)) {
+            if (Test-Path -LiteralPath $candidate) {
+                try {
+                    $doc = New-Object System.Xml.XmlDocument
+                    $doc.Load($candidate)
+                    $r = $doc.JobResult
+                    return @{
+                        Ok        = ($r.outcome -eq 'Succeeded')
+                        Found     = $true
+                        Outcome   = $r.outcome
+                        Message   = $doc.SelectSingleNode('/JobResult/Message').InnerText
+                        Rfc       = $r.rfc
+                        Executor  = $r.executor
+                        Steps     = @($doc.SelectNodes('/JobResult/Steps/Step') | ForEach-Object {
+                                        [pscustomobject]@{ Step = $_.key; Ok = [bool]::Parse($_.ok); Message = $_.message } })
+                        RolledBack = @($doc.SelectNodes('/JobResult/RolledBack/Item') | ForEach-Object { $_.InnerText })
+                        # what a Find job found, for the packager to tick
+                        FoundApps  = @($doc.SelectNodes('/JobResult/Found/Application') | ForEach-Object {
+                                        [pscustomobject]@{ Name = $_.GetAttribute('name'); ContentPath = $_.GetAttribute('contentPath')
+                                                           Collections = @($_.SelectNodes('Collection') | ForEach-Object { $_.InnerText }) } })
+                        State      = @($doc.SelectNodes('/JobResult/State/Collection') | ForEach-Object {
+                                        [pscustomobject]@{
+                                            Name          = $_.name
+                                            Wanted        = [bool]::Parse($_.wanted)
+                                            Exists        = [bool]::Parse($_.exists)
+                                            HasDeployment = [bool]::Parse($_.hasDeployment)
+                                            Members       = @($_.SelectNodes('Machine') | ForEach-Object { $_.InnerText })
+                                            MemberNote    = $(if ($_.HasAttribute('memberNote')) { $_.memberNote } else { '' })
+                                        } })
+                        Scopes     = @($doc.SelectNodes('/JobResult/State/Scope') | ForEach-Object { $_.InnerText })
+                        # NewValue starts at the current value, so a row nobody
+                        # touches produces no change when Apply is pressed.
+                        Settings   = @($doc.SelectNodes('/JobResult/State/Setting') | ForEach-Object {
+                                        $node = $_
+                                        [pscustomobject]@{
+                                            Key          = $node.key
+                                            Label        = $node.label
+                                            Scope        = $node.scope
+                                            Editor       = $node.editor
+                                            Current      = $node.current
+                                            CurrentLabel = $node.currentLabel
+                                            NewValue     = $node.current
+                                            Editable     = [bool]::Parse($node.editable)
+                                            Readable     = [bool]::Parse($node.readable)
+                                            LockedReason = $node.lockedReason
+                                            Unit         = $node.unit
+                                            Hint         = $node.hint
+                                            Options      = @($node.SelectNodes('Option') | ForEach-Object {
+                                                                [pscustomobject]@{ Value = $_.value; Label = $_.InnerText } })
+                                        } })
+                        Path      = $candidate
+                    }
+                }
+                catch { }   # still being written - try again on the next pass
+            }
+        }
+        if ((Get-Date) -ge $deadline) {
+            return @{ Ok = $false; Found = $false
+                # Name the exact folder. "Somewhere in the drop folder" is no help
+                # when the usual cause is a collector watching a different one.
+                Message = ("No result after {0} minutes. The job is still sitting in {1}. Either the collector is not running, or it is watching a different folder - it must be started with -DropFolder pointing at {2}." -f `
+                           $TimeoutMinutes, $Submission.Path, (Split-Path -Parent (Split-Path -Parent $Submission.Path)))
+                Steps = @() }
+        }
+        if ($OnWait) { & $OnWait }
+        Start-Sleep -Seconds $PollSeconds
+    }
+}

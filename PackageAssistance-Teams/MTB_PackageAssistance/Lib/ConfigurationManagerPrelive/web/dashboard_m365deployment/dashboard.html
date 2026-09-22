@@ -1,0 +1,89 @@
+﻿<!DOCTYPE html>
+<html ng-app="dashboard">
+<head>
+    <meta charset="utf-8" />
+    <title>Deployment Plan Dashboard</title>
+    <meta content="IE=edge" http-equiv="X-UA-Compatible" />
+    <meta name="description" content="Deployment Plan Dashboard Dashboard" />
+    <meta name="keywords" content="Deployment plans, M365, Dashboard" />
+    <link href="../css/c3.min.css" rel="stylesheet" type="text/css" />
+    <link href="../css/columns.css" rel="stylesheet" type="text/css" />
+    <link href="css/styles.css" rel="stylesheet" type="text/css" />
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="../js/utility.js" type="text/javascript"></script>
+    <script src="../js/d3.min.js" type="text/javascript"></script>
+    <script src="../js/c3.min.js" type="text/javascript"></script>
+    <script src="js/controller.js" type="text/javascript"></script>
+    <noscript>Javascript is not enabled</noscript>
+</head>
+
+<body ng-controller="dashboardController">
+    <br class="blank-row">
+    <div class="tile-container-2-6">
+        <div class="tile tile-2-6">
+            <div class="tile-nobackground tile-2-3 row">
+                <h1 tabindex="1" style="text-align:left; padding-left:10px; font-size:16px"><b>{{strings.planOverallStatus}}</b></h1>
+                <div class="column" style="margin-top:-15px">
+                    <p tabindex="2" style="text-align:left; padding-left:10px">{{strings.planOverallStatusText}}</p>
+                    <br /> 
+                    <p tabindex="3" id="pLink" ng-click="OpenDesktopAnalyticsPortal()">{{strings.planOverallStatusLink}}</p>
+                </div>
+                <div class="column" style="margin-top:-15px">
+                    <ul style="text-align:left; list-style:none">
+                        <li tabindex="4" style="font-size:15px"><b>{{strings.planInformation}}</b></li>
+                        <li tabindex="5" style="font-size:15px">{{M365DeploymentPlanInfo.DeploymentPlanName}}</li>
+                    </ul>
+                    <ul style="text-align:left; list-style:none">
+                        <li tabindex="6" style="font-size:15px"><b>{{strings.numberOfDevices}}</b></li>
+                        <li tabindex="7" style="font-size:15px">{{M365DeploymentPlanInfo.NumDevicesInPlan}}</li>
+                    </ul>
+                    <ul style="text-align:left; list-style:none">
+                        <li tabindex="8" style="font-size:15px"><b>{{strings.targetWinVersion}}</b></li>
+                        <li tabindex="9" style="font-size:15px">{{M365DeploymentPlanInfo.WindowsVersion}}</li>
+                    </ul>
+                    <ul style="text-align:left; list-style:none" ng-if="ShowOffice" >
+                        <li tabindex="10" style="font-size:15px"><b>{{strings.targetOfficeVersion}}</b></li>
+                        <li tabindex="11" style="font-size:15px">{{M365DeploymentPlanInfo.OfficeVersion}}</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="tile-nobackground tile-2-3" style="padding-right:-20px">
+                <div tabindex="12" id="recommendedPilot" style="display: inline-block; padding-top:30px"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="tile-container-4-6 row">
+        <div class="tile tile-3-2" style="float: left;width:510px">
+            <h1 tabindex="13" style="text-align:left; padding-left:10px; font-size:16px"><b>{{strings.pilotStatus}}</b></h1>
+            <p tabindex="14" style="text-align:left; padding-left:10px">{{strings.pilotReadinessDevices}} </p>
+            <div style="text-align:left; padding-left:10px">
+                <select tabindex="16" name="PilotReadiness" id="PilotReadinessSelector">
+                    <option value="0">{{strings.deployTaskSequence}}</option>
+                    <option value="1" ng-if="ShowOffice">{{strings.deployApplication}}</option>
+                </select>
+                <input tabindex="17" type="button" ng-disabled="DeployIsDisabled" ng-click="DeployToPilotCollection()" value="{{strings.deployPilotButton}}" />
+            </div>
+            <div tabindex="18" id="pilotReadinessDevices" style="text-align:right" > </div>
+            <!--<p tabindex="19" style="text-align:left; padding-left:10px; margin-top:10px">Upgrade deployment progress for devices in configured pilot. </p>
+            <div tabindex="20" id="pilotDeploymentProgress" style="padding-left:10px; margin-top:-140px; padding-bottom:10px"> </div>--> 
+        </div>
+        <div class="tile tile-3-2" style="float: left;width:510px">
+            <h1 tabindex="21" style="text-align:left; padding-left:10px; font-size:16px"><b>{{strings.productionStatus}}</b></h1>
+            <p tabindex="22" style="text-align:left; padding-left:10px">{{strings.productionReadinessDevices}}</p>
+            <div style="text-align:left; padding-left:10px">
+                <select tabindex="23" name="ProdReadiness" id="ProdReadinessSelector">
+                    <option value="0">{{strings.deployTaskSequence}}</option>
+                    <option value="1" ng-if="ShowOffice">{{strings.deployApplication}}</option>
+                </select>
+                <input tabindex="24" type="button" ng-disabled="DeployIsDisabled" ng-click="DeployToProdCollection() "value="{{strings.deployProdButton}}" />
+            </div>
+            <div tabindex="25" id="productionReadinessDevices" style="text-align:right"> </div>
+            <!--<p tabindex="26" style="text-align:left; padding-left:10px; margin-top:10px">Upgrade deployment progress for devices in production. </p>
+            <div tabindex="27" id="prodDeploymentProgress" style="padding-left:10px; margin-top:-140px; padding-bottom:10px"> </div>--> 
+        </div>
+    </div>
+
+
+</body>
+</html>

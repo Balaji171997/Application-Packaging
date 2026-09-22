@@ -1,0 +1,77 @@
+﻿<!DOCTYPE html>
+<html ng-app="dashboard">
+<head>
+    <title>Windows Servicing Dashboard</title>
+    <meta name="description" content="Windows Dashboard containing data about Windows Devices">
+    <meta name="keywords" content="Windows Servicing, Dashboard">
+
+    <link href="../css/c3.min.css" rel="stylesheet" type="text/css">
+    <link href="../css/columns.css" rel="stylesheet" type="text/css">
+    <link href="css/columns.css" rel="stylesheet" type="text/css">
+    <link href="css/styles.css" rel="stylesheet" type="text/css">
+
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="../js/utility.js" type="text/javascript"></script>
+    <script src="../js/external.js" type="text/javascript"></script>
+    <script src="../js/d3.min.js" type="text/javascript"></script>
+    <script src="../js/c3.min.js" type="text/javascript"></script>
+    <script src="js/controller.js" type="text/javascript"></script>
+    <noscript>Javascript is not enabled</noscript>
+</head>
+<body id="W10ServicingDashboardBody" ng-controller="dashboardController" tabindex="0">
+    <div id="W10ServicingDashboardBodyDiv" tabindex="0">
+        <br class="clear">
+        <div ng-if="CollectionsData == ChartState.DataReady">
+            <label for="SMS_DeviceCollections" ng-bind="strings.DeviceCollection"></label>
+            <select name="SMS_DeviceCollections" id="SMS_DeviceCollectionsSelector" ng-options="collection as collection.Name for collection in SMS_DeviceCollections.All" ng-model="SMS_DeviceCollections.Selected" ng-change="SMS_DeviceCollectionChanged()" tabindex="0" aria-label="{{strings.DeviceCollection}}"></select>
+            <button type="button" ng-click="LaunchWizardCollectionPicker()" ng-bind="strings.Browse" tabindex="0" aria-label="{{strings.Browse}}"></button>
+        </div>
+        <br class="clear">
+        <div class="tile-container-2-6">
+            <div class="tile-2-3">
+                <h1 ng-bind="strings.W10Usage" tabindex="0"></h1>
+                <button class="link" id="showW10UsageChartButton" ng-click="toggleFeatureDonutChart()">{{strings.ShowTable}}</button>
+                <div id="windows-usage-table" class="windows-usage-table">
+                </div>
+                <div id="W10-usage" aria-label="{{strings.W10Usage}}" tabindex="0">
+                </div>
+            </div>
+            <div class="tile-2-3">
+                <h1 ng-bind="strings.W10Quality" tabindex="0"></h1>
+                <button class="link" id="showW10QualityChartButton" ng-click="toggleQualityDonutChart()">{{strings.ShowTable}}</button>
+                <div id="windows-quality-table" class="windows-quality-table">
+                </div>
+                <div id="W10-quality" aria-label="{{strings.W10Quality}}" tabindex="0">
+                </div>
+            </div>
+        </div>
+        <br class="clear">
+        <div class="tile-container-2-6">
+            <div class="tile-2-3">
+                <h1 ng-bind="strings.W10 + strings.W10LatestFeatureUpdate" tabindex="0"></h1>
+                <div id="W10-latest" aria-label="{{strings.W10LatestFeatureUpdate}}" tabindex="0">
+                </div>
+            </div>
+            <div class="tile-2-3">
+                <h1 ng-bind="strings.W11 + strings.W10LatestFeatureUpdate" tabindex="0"></h1>
+                <div id="W11-latest" aria-label="{{strings.W11LatestFeatureUpdate}}" tabindex="0">
+                </div>
+            </div>
+        </div>
+        <br class="clear">
+        <div ng-show="isSetupDiagChartReady">
+            <div class="tile-container-2-6">
+                <br class="clear">
+                <div class="tile-2-3">
+                    <h1 ng-bind="strings.CollectionErrors" tabindex="0"></h1>
+                    <div id="CollectionErrors" aria-label="{{getString('CollectionErrors')}}" tabindex="0"></div>
+                </div>
+                <div class="tile-2-3">
+                    <h1 ng-bind="strings.ErrorsTimeline" tabindex="0"></h1>
+                    <div id="ErrorsTimeline" aria-label="{{getString('ErrorsTimeline')}}" tabindex="0"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

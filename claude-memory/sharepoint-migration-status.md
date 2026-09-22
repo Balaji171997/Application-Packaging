@@ -42,20 +42,20 @@ installer inside `Content\SupportFiles`). `-Full` overrides.
   binary modules. Untested from the share. See [[shared-folder-deployment]].
 
 **SEPARATE TOOL (user's decision, 2026-09-05):** the SharePoint version is its own copy at
-`Application-Packaging\SP-PackageCompanion` (repo root is now `Documents\GitHub\Application-Packaging`; folder
+`Application-Packaging\MTB-PackageAssistance (was SP-PackageCompanion)` (repo root is now `Documents\GitHub\Application-Packaging`; folder
 renamed from `SP-PackageBuilder` on 2026-09-12) — `files\` must stay untouched. It is a DEPLOYMENT VARIANT,
 not a fork: every engine file is byte-identical to MTB. Only 4 things are its own — `SharePoint.ps1`,
 `lib\PnP.PowerShell\1.12.0\`, `settings.json` (has the `SharePoint` block, `Enabled=true`), and 3 wiring lines.
 `Sync-FromMTB.ps1` pulls MTB fixes forward and re-applies the wiring automatically.
 
-**RENAMED 2026-09-11 → "Package Companion"** (client disliked "Builder" — it assists, it does not build).
-Everything renamed: text, `PackageCompanion.exe/.pak/.exe.config/.ps1`, `Lib\PackageCompanion.ico`, work root
+**RENAMED 2026-09-11 → "Package Assistance"** (client disliked "Builder" — it assists, it does not build).
+Everything renamed: text, `PackageAssistance.exe/.pak/.exe.config/.ps1`, `Lib\PackageAssistance.ico`, work root
 `C:\temp\PackageCompanion` (old folder left behind on purpose). The loader was recompiled with ps2exe.
 
-**MACHINE MOVE 2026-09-12:** the freshly compiled `PackageCompanion.exe` was QUARANTINED by Cortex XDR / Trellix
+**MACHINE MOVE 2026-09-12:** the freshly compiled `PackageAssistance.exe` was QUARANTINED by Cortex XDR / Trellix
 (fresh unsigned ps2exe binaries trip them; Defender is off, so `Get-MpThreatDetection` shows nothing). User moved
 to a new test machine, copying `Application-Packaging` whole (git repo at its root, today's work uncommitted).
-**`SP-PackageCompanion\HANDOFF.md` carries the full state and the recompile command** — memory does NOT travel
+**`MTB-PackageAssistance (was SP-PackageCompanion)\HANDOFF.md` carries the full state and the recompile command** — memory does NOT travel
 with a folder copy. If the exe is eaten again, fall back to display-name-only (files stay `PackageBuilder.*`).
 
 **2026-09-12 (new machine):** exe rebuilt fine (ps2exe 1.0.18, Trellix quiet). Shell REDESIGNED in the SP copy:
@@ -64,7 +64,7 @@ badges - a count reads as "things left to do"), header = name + `RITM <id>` besi
 Source/Target at strip's right, 19 result labels selectable (PbCopyText). `SW-Source` resolver fix + doc-folder
 flattening went into MTB `files\` too (byte-identical mirror). **Copy to SharePoint BUILT (Copy-SPPackage +
 BtnCopySharePoint, verify-by-size, dry-run 16/16) but NOT live-tested - test on a DUMMY vendor/app only.**
-Full state in `SP-PackageCompanion\HANDOFF.md`.
+Full state in `MTB-PackageAssistance (was SP-PackageCompanion)\HANDOFF.md`.
 
 **NEXT DIRECTION (user, 2026-09-12): SharePoint is the ONLY read/browse/update source - Outgoing becomes a
 BACKUP.** Everything the tool currently fetches from the Outgoing share (Load from Outgoing on Publish, the

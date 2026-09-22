@@ -1,0 +1,127 @@
+﻿<!--
+ <copyright file="dashboard.html" company="Microsoft">
+    Copyright (c) 2016 Microsoft Corporation.  All rights reserved.
+ </copyright>
+ <purpose>
+ </purpose>
+ <notes>
+ </notes>
+-->
+
+<!DOCTYPE html>
+
+<html ng-app="dashboard">
+<head>
+    <title>Windows Performance Counter Monitor</title>
+    <meta charset="utf-8" />
+    <meta content="IE=edge" http-equiv="X-UA-Compatible" />
+    <meta name="description" content="Performance Counter dashboard" />
+    <meta name="keywords" content="Performance Counter, dashboard" />
+
+    <link href="../css/c3.min.css" rel="stylesheet" type="text/css" />
+    <link href="css/columns.css" rel="stylesheet" type="text/css" />
+    <link href="css/styles.css" rel="stylesheet" type="text/css" />
+
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="../js/utility.js" type="text/javascript"></script>
+    <script src="../js/d3.min.js" type="text/javascript"></script>
+    <script src="../js/c3.min.js" type="text/javascript"></script>
+    <script src="js/controller.js" type="text/javascript"></script>
+
+    <noscript>Javascript is not enabled</noscript>
+</head>
+
+<body ng-controller="dashboardController">
+    <!-- Header -->
+    <div class="tile-container-1-8">
+        <!-- Management Point Filter -->
+        <div class="tile-1-24">
+            <h1 ng-bind="getString('ManagementPointFilter')" tabindex="1"></h1>
+            <br />
+            <div id="managementPointFilter">
+                <select id="selectWidth" ng-change="refresh()" ng-options="MP.SiteCode for MP in MPList" ng-model="MPListFirst"></select>
+            </div>
+        </div>
+        <!-- Clients Online -->
+        <div class="tile-1-24">
+            <span title="Number of clients currently connected to the management point">
+                <h1 ng-bind="getString('ClientsOnline')" tabindex="1"></h1>
+            </span>
+            <br />
+            <div id="tile-value">
+                {{ client }}
+            </div>
+        </div>
+        <!-- CPU -->
+        <div class="tile-1-24">
+            <h1 ng-bind="getString('CPUPerformance')" tabindex="1"></h1>
+            <div id="CPUPeformance">
+
+            </div>
+        </div>
+        <!-- Memory -->
+        <div class="tile-1-24">
+            <h1 ng-bind="getString('MemoryPerformance')" tabindex="1"></h1>
+            <br />
+            <div class="tile-value">
+                {{ memoryData }}
+                <img ng-if="memoryData != '-'" class="icon" alt="Status Icon" src="../dashboard/img/{{Img}}.svg">
+            </div>
+        </div>
+    </div>
+    <!-- Row 1 -->
+    <div class="tile-container-2-6">
+        <!-- Software Inventory -->
+        <div class="tile-2-2">
+            <span title="State of reports processed by the management point">
+                <h1 ng-bind="getString('SoftwareInventory')" tabindex="1"></h1>
+            </span>
+            <div id="softwareInventory">
+
+            </div>
+        </div>
+        <!-- Hardware Inventory -->
+        <div class="tile-2-2">
+            <span title="State of reports processed by the management point">
+                <h1 ng-bind="getString('HardwareInventory')" tabindex="1"></h1>
+            </span>
+            <div id="hardwareInventory">
+
+            </div>
+        </div>
+        <!-- Data Discovery Record Manager -->
+        <div class="tile-2-2">
+            <span title="State of reports processed by the management point">
+                <h1 ng-bind="getString('DDRManager')" tabindex="1"></h1>
+            </span>
+            <div id="DDRManager">
+
+            </div>
+        </div>
+    </div>
+    <!-- Row 2 -->
+    <div class="tile-container-2-6">
+        <!-- Get Policy -->
+        <div class="tile-2-2">
+            <h1 ng-bind="getString('GetPolicy')" tabindex="1"></h1>
+            <div id="GetPolicy">
+
+            </div>
+        </div>
+        <!-- Registration -->
+        <div class="tile-2-2">
+            <h1 ng-bind="getString('Registration')" tabindex="1"></h1>
+            <div id="Registration">
+
+            </div>
+        </div>
+        <!-- State Messages -->
+        <div class="tile-2-2">
+            <h1 ng-bind="getString('StateMessage')" tabindex="1"></h1>
+            <div id="StateMessage">
+
+            </div>
+        </div>
+    </div>
+</body>
+</html>

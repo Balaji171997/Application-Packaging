@@ -1,4 +1,4 @@
-##############################################################
+﻿##############################################################
 # GUI.ps1  -  Package Builder wizard (Step 1 + Step 2 live; 3/4 stubbed)
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -STA -File GUI.ps1
 ##############################################################
@@ -5038,3 +5038,35 @@ foreach ($i in 1..4) {
 
 Show-Step 1
 $script:Win.ShowDialog() | Out-Null
+
+# ---- SHUT DOWN FOR REAL when the window closes.
+# The busy card runs its own WPF dispatcher on a second thread, and the warm-up
+# and job runspaces may still be open. Any one of those keeps the process alive
+# after the window has gone - which is how three invisible PackageCompanion.exe
+# processes from three different days were found running, locking the folder.
+# So: tell the busy thread to quit, give it a moment, then stop and dispose
+# every runspace we own, and end the process. Nothing is left to linger.
+try { $script:Busy.Quit = $true } catch {}
+try {
+    if ($script:BusyHandle -and $script:BusyPs) {
+        $deadline = (Get-Date).AddSeconds(2)
+        while (-not $script:BusyHandle.IsCompleted -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 50 }
+    }
+} catch {}
+foreach ($name in 'BusyPs', 'WarmPs') {
+    try {
+        $ps = Get-Variable -Name $name -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if ($ps) {
+            try { $ps.Stop() } catch {}
+            try { if ($ps.Runspace) { $ps.Runspace.Close(); $ps.Runspace.Dispose() } } catch {}
+            try { $ps.Dispose() } catch {}
+        }
+    } catch {}
+}
+try { [System.Windows.Threading.Dispatcher]::CurrentDispatcher.InvokeShutdown() } catch {}
+# Compiled (the exe) or started with -File: end the process outright. Only a
+# developer who dot-sourced this into an interactive console is spared.
+$interactiveConsole = ($Host.Name -eq 'ConsoleHost') -and $PSScriptRoot -and
+                      ([Environment]::GetCommandLineArgs() -notcontains '-File') -and
+                      ([Environment]::GetCommandLineArgs() -notcontains '-file')
+if (-not $interactiveConsole) { [Environment]::Exit(0) }

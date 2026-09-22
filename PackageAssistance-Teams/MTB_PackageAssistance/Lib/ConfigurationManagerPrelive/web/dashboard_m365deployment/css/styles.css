@@ -1,0 +1,179 @@
+#ConnectionDetailsChart,
+#ConnectedDevicesChart,
+#ConnectionHealthChart,
+#TopConnectionIssuesChart {
+  max-height: 250px; 
+  position: relative;
+  height: 250px;
+}
+.c3-tooltip-container {
+  max-width: 200px;
+  max-height: 10px;
+}
+body {
+  background: #F4F7FC;
+  font-family: 'Segoe UI';
+}
+h1 {
+  font-size: 10px;
+  font-weight: normal;
+  text-align: center;
+}
+h1-left {
+  font-size: 15px;
+  font-weight: normal;
+  text-align: left;
+  padding-bottom:10px;
+}
+select {
+  padding: 2px;
+  font-size: 12px;
+}
+button {
+  line-height: 14px;
+  float: right;
+  margin-left: 5px;
+  padding: 3px 18px 3px 18px;
+  border: none;
+  color: #ffffff;
+  background-color: #707070;
+}
+li {
+  list-style-type: none;
+  text-align: left;
+  font-size: 12px;
+}
+nav ul {
+  overflow: auto;
+  overflow-y: auto;
+}
+
+.table-format {
+    border-collapse: collapse;
+    width: 100%;
+}
+
+.table-format-noborder {
+    border: none;
+    border-collapse:collapse;
+    width: 100%;
+}
+
+.table-element {
+    padding-left: 10px;
+    padding-right: 10px;
+    border-bottom: 1px solid #ddd;
+}
+
+.table-element-noborder {
+    padding-left: 10px;
+    padding-right: 10px;
+    padding-bottom: 5px;
+    padding-top: 5px;
+}
+
+.left {
+    text-align: left;
+}
+
+.center {
+    text-align: center;
+}
+
+.phases-scroll {
+    overflow: scroll;
+}
+
+.overlay{
+  vertical-align: middle;
+  text-align: center;
+  border: 1px solid gainsboro;
+  font-size: 16px;
+  background: white;
+  height: 300px;
+  width: 800px;
+  position: absolute;
+  display: inline-block;
+  top: 0;
+  left: 0;
+  margin-top: 100px;
+  margin-left: 86px;
+  z-index:10;
+}
+
+.tile-content {
+  height: 100%;
+  width: 100%;
+  display: table;
+}
+.tile-content-inner {
+  display: table-cell;
+  vertical-align: middle;
+  text-align: center;
+}
+
+.wrapper {
+    text-align: center;
+}
+
+.blank_row
+{
+    height: 10px !important; /* overwrites any other rules */
+    background-color: #FFFFFF;
+}
+
+.button {
+    font-size: 15px;
+    height:50px;
+    width:250px;
+}
+
+.tile-nobackground {
+  vertical-align: middle;
+  text-align: center;
+  border: none;
+  margin: 0px;
+  float: left;
+  font-size: 16px;
+  position: relative;
+  height: 300px;
+}
+
+.tile-container-4-6 {
+  height: 500px;
+  display: inline-block;
+  float: left;
+  width: 1056px;
+}
+
+.tile-3-2 {
+  height: 500px;
+  width: 510px;
+}
+
+/* Create two equal columns that floats next to each other */
+.column {
+    float: left;
+    width:45%;
+    padding: 0px;
+}
+
+/* Clear floats after the columns */
+.row:after {
+    content: "";
+    display: table;
+    clear: both;
+}
+
+#pLink {
+    padding-left:10px;
+    text-decoration:none;
+    color:#66D7F7;
+}
+
+#pLink:hover {
+    text-decoration:underline;
+}
+
+
+

@@ -1,0 +1,128 @@
+﻿<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" ng-app="dashboard">
+<head>
+    <title>Lifecycle Dashboard</title>
+    <meta charset="UTF-8">
+    <meta content="IE=edge" http-equiv="X-UA-Compatible">
+    <meta name="description" content="Lifecycle Dashboard containing information about product lifecycles in the hierarchy">
+    <meta name="keywords" content="Lifecycle, Dashboard">
+
+    <link href="../css/c3.min.css" rel="stylesheet" type="text/css">
+    <link href="../css/columns.css" rel="stylesheet" type="text/css">
+    <link href="css/custom_columns.css" rel="stylesheet" type="text/css">
+    <link href="css/styles.css" rel="stylesheet" type="text/css">
+
+    <script src="../js/angular.min.js" type="text/javascript"></script>
+    <script src="../js/d3.min.js" type="text/javascript"></script>
+    <script src="../js/c3.min.js" type="text/javascript"></script>
+    <script src="../js/utility.js" type="text/javascript"></script>
+    <script src="js/controller.js" type="text/javascript"></script>
+
+    <noscript>Javascript is not enabled</noscript>
+</head>
+
+<body id="dashboardBody" ng-controller="dashboardController">
+
+    <script>
+        function updateChartsForCategory(category) {
+            var controllerElement = document.getElementById('dashboardBody');
+            var scope = angular.element(controllerElement).scope();
+            scope.updateChartsForCategory(category);
+        }
+        function updateMonthsRemaining() {
+            var controllerElement = document.getElementById('dashboardBody');
+            var scope = angular.element(controllerElement).scope();
+            scope.updateMonthsRemaining();
+        }
+    </script>
+
+    <div id="aisp-disabled-warning" class="tile-container-y-6" style="display:none; clear:both;">
+        <div style="margin:6px;">
+            <img src="img/warning.svg" alt="{{strings.WarningIconAltText}}" />
+            <text ng-bind="strings.AISPDisabledWarning">ERROR</text>
+        </div>
+    </div>
+
+    <div style="clear:both;">
+
+        <div class="chart-tile" style="margin:5px 0 15px 0; display:block;" aria-label="{{strings.EOLProductsLabel}}">
+
+            <!--Moved this here so that the filter follows the EOL graph when user shrinks the window.-->
+            <div style="margin:6px;">
+                <label for="product-filter-selector" ng-bind="strings.ProductCategory">ERROR</label>
+                <select id="product-filter-selector" onchange="updateChartsForCategory(this.selectedIndex)" tabindex="0">
+                    <!--WARNING: Do not change the order of these values unless also adjusting updateChartsForCategory in controller.js-->
+                    <option value="All" ng-bind="strings.Category_All"></option>
+                    <option value="WinClient" ng-bind="strings.Category_WinClient"></option>
+                    <option value="WinServer" ng-bind="strings.Category_WinServer"></option>
+                    <option value="Database" ng-bind="strings.Category_Database"></option>
+                    <option value="ConfigMgr" ng-bind="strings.Category_ConfigMgr"></option>
+                    <option value="Office" ng-bind="strings.Category_Office"></option>
+                </select>
+            </div>
+
+            <div class="chart-with-title hcaware">
+                <h1 class="chart-title" ng-bind="strings.EOLProductsLabel"></h1>
+                <button class="link" id="showExpiredChartButton" ng-click="toggleExpiredChart()">{{strings["ShowTable"]}}</button>
+                <div id="top-expired-table" class="top-expired-table">
+                    <div class="tableheader">
+                        <div class="tablerow">
+                            <div class="tablecell">{{strings["ProductName"]}}</div>
+                            <div class="tablecell">{{strings["NumberInEnvironment"]}}</div>
+                        </div>
+                    </div>
+                    <div id="top-expired-table-items" class="tablebody"></div>
+                </div>
+                <div class="chart-container" id="EOLBarchart"></div>
+            </div>
+        </div>
+
+        <div class="chart-tile" style="margin: 5px 0 15px 0;" aria-label="{{strings.NearEOLProductsLabel}}">
+
+            <div style="margin:6px 6px 7px 6px; display:flex; flex-flow:row nowrap; justify-content:space-around; width:75%;">
+                <label for="product-filter-slider" id="slider-label">ERROR</label>
+                <input type="range" id="product-filter-slider" min="1" max="36" value="18" aria-valuemin="1" aria-valuemax="36" aria-valuenow="18" onchange="updateMonthsRemaining()" class="slider" tabindex="0" />
+            </div>
+
+            <div class="chart-with-title hcaware">
+                <h1 class="chart-title" ng-bind="strings.NearEOLProductsLabel"></h1>
+                <button class="link" id="showNearEOLChartButton" ng-click="toggleNearEOLChart()">{{strings["ShowTable"]}}</button>
+                <div id="top-neareol-table" class="top-neareol-table">
+                    <div class="tableheader">
+                        <div class="tablerow">
+                            <div class="tablecell">{{strings["ProductName"]}}</div>
+                            <div class="tablecell">{{strings["NumberInEnvironment"]}}</div>
+                        </div>
+                    </div>
+                    <div id="top-neareol-table-items" class="tablebody"></div>
+                </div>
+                <div class="chart-container" id="NearEOLBarchart"></div>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="tile-container-y-6" style="clear:both;" aria-label="{{strings.EndOfLifecycleDataForMsProducts}}">
+        <div class="tile-y-6">
+            <h1 class="tile-title-y-6" ng-bind="strings.LifecycleChartLabel"></h1>
+            <div id="lifecycle-info-grid-table-holder" class="lifecycle-info-grid tile-y-6-size"></div>
+        </div>
+    </div>
+
+    <div class="tile-container-1-6" style="clear:both;" aria-label="{{strings.LegalText}}">
+        <div class="tile-1-6">
+            <div class="tile-content">
+                <div id="legal" class="tile-content-inner">
+                    <text ng-bind="strings.LegalText">ERROR LOADING TEXT</text>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="tile-container-y-6" style="clear:both;" aria-label="{{strings.EndOfLifecycleDataForMsProducts}}">
+        <div style="margin:6px;">
+            <text ng-bind="strings.LastUpdated">ERROR LOADING TEXT</text>
+        </div>
+    </div>
+</body>
+</html>

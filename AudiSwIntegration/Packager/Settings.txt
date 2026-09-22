@@ -1,0 +1,32 @@
+# The packager window's settings - the ONE file set per install.
+#
+#   key = value      one per line, no quotes. Lines starting with # are ignored.
+#
+# Whatever a packager changes in the window (the documents location, the
+# theme) is remembered for them in %LOCALAPPDATA%\AudiSwIntegration\settings.txt,
+# same shape, and wins over this file.
+
+# ---------------------------------------------------------------- DropFolder
+# The ROOT the jobs go into, shared with the servers. Underneath it the window
+# creates, the first time each is needed:
+#
+#   <root>\<ENV>\New\<PackageName>\<package>_<jobid>.xml
+#              \Working\  \Done\  \Failed\
+#
+# Each server's collector task is pointed at its own <root>\<ENV>.
+DropFolder =
+
+# ------------------------------------------------------------- DocumentsRoot
+# Where the request forms are kept when they are NOT inside the package: one
+# folder per request, named with the AES ID (the exact wording after it does
+# not matter), with a Documentation folder inside:
+#
+#   <root>\AES-1-020879-A WinMerge WinMerge 2.16.58\Documentation\<the form>.docx
+#
+# Looked at ONLY when the package folder holds no Software Integration form.
+# Optional - leave empty if every package ships with its form.
+DocumentsRoot =
+
+# The SCCM content store is NOT here and never reached from a packager PC:
+# the package files go into <DropFolder>\<ENV>\Sources with the job, and the
+# SCCM server copies them into the store itself.

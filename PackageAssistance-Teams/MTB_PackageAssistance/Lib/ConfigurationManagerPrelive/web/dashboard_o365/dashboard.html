@@ -1,0 +1,120 @@
+﻿<!DOCTYPE html>
+<html ng-app="dashboard">
+<head>
+  <meta charset="utf-8" />
+  <title>O365 Updates Dashboard</title>
+  <meta content="IE=edge" http-equiv="X-UA-Compatible" />
+  <meta name="description" content="O365 Updates Dashboard" />
+  <meta name="keywords" content="Office 365, O365, Dashboard" />
+
+  <link href="../css/c3.min.css" rel="stylesheet" type="text/css" />
+  <link href="../css/columns.css" rel="stylesheet" type="text/css" />
+  <link href="css/styles.css" rel="stylesheet" type="text/css" />
+
+  <script src="../js/angular.min.js" type="text/javascript"></script>
+  <script src="../js/utility.js" type="text/javascript"></script>
+  <script src="../js/d3.min.js" type="text/javascript"></script>
+  <script src="../js/c3.min.js" type="text/javascript"></script>
+  <script src="../js/external.js" type="text/javascript"></script>
+  <script src="js/controller.js" type="text/javascript"></script>
+  <noscript>Javascript is not enabled</noscript>
+</head>
+<body id="O365ClientsDashboardBody" ng-controller="dashboardController" tabindex="0">
+    <div id="O365ClientsDashboardBodyDiv" tabindex="0">
+        <br class="clear">
+        <div ng-if="collectionsData == ChartState.DataReady">
+            <label for="SMS_DeviceCollections" ng-bind="strings.DeviceCollection"></label>
+            <select name="SMS_DeviceCollections" id="SMS_DeviceCollectionsSelector" ng-options="collection as collection.Name for collection in SMS_DeviceCollections.All" ng-model="SMS_DeviceCollections.Selected" ng-change="SMS_DeviceCollectionChanged()" tabindex="0"></select>
+            <button type="button" ng-click="LaunchWizardCollectionPicker()" ng-bind="strings.Browse" tabindex="0"></button>
+        </div>
+        <br class="clear">
+        <div class="tile-container-2-6">
+            <div class="tile tile-2-3">
+                <h1 id="O365ClientsTitle" tabindex="0" ng-bind="strings.O365Clients"></h1>
+                <button class="linkbutton" id="showO365ClientsBarButton" ng-bind="strings.ShowTable" ng-click="toggleO365ClientsBar()"></button>
+                <div id="O365Clients-table" class="O365Clients-table">
+                </div>
+                <div id="O365Clients" dashboard-chart chart-status="O365ClientsData" tabindex="0">
+                </div>
+            </div>
+            <div class="tile tile-2-2">
+                <h1 id="NonOfficeClientsTitle" ng-bind="strings.NonOfficeClients" tabindex="0"></h1>
+                <button class="linkbutton" id="showNonOfficeClientsChartButton" ng-bind="strings.ShowTable" ng-click="toggleNonOfficeClientsChart()"></button>
+                <div id="NonOfficeClients-table" class="NonOfficeClients-table">
+                </div>
+                <div id="NonOfficeClientsChart" dashboard-chart chart-status="NonOfficeClientsData" tabindex="0">
+                </div>
+            </div>
+            <div class="tile tile-2-1" ng-show="isO365InstallerOn">
+                <div class="tile-content" ng-keypress="keyPressToggle($event, 1)" ng-click="launchO365Installer()" role="button" tabindex="0">
+                    <div class="tile-content-inner clickable" aria-label="{{strings.Office365Installer}}">
+                        <img class="plus" alt="Plus Sign" src="../img/plus.svg">
+                        <div ng-bind="strings.Office365Installer">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <br class="clear">
+        <div class="tile-container-2-6">
+            <div class="tile tile-2-2">
+                <h1 tabindex="0" ng-bind="strings.O365Versions" ></h1>
+                <button class="linkbutton" id="showO365VersionsChartButton" ng-bind="strings.ShowTable" ng-click="toggleO365VersionsChart()"></button>
+                <div id="O365Versions-table" class="O365Versions-table">
+                </div>
+                <div id="versionsChart" dashboard-chart chart-status="versionsData" tabindex="0" ng-keypress="keyPressDrillThrough($event, 'O365Versions')">
+                </div>
+            </div>
+            <div class="tile tile-2-3">
+                <h1 id="O365LanguagesTitle" tabindex="0" ng-bind="strings.O365Languages"></h1>
+                <button class="linkbutton" id="showO365languagesChartButton" ng-bind="strings.ShowTable" ng-click="toggleO365languagesChart()"></button>
+                <div id="O365languages-table" class="O365languages-table">
+                </div>
+                <div id="languagesChart" dashboard-chart chart-status="languagesData" tabindex="0">
+                </div>
+            </div>
+            <div class="tile tile-1-1" ng-show="hasAdrPermission">
+                <div class="tile-content" ng-keypress="keyPressToggle($event, 2)" ng-click="launchWizardADR()" role="button" tabindex="0">
+                    <div class="tile-content-inner clickable" aria-label="{{strings.CreateAdr}}">
+                        <img class="plus" alt="Plus Sign" src="../img/plus.svg">
+                        <div ng-bind="strings.CreateAdr">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="tile tile-1-1" ng-show="hasClientSettingsPermissions">
+                <div class="tile-content" ng-keypress="keyPressToggle($event,3)" ng-click="launchWizardClientAgent()" role="button" tabindex="0">
+                    <div class="tile-content-inner clickable" aria-label="{{strings.CreateClientAgentSettings}}">
+                        <img class="plus" alt="Plus Sign" src="../img/plus.svg">
+                        <div ng-bind="strings.CreateClientAgentSettings">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <br class="clear">
+        <div class="tile-container-2-6">
+            <div class="tile tile-2-3">
+                <h1 tabindex="0" ng-bind="strings.O365Channels"></h1>
+                <button class="linkbutton" id="showO365ChannelsChartButton"  ng-bind="strings.ShowTable" ng-click="toggleO365ChannelsChart()"></button>
+                <div id="O365Channels-table" class="O365Channels-table">
+                </div>
+                <div id="channelsChart" dashboard-chart chart-status="channelsData" tabindex="0">
+                </div>
+            </div>
+            <div class="tile tile-2-3" style="width: 516px;">
+                <div chart-status="adrData" ng-show="adrsExist">
+                    <h1 id="deploymentsChartTitle" tabindex="0" ng-bind="strings.O365Adrs"></h1>
+                    <label for="ADR_choice" ng-bind="strings.ADR"></label>
+                    <select ng-change="select_ADRchoice()" ng-model="ADR_choice" ng-options="ADR.Name for ADR in ADRS"></select>
+                    <div id="deploymentsChart" tabindex="0" dashboard-chart chart-status="deploymentChartData">
+                    </div>
+                </div>
+                <div class="tile-content" ng-hide="adrsExist" tabindex="0">
+                    <div class="tile-content-inner" ng-bind="strings.O365AdrsNotAvailable"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

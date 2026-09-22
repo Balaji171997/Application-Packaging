@@ -16,3 +16,11 @@
 2026-09-15 14:33:07  [Success] Connected to 'm365.man'.
 2026-09-15 14:33:07  [Success] Signed in as gurram.balaji-ext@man.eu.
 2026-09-15 14:33:47  [Info] Activity feed: 12783 entries, 0 of 943 apps re-translated.
+2026-09-15 14:47:07  [Success] Connected to 'm365.man'.
+2026-09-15 14:47:08  [Success] Signed in as gurram.balaji-ext@man.eu.
+2026-09-15 14:47:48  [Info] Activity feed: 12783 entries, 0 of 943 apps re-translated.
+2026-09-15 15:03:25  [Success] Found 943 Win32 app(s).
+2026-09-15 15:04:55  [Warning] People lookup via getByIds denied (POST /beta/directoryObjects/getByIds -> HTTP 403).
+2026-09-15 15:05:02  [Success] Audit: 40 event(s) read, 0 new, 1803 app(s) with history, 57s.
+2026-09-15 15:06:13  [Info] Snapshot saved: apps-20260915-150601.json
+2026-09-15 15:06:46  [Info] Activity feed: 12783 entries, 0 of 943 apps re-translated.

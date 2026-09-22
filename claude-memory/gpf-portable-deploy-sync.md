@@ -1,22 +1,26 @@
 ---
 name: gpf-portable-deploy-sync
-description: "GPF deploy rule: after ANY GPF tool change, sync the portable/deploy copy at Application-Packaging\\GPF_PackageAssistance (pak + changed sidecar data files)"
+description: Team copies of ALL THREE Package Assistance brands live in repo\PackageAssistance-Teams\ (GPF_/PAG_/MTB_PackageAssistance); after ANY source change run PackageAssistance-Teams\Update-Teams.ps1 (packs + copies pak/sidecars + mirrors Lib)
 metadata: 
   node_type: memory
   type: feedback
-  originSessionId: f4fc59ce-bb2a-4ffe-b080-0f251cb9e612
-  modified: 2026-08-24T06:31:10.748Z
+  originSessionId: 7d55d151-f242-4450-a165-3b37421965bd
+  modified: 2026-09-20T12:27:37.079Z
 ---
 
-Whenever I change the GPF "Package Assistance" tool, the user wants the portable/deploy copy updated too — not just the source.
+Whenever I change a Package Assistance source folder, the user wants the team copy updated too — a source-only
+change never reaches the packagers.
 
-- **Source (edit here):** `C:\Users\AW140\Downloads\Application-Packaging\GPF-PackageAssistance` (hyphen)
-- **Portable/deploy (must be synced):** `C:\Users\AW140\Downloads\Application-Packaging\GPF_PackageAssistance` (underscore) — this is the real run target: `PackageAssistance.exe` + `PackageAssistance.pak` + sidecar data files (`snippets.json`, `settings.json`, `KnowledgeBase.Recommend.json`, `Lib\`, `PsExec.exe`).
+**Since 20 Sep 2026** the three team copies sit together in `Application-Packaging\PackageAssistance-Teams\`:
+`GPF_PackageAssistance`, `PAG_PackageAssistance`, `MTB_PackageAssistance` (underscore = team copy; the hyphen
+folders `GPF-PackageAssistance` etc. are the source). User: "keep all three in one folder so I know where to
+look; every time we change the source, update the pak inside that folder."
 
-**Why:** users run the portable copy; a source-only change never reaches them.
+**How to apply:** `.\PackageAssistance-Teams\Update-Teams.ps1` (optionally `-Brand GPF` / `-NoPack`). It runs
+each brand's Pack-Engine.ps1, copies PackageAssistance.pak + settings.json + snippets.json +
+KnowledgeBase.Recommend.json and mirrors Lib\ (GPF/PAG: PSADT_Template_GPF; MTB: 338 MB of SCCM/Intune/PnP
+modules + template). Sidecar data files are not compiled into the pak (no repack needed for them), but they must
+be copied - the script does. The loader exe is never rebuilt; all copies are byte-identical (12 Sep 2026 build).
 
-**How to apply:**
-- Code changes (in the `.ps1` files) → bump `$script:BuildStamp` (Core.ps1 line 7), repack to `PackageAssistance.pak` via Pack-Engine, then copy the pak into the portable folder.
-- **Sidecar data files** (e.g. `snippets.json`) are NOT compiled into the pak — they're read from disk next to the exe. So editing one needs **no repack**, but the file must still be copied into `GPF_PackageAssistance`. Verify with `cmp -s` (byte-for-byte identical).
-
-MTB "Package Builder" has the analogous portable copy — this rule is GPF-specific. See [[shared-folder-deployment]], [[downloads-files-is-pb-only]].
+**Why:** the exe reads `PackageAssistance.pak` by name from its own folder; the team runs the exe from a share
+via a shortcut, so replacing the pak updates everyone. See [[shared-folder-deployment]], [[pa-gpf-pag-enterprise-shell]].
