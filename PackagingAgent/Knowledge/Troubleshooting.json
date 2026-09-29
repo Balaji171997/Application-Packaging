@@ -1,0 +1,102 @@
+{
+  "_": "Problems this team has actually hit and diagnosed, written down so nobody has to work them out twice. Each one says what it LOOKED like, what it really WAS, and how to tell the difference. Read the method first; the cases are examples of it.",
+  "generated": "2026-09-26",
+
+  "method": [
+    "1. Say what you think is wrong, in one sentence, before you touch anything.",
+    "2. Ask whose fault it is: the thing you are looking at, or the command you used to look at it? Most wasted time comes from skipping this.",
+    "3. Read the error text word for word. It usually names what really happened - including paths and values you did not expect.",
+    "4. Change one thing and try again. The same command twice teaches you nothing.",
+    "5. If two ways of doing the same thing disagree, the difference between them IS the answer.",
+    "6. Prove where you are before blaming what you see: print the folder, test the path, use a full path.",
+    "7. When it works, do the thing that failed once more, to be sure you fixed it and not something next to it.",
+    "8. Write down what it turned out to be. That is how this list grew."
+  ],
+
+  "cases": [
+    {
+      "looksLike": "Your command says 'Could not find file' for a file you can see is there.",
+      "actuallyIs": "You are not where you think you are. PowerShell cmdlets and .NET calls use DIFFERENT current folders - Set-Location moves the cmdlet one, not the .NET one.",
+      "howToTell": "Get-Content file.ps1 works but [IO.File]::ReadAllText('file.ps1') fails, and the error names a path you never asked for.",
+      "doThis": "Use the full path. The tool sets both folders now, but a full path is always safe.",
+      "lesson": "A read that fails is not proof the file is bad."
+    },
+    {
+      "looksLike": "msiexec fails straight away with exit 1639, 'invalid command line'.",
+      "actuallyIs": "The command has /i twice. The tool already builds 'msiexec /i <file>' for you, so a command that names msiexec and the file again makes a second one.",
+      "howToTell": "Look at what actually ran - you will see the installer named twice.",
+      "doThis": "Give ARGUMENTS only: TRANSFORMS=... and real properties. Not msiexec, not the file name - and not /qn or REBOOT=ReallySuppress either: the template (and the test) add those themselves.",
+      "lesson": "Say what you want added, not the whole command, when the tool builds the launch."
+    },
+    {
+      "looksLike": "A package script will not parse, and the broken line is full of backslashes: \\'Name\\' or C:\\\\Folder\\\\.",
+      "actuallyIs": "JSON escaping left inside a PowerShell command. It is correct JSON and invalid PowerShell.",
+      "howToTell": "The parse error points at a quote or an operator right next to a backslash.",
+      "doThis": "Write 'Name' and C:\\Folder. One backslash, plain quotes.",
+      "lesson": "The command is written into a file exactly as you give it. It has to be valid there, not in JSON."
+    },
+    {
+      "looksLike": "An installer returns exit code 0, but nothing was installed.",
+      "actuallyIs": "Some installers - NSIS especially - return 0 for doing nothing at all, including for a switch they did not understand.",
+      "howToTell": "The snapshot shows no new files, no ARP entry, no service.",
+      "doThis": "Trust the snapshot, not the exit code.",
+      "lesson": "Exit 0 means 'it ended', not 'it worked'."
+    },
+    {
+      "looksLike": "The same cleanup or removal appears twice in a package script.",
+      "actuallyIs": "Two things wrote the same section - usually a build order written on top of a reused predecessor script.",
+      "howToTell": "Compare the section against the predecessor's: if it is much bigger, look for the same lines written in a different style.",
+      "doThis": "Keep the predecessor's version, remove the re-typed copy. Careful: the house style DOES repeat some cleanup in Uninstall and Post-Uninstall on purpose - check the predecessor before calling it a duplicate.",
+      "lesson": "Duplicated removal changes behaviour. It is a defect, not untidiness."
+    },
+    {
+      "looksLike": "Something in a script reads like System.Collections.Specialized.OrderedDictionary.",
+      "actuallyIs": "A structured value was turned into text without taking its name out first - what you see is the TYPE name.",
+      "howToTell": "Any value starting with 'System.' is this.",
+      "doThis": "Take the field you meant (the name, the path) rather than the whole object.",
+      "lesson": "If it starts with System., nobody meant to write it."
+    },
+    {
+      "looksLike": "The delivered files in the package carry today's date.",
+      "actuallyIs": "An ordinary copy keeps a file's modified date but resets its created date, and stamps every folder it makes with today.",
+      "howToTell": "Compare created and modified dates against the order folder.",
+      "doThis": "Copy, then put the original dates back - files and folders, deepest folder first.",
+      "lesson": "A payload that looks edited makes a reviewer doubt the whole package."
+    },
+    {
+      "looksLike": "The Icons folder is empty and the order carried no icon.",
+      "actuallyIs": "Nothing is wrong with the order. The icon was sorted out when the FIRST version of this package was made and has travelled with the package since.",
+      "howToTell": "Look in the predecessor package's Icons folder.",
+      "doThis": "Take it from the predecessor.",
+      "lesson": "What the order does not carry, the previous version often does."
+    },
+    {
+      "looksLike": "The package has an empty Files folder and the build still said it succeeded.",
+      "actuallyIs": "The thing that places the payload failed, and the fallback placed nothing.",
+      "howToTell": "Read how the files were placed - it says which route it took.",
+      "doThis": "Do not ship it. A package with no installer installs nothing.",
+      "lesson": "'Built' is not the same as 'has anything in it'."
+    },
+    {
+      "looksLike": "You are sure the script is broken, but the tool says it parses.",
+      "actuallyIs": "You are remembering an earlier state. If you changed the file since you last looked, what you remember is out of date.",
+      "howToTell": "Check it again, now.",
+      "doThis": "Re-check before reporting. Especially if you are running low on steps.",
+      "lesson": "Report what is true now, not what was true three commands ago."
+    },
+    {
+      "looksLike": "The gateway rejects the key with 401, and the key is definitely right.",
+      "actuallyIs": "The client secret is missing. A missing secret shows up as a complaint about the key.",
+      "howToTell": "Check that both the key AND the secret reached the request.",
+      "doThis": "Send both headers.",
+      "lesson": "An error message names the thing it noticed, not always the thing that is wrong."
+    },
+    {
+      "looksLike": "A transform applies fine to last version's MSI, so it should be fine for this one.",
+      "actuallyIs": "A transform is built against ONE MSI build. A new build usually needs it regenerated.",
+      "howToTell": "Apply it to a throwaway copy of the new MSI - Windows Installer refuses one that does not belong.",
+      "doThis": "Regenerate it, then prove it applies.",
+      "lesson": "'It worked last time' is not evidence about this time."
+    }
+  ]
+}

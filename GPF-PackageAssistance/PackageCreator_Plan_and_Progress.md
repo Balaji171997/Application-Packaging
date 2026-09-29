@@ -3760,3 +3760,91 @@ hide + analyzer close); Format-AuthorName on both brands; Test-Build ALL PASSED 
   folder create -> sign-in -> copy again). Nothing changes when access is fine.
 Verified: window driver on GPF and PAG (all pages + populated Configure page + analyzer + review popup rendered, no
 errors, main window alive after the analyzer closes), Test-Build ALL PASSED both, PackageAssistance-Teams refreshed.
+- CREDENTIAL PROMPTS ONLY ON AN ACTION THE PACKAGER STARTED (23.09.2026, Porsche field report: "enter the package
+  name, tab to Order ID -> access denied x3, cannot reach the Order ID field"). Cause: the passive predecessor HINT
+  (Suggest-Predecessor, fired by TxtPkg LostFocus) called Get-PredecessorRoots, which offered Connect-PBShare for any
+  root it could not open - a modal prompt in the middle of typing, three attempts, focus never reached TxtRitm.
+  Fixed structurally, not just at that one spot:
+  * `Connect-PBShare -AllowPrompt` and `Invoke-PBWithShareAccess -AllowPrompt`: asking is now OPT-IN. Without the
+    switch both only report whether the path opens. Passing it is the marker of "the packager clicked something".
+    The only call sites that pass it: Fetch source (Incoming root, the request search, reading the source),
+    Find predecessor (root, candidate search, reading the chosen package) and Copy to Outgoing (root, robocopy
+    failure, denied folder create). Everything else - the hint, repaints, headless/worker runs - cannot prompt.
+  * `Get-PredecessorRoots -AllowSignIn` (default OFF): only the Find-predecessor path may sign in; every other caller
+    skips a root that does not open. `$script:PBNoSharePrompt` remains as a global kill switch.
+  * `Connect-PBShare` now probes the share FIRST and only prompts on a real ACCESS failure. `Test-PBAccessError` was
+    tightened to credentials-can-fix-this only (access denied / Zugriff verweigert / logon failure / 1219 / 0x80070005);
+    "network path not found", a missing folder or a mistyped share no longer ask - they are logged and skipped.
+  * The hint resolves its roots ONCE per session (`$script:PredQuietRoots`): a dead UNC root cost ~3 s of Test-Path on
+    every name typed. Measured after the fix: 1st name 1.3 s, every later name 18 ms, no prompt.
+  Driver check added (Smoke-GPF.ps1 phase 2): predecessor path pointed at an unreachable UNC, LostFocus fired twice -
+  asserts no share was ever asked (`$script:PBShareAsked` empty), the Order ID box stays reachable, and the second
+  name does not hit the share again. GPF + PAG: window driver clean, Test-Build ALL PASSED, team folders refreshed.
+  MTB unaffected (it has no Connect-PBShare; its Get-PredecessorRoots filters on Test-Path only).
+- BUSY CARD STEPS ASIDE FOR EVERY DIALOG (23.09.2026, field report: "when multiple sources are present and we get the
+  prompt to select which source, the loading screen still stays open and covers the window - you can drag the window
+  but it is not good"). The card is a separate STA-thread window with Topmost="True", so it floated over the installer
+  picker. Fix, in ALL THREE brands: `Suspend-PBBusy` / `Resume-PBBusy` (counted - dialogs nest) plus
+  `Invoke-PBWithoutBusy { }` for a MessageBox, which has no window object to hook. `Set-PBDialogChrome` suspends the
+  card and hooks `Add_Closed` to bring it back - and since chrome is applied immediately before every ShowDialog,
+  EVERY in-tool dialog is covered by that one place (source picker, predecessor picker, MSI properties, MST plan,
+  bundled MSI, run & capture, snippet / log / cert / text dialogs). The two MessageBoxes that can appear under the
+  card (source-differs-from-predecessor; the GPF heads-up notice) use Invoke-PBWithoutBusy. Hide-PBBusy also clears
+  the suspend counter so a dialog that dies unexpectedly can never leave the card stuck.
+- The predecessor HINT now resolves its roots once per session in MTB too (`$script:PredQuietRoots`): an unreachable
+  live-share root cost seconds of Test-Path on every name typed, in every brand.
+Verified: driver on GPF and PAG asserts the card comes up, is gone while a chromed dialog is open, returns when it
+closes and is clear after Hide-PBBusy; Test-Build ALL PASSED on GPF, PAG and MTB; all three team folders refreshed.
+- PREDECESSOR: SAY WHAT HAPPENED, AND ONE PICKER (23.09.2026, team: "make our tool smarter to say what exactly
+  happened instead of silently giving to select predecessor manually - and why a separate zip option? we can auto
+  resolve"). Replaces the old YesNoCancel MessageBox ("YES folder / NO zip / CANCEL"):
+  * `Get-PredecessorSearchReport` walks the locations the search actually used (the request's own Predecessor\, the
+    settings PredecessorPath / PredecessorPaths) and reports each one: not configured / cannot be opened (with the
+    "another domain: DOMAIN\user" hint) / open but nothing matching, listing the CLOSEST names that ARE there so a
+    spelling difference is visible. It also decides whether a sign-in could help (`CanSignIn`).
+  * `Show-PredecessorMissingDialog` shows that diagnosis with the tool's own chrome and up to three ways on:
+    "Sign in and search again" (only when a location refused us - it signs in and re-runs the search),
+    "Select the package..." and "Continue without a predecessor". The full diagnosis stays on the LblPred tooltip.
+  * `Resolve-PredecessorSelection` is ONE picker that works out what it was given: a package .zip (unpacked), a
+    package folder (Content\ / Files\ / a deployment .ps1), any file inside one (resolves to its folder), a folder
+    holding one or more package zips, or a folder of packages (the ones matching this app are offered, newest 12).
+    Brand prefixes are stripped for the identity. Anything else is refused WITH a readable reason.
+  Headless test: scratchpad `Test-PredResolve.ps1` - 15 checks, ALL PASSED.
+- REMOVED on the team's request (23.09.2026): the automatic "a previous version of this app exists" hint that ran
+  when the package name lost focus (it searched the live share while the packager was still typing - that is what
+  Find predecessor is for, and it was the source of the credential-prompt bug), and the "View predecessor install /
+  uninstall" button (the same sequence is on the predecessor label's tooltip and in the reuse report). Typing a
+  package name now touches nothing: measured 15 ms per name, no share access, no dialog.
+Verified: driver on GPF and PAG (all pages, busy card, no prompt or delay while typing), Test-Build ALL PASSED both,
+team folders refreshed. MTB keeps its hint and its View button - say the word and they go there too.
+- FULL BEHAVIOUR AUDIT OF ALL THREE BRANDS (24.09.2026, team: "check every functionality and every possible
+  scenario, not just the ones we hit - make it behave like a real enterprise tool"). Two harnesses were written and
+  both live in the session scratchpad:
+  * `Audit-Behaviour.ps1` - static (AST) over every .ps1 of MTB/GPF/PAG. Rules: busy card shown but never hidden;
+    hide not in a finally (an error leaves it up); a raw modal shown BETWEEN Show-PBBusy and its Hide (offset-aware,
+    so a dialog before the card is not flagged); IO or a dialog from a PASSIVE handler (TextChanged / LostFocus /
+    SelectionChanged); Hide-PBMainWindow with no guaranteed Show; a click handler doing slow IO with no card and no
+    button lock; an empty catch{} wrapped around a whole click handler (a failure the packager never sees).
+    20 findings -> 2 (both verified false positives: a local Test-Path when the Integration tab opens).
+  * `Sweep-Controls.ps1` - RUNTIME. Walks every step and Step-4 tab of the real window, finds every visible, enabled
+    Button / CheckBox / ComboBox and exercises each in two scenarios ("empty" = nothing entered, "named" = a valid
+    package name only), recording exceptions, whether the tool SAID anything back, and how long the click blocked
+    the UI thread. Destructive controls (install / SYSTEM / SCCM / Intune / screenshots / delete) are never clicked.
+    A separate watchdog PROCESS dismisses dialogs, because a modal blocks the tool's own UI thread - it closes only
+    windows of the tool process it launched (native #32770 and the tool's WPF dialogs), never the main window.
+  What it found and what was fixed:
+  * MTB "Copy package to Outgoing" was DEAD: its handler is a .GetNewClosure(), which cannot see script functions,
+    so every click threw "Get-PBState is not recognized". Now a plain handler. The same trap had just been
+    introduced in GPF/PAG by the Reset-PBShareAsk call - both fixed the same way.
+  * Prelive mirror guard failed OPEN in all three brands: the "is content already there?" check sat in try/catch{},
+    so if it could not read the share (no rights, no config) the tool silently MIRRORED (/MIR replaces and prunes)
+    over whatever was there. Replaced by `Confirm-PreliveMirror`, which never fails open: it says what it could not
+    check and asks. GPF/PAG additionally offer the sign-in for the content share.
+  * Three buttons did nothing at all when clicked with an empty form (Fetch source, Review, Rebuild from inputs).
+    Each now says why: name required / nothing built yet / nothing to rebuild from.
+  * Copy to Outgoing ran a multi-minute robocopy on the UI thread with no card and no button lock (GPF/PAG) - now
+    both, released in a finally. Stage-SourceLocal hides its card in a finally in all three brands.
+  * The MSI-properties dialog swallowed a failed predecessor-MST read, so the carry-forward silently did not happen;
+    it now logs and says so in the dialog.
+Verified: static audit 2 (false positive) findings, runtime sweep 0 exceptions on GPF, PAG and MTB, Test-Build ALL
+PASSED on all three, all three team folders refreshed.

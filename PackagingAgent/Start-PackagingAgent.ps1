@@ -4,37 +4,58 @@
 #   powershell -STA -ExecutionPolicy Bypass -File .\Start-PackagingAgent.ps1 [-Folder <order>] [-Tool <brand tool folder>]
 #   ... -Console [-NoModel] [-NoOpen]           -> text mode (intake only, prints the summary, opens the HTML sheet)
 #
-# The agent is standalone: it needs a Package Assistance tool folder ONLY as a library (its engine .ps1 files +
-# settings.json paths). Default: the first *PackageAssistance* folder next to this one, or -Tool.
-# Agent settings: agent.settings.json in this folder (created from settings.agent.example.json on first run).
+# STANDALONE: everything the agent needs is in THIS folder.
+#   Engine\                 the agent's OWN library (source resolver, predecessor, snapshot, knowledge base) - edit it freely
+#   engine-settings.json    the share paths the agent reads from
+#   agent.settings.json     AI endpoint, model, headers (and optionally key/secret)
+# -Tool <folder> is only for the rare case that you want to run against a live packaging tool folder instead.
 ##############################################################
 [CmdletBinding()]
 param([string]$Folder, [string]$Tool, [switch]$Console, [switch]$NoModel, [switch]$NoOpen, [int]$List = 15)
-$agentRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$agentRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 function Say($t, $c = 'Gray') { Write-Host $t -ForegroundColor $c }
 
-# ---- 1. tool folder (engine library + settings.json) -----------------------------------------------------------------
-if (-not $Tool) {
-    $parent = Split-Path -Parent $agentRoot
-    $cands = @('MTB-PackageAssistance', 'MTB_PackageAssistance', 'GPF-PackageAssistance', 'PAG-PackageAssistance') | ForEach-Object { Join-Path $parent $_ }
-    $cands += @(Get-ChildItem -LiteralPath $parent -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'PackageAssistance' } | ForEach-Object { $_.FullName })
-    $cands += @(Get-ChildItem -LiteralPath $agentRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })   # a tool copy INSIDE this folder
-    $Tool = $cands | Where-Object { Test-Path (Join-Path $_ 'Core.ps1') } | Select-Object -First 1
+# ---- 1. engine library: our own copy, unless a tool folder was named explicitly ---------------------------------------
+$engineRoot = if ($Tool) { $Tool } else { Join-Path $agentRoot 'Engine' }
+$engineFiles = 'Core.ps1', 'Predecessor.ps1', 'Source.ps1', 'Snapshot.ps1', 'BundledMsi.ps1'
+$missing = @($engineFiles | Where-Object { -not (Test-Path (Join-Path $engineRoot $_)) })
+if ($missing.Count) {
+    # Engine\ incomplete: rather than stopping, borrow a packaging tool folder if one happens to be next door.
+    $fallback = @(Get-ChildItem -LiteralPath (Split-Path -Parent $agentRoot) -Directory -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Name -match 'PackageAssistance' -and (Test-Path (Join-Path $_.FullName 'Core.ps1')) } |
+                  Select-Object -First 1 -ExpandProperty FullName)
+    if ($fallback) {
+        Write-Warning "Engine\ is incomplete (missing: $($missing -join ', ')) - using $fallback for this run. Restore the missing file(s) from the repository."
+        $engineRoot = $fallback
+    } else {
+        $msg = "The Engine folder is incomplete: $engineRoot`r`nMissing: $($missing -join ', ')`r`n`r`nRestore the missing file(s) from the repository - Engine\ is part of the agent, so they are versioned with it."
+        if ($Console) { Say $msg Red; Read-Host 'Enter to close' | Out-Null } else { Add-Type -AssemblyName PresentationFramework; [Windows.MessageBox]::Show($msg, 'Packaging Agent') | Out-Null }
+        exit 1
+    }
 }
-if (-not $Tool -or -not (Test-Path (Join-Path $Tool 'Core.ps1'))) {
-    $msg = "No Package Assistance tool folder found next to $agentRoot (the agent uses its engine files + settings.json as a library). Put a tool folder beside this one, or start with -Tool <folder>."
-    if ($Console) { Say $msg Red; Read-Host 'Enter to close' | Out-Null } else { Add-Type -AssemblyName PresentationFramework; [Windows.MessageBox]::Show($msg, 'Packaging Agent') | Out-Null }
-    exit 1
-}
-foreach ($f in 'Core.ps1','Theme.ps1','Predecessor.ps1','Build.ps1','Source.ps1','MstBuilder.ps1','BundledMsi.ps1','Snapshot.ps1','Screenshots.ps1','PSADT_V3toV4_Mappings.ps1') { if (Test-Path "$Tool\$f") { . "$Tool\$f" } }
-foreach ($f in 'Agent.Gemini.ps1','Agent.Docs.ps1','Agent.Core.ps1','Agent.App.ps1') { . "$agentRoot\$f" }
-if (Test-Path "$Tool\SharePoint.ps1") { . "$Tool\SharePoint.ps1" }   # overrides source/predecessor lookups when the tool has SharePoint on
-$script:AgentRoot = $agentRoot; $script:AgentToolRoot = $Tool
+foreach ($f in 'Core.ps1','Theme.ps1','Predecessor.ps1','Build.ps1','Source.ps1','BundledMsi.ps1','Snapshot.ps1','Screenshots.ps1','PSADT_V3toV4_Mappings.ps1') { if (Test-Path "$engineRoot\$f") { . "$engineRoot\$f" } }
+$srcRoot = Join-Path $agentRoot 'Src'
+foreach ($f in 'Agent.Tools.ps1','Agent.Gemini.ps1','Agent.Docs.ps1','Agent.Prompts.ps1','Agent.Ops.ps1','Agent.Core.ps1','Agent.Brain.ps1','Agent.Ui.ps1','Agent.Console.ps1') { . "$srcRoot\$f" }
+if (Test-Path "$engineRoot\SharePoint.ps1") { . "$engineRoot\SharePoint.ps1" }   # only present when running against a SharePoint-enabled tool folder
+# NOTE: $agentRoot and $script:AgentRoot are the SAME variable in a script - use distinct names.
+$script:AgentHome = $agentRoot        # the folder itself (settings, PsExec)
+$script:AgentSrc  = $srcRoot          # where the Agent.*.ps1 live (background runspaces load them from here)
+$script:AgentToolRoot = $engineRoot   # the engine library
 $script:AgentSettingsPath = Join-Path $agentRoot 'agent.settings.json'
-if (-not (Test-Path $script:AgentSettingsPath)) { try { Copy-Item (Join-Path $agentRoot 'settings.agent.example.json') $script:AgentSettingsPath } catch {} }
-Initialize-Config (Join-Path $Tool 'settings.json')
-Write-Log "Packaging Agent started (tool library: $Tool)"
-# SharePoint sign-in, if the tool has it enabled, must happen before any window exists (same rule as the tool itself)
+if (-not (Test-Path $script:AgentSettingsPath)) { try { Copy-Item (Join-Path $agentRoot 'agent.settings.example.json') $script:AgentSettingsPath } catch {} }
+# paths (shares, work folder): our own file; a named tool folder brings its own settings.json instead
+$pathsFile = if ($Tool -and (Test-Path (Join-Path $Tool 'settings.json'))) { Join-Path $Tool 'settings.json' } else { Join-Path $agentRoot 'engine-settings.json' }
+Initialize-Config $pathsFile
+Write-Log "Packaging Agent started (engine: $engineRoot; paths: $(Split-Path -Leaf $pathsFile))"
+# ELEVATION, said once and plainly. Two things need it: installing on this machine (the evaluation) and recording an
+# install with Process Monitor. Started from an elevated prompt, neither asks - the agent inherits the token. Started
+# normally, Windows asks for each one, which means a prompt per install attempt during a trial. Nothing breaks either
+# way; it is only a question of how many prompts the packager gets, so tell them rather than letting them discover it.
+$script:AgentElevated = $false
+try { $script:AgentElevated = (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) } catch {}
+if ($script:AgentElevated) { Write-Log 'Running elevated - installs and Process Monitor will not ask for permission.' Success }
+else { Write-Log 'NOT running elevated. Windows will ask for permission for each test install and for Process Monitor. To avoid that, start the agent from an elevated prompt.' Warning }
+# SharePoint sign-in, if a tool folder with SharePoint was used, must happen before any window exists
 if ((Get-Command Get-SPWorkerToken -ErrorAction SilentlyContinue) -and (Get-SPConfig).Enabled) { try { $null = Get-SPWorkerToken } catch { Write-Log "SharePoint sign-in failed: $($_.Exception.Message)" Warning } }
 
 # ---- 2. WINDOW mode (default) ----------------------------------------------------------------------------------------
@@ -45,13 +66,13 @@ if (-not $Console) {
         if ($Folder) { $args += @('-Folder', "`"$Folder`"") }; if ($Tool) { $args += @('-Tool', "`"$Tool`"") }
         Start-Process powershell.exe -ArgumentList ($args -join ' ') -WindowStyle Hidden; exit 0
     }
-    Show-AgentApp -Folder $Folder
+    Show-AgentConsole -Folder $Folder
     exit 0
 }
 
 # ---- 3. CONSOLE mode --------------------------------------------------------------------------------------------------
 $host.UI.RawUI.WindowTitle = 'Packaging Agent'
-Say ''; Say '  PACKAGING AGENT - order intake' Cyan; Say "  tool library: $Tool" DarkGray; Say "  model: $(Get-AgentModel)   audit: $(Get-WorkPath 'AI')" DarkGray; Say ''
+Say ''; Say '  PACKAGING AGENT - order intake' Cyan; Say "  engine: $engineRoot" DarkGray; Say "  model: $(Get-AgentModel)   audit: $(Get-WorkPath 'AI')" DarkGray; Say ''
 if (-not $Folder) {
     $repo = Get-Setting 'RepositoryPath'; $orders = @()
     if ($repo -and (Test-Path -LiteralPath $repo)) {

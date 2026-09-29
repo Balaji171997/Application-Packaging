@@ -1,0 +1,38 @@
+﻿[
+    {
+        "at":  "2026-09-28 10:23",
+        "scope":  "package:Kistler_Ceus_x86",
+        "text":  "The predecessor pre-install removes only version 8.6.6.3 by ProductCode {D270215C-E6D1-4E88-9B1D-F92456DF23D1} and VWG branding key check - this is version-pinned. Each new version needs its own predecessor-removal block added for the version it replaces. The uninstall uses ProductCode {1B7C3D6D-1E89-4C99-8C52-E27E72983A7D} for 8.6.6.9.",
+        "why":  "Ensures the correct predecessor removal block is added for each new version rather than assuming generic removal.",
+        "source":  "ai"
+    },
+    {
+        "at":  "2026-09-28 15:47",
+        "scope":  "global",
+        "text":  "check PSADT template config and module before adding Parameters or arguments whether those already exist or not",
+        "why":  "observed after testing",
+        "source":  "packager"
+    }
+]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

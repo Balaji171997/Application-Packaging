@@ -3691,3 +3691,48 @@ Surgical over rewrites; working over polished; play back bug understanding befor
 before guessing. No global version bump without boundaries; uninstall block in its own lane;
 never parse multiple ProductCodes in an uninstall body. Validate on real v3/v4. Keep maintainer
 access open; hide complexity from the team via the exe, not obfuscation.
+- BUSY CARD STEPS ASIDE FOR EVERY DIALOG (23.09.2026, field report: "when multiple sources are present and we get the
+  prompt to select which source, the loading screen still stays open and covers the window - you can drag the window
+  but it is not good"). The card is a separate STA-thread window with Topmost="True", so it floated over the installer
+  picker. Fix, in ALL THREE brands: `Suspend-PBBusy` / `Resume-PBBusy` (counted - dialogs nest) plus
+  `Invoke-PBWithoutBusy { }` for a MessageBox, which has no window object to hook. `Set-PBDialogChrome` suspends the
+  card and hooks `Add_Closed` to bring it back - and since chrome is applied immediately before every ShowDialog,
+  EVERY in-tool dialog is covered by that one place (source picker, predecessor picker, MSI properties, MST plan,
+  bundled MSI, run & capture, snippet / log / cert / text dialogs). The two MessageBoxes that can appear under the
+  card (source-differs-from-predecessor; the GPF heads-up notice) use Invoke-PBWithoutBusy. Hide-PBBusy also clears
+  the suspend counter so a dialog that dies unexpectedly can never leave the card stuck.
+- The predecessor HINT now resolves its roots once per session in MTB too (`$script:PredQuietRoots`): an unreachable
+  live-share root cost seconds of Test-Path on every name typed, in every brand.
+Verified: driver on GPF and PAG asserts the card comes up, is gone while a chromed dialog is open, returns when it
+closes and is clear after Hide-PBBusy; Test-Build ALL PASSED on GPF, PAG and MTB; all three team folders refreshed.
+- FULL BEHAVIOUR AUDIT OF ALL THREE BRANDS (24.09.2026, team: "check every functionality and every possible
+  scenario, not just the ones we hit - make it behave like a real enterprise tool"). Two harnesses were written and
+  both live in the session scratchpad:
+  * `Audit-Behaviour.ps1` - static (AST) over every .ps1 of MTB/GPF/PAG. Rules: busy card shown but never hidden;
+    hide not in a finally (an error leaves it up); a raw modal shown BETWEEN Show-PBBusy and its Hide (offset-aware,
+    so a dialog before the card is not flagged); IO or a dialog from a PASSIVE handler (TextChanged / LostFocus /
+    SelectionChanged); Hide-PBMainWindow with no guaranteed Show; a click handler doing slow IO with no card and no
+    button lock; an empty catch{} wrapped around a whole click handler (a failure the packager never sees).
+    20 findings -> 2 (both verified false positives: a local Test-Path when the Integration tab opens).
+  * `Sweep-Controls.ps1` - RUNTIME. Walks every step and Step-4 tab of the real window, finds every visible, enabled
+    Button / CheckBox / ComboBox and exercises each in two scenarios ("empty" = nothing entered, "named" = a valid
+    package name only), recording exceptions, whether the tool SAID anything back, and how long the click blocked
+    the UI thread. Destructive controls (install / SYSTEM / SCCM / Intune / screenshots / delete) are never clicked.
+    A separate watchdog PROCESS dismisses dialogs, because a modal blocks the tool's own UI thread - it closes only
+    windows of the tool process it launched (native #32770 and the tool's WPF dialogs), never the main window.
+  What it found and what was fixed:
+  * MTB "Copy package to Outgoing" was DEAD: its handler is a .GetNewClosure(), which cannot see script functions,
+    so every click threw "Get-PBState is not recognized". Now a plain handler. The same trap had just been
+    introduced in GPF/PAG by the Reset-PBShareAsk call - both fixed the same way.
+  * Prelive mirror guard failed OPEN in all three brands: the "is content already there?" check sat in try/catch{},
+    so if it could not read the share (no rights, no config) the tool silently MIRRORED (/MIR replaces and prunes)
+    over whatever was there. Replaced by `Confirm-PreliveMirror`, which never fails open: it says what it could not
+    check and asks. GPF/PAG additionally offer the sign-in for the content share.
+  * Three buttons did nothing at all when clicked with an empty form (Fetch source, Review, Rebuild from inputs).
+    Each now says why: name required / nothing built yet / nothing to rebuild from.
+  * Copy to Outgoing ran a multi-minute robocopy on the UI thread with no card and no button lock (GPF/PAG) - now
+    both, released in a finally. Stage-SourceLocal hides its card in a finally in all three brands.
+  * The MSI-properties dialog swallowed a failed predecessor-MST read, so the carry-forward silently did not happen;
+    it now logs and says so in the dialog.
+Verified: static audit 2 (false positive) findings, runtime sweep 0 exceptions on GPF, PAG and MTB, Test-Build ALL
+PASSED on all three, all three team folders refreshed.

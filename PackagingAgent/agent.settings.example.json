@@ -1,0 +1,21 @@
+{
+    "AI":  {
+               "_":  "Copy this file to agent.settings.json (git-ignored, stays on this machine) and fill in ClientId, ClientSecret and ApiKey. The gateway needs BOTH the secret and the key - either one missing is answered with 401. Model = the brain for every job; FallbackModels only when it is unavailable; MaxCostPerPackageUSD stops a runaway order.",
+               "Enabled":  true,
+               "Provider":  "openai",
+               "BaseUrl":  "https://llmapi.ai.vwgroup.com/v1",
+               "TokenUrl":  "https://idp.cloud.vwgroup.com/auth/realms/kums-mfa/protocol/openid-connect/token",
+               "ClientId":  "",
+               "ClientSecret":  "",
+               "ApiKey":  "",
+               "ApiKeyHeader":  "X-LLM-API-CLIENT-ID",
+               "ApiKeyPrefix":  "Bearer ",
+               "AuthMode":  "token+key",
+               "Model":  "gemini-2.5-pro",
+               "FallbackModels":  [
+                                      "claude-sonnet-4.6",
+                                      "gpt-5.1"
+                                  ],
+               "MaxCostPerPackageUSD":  5
+           }
+}

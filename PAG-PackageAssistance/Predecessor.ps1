@@ -511,15 +511,19 @@ function Read-PredecessorModel {
 # ALL live-share roots searched for predecessors: the primary PredecessorPath, any extra repos from settings
 # ('PredecessorPaths' array), PLUS the second live repository. De-duplicated; only existing (reachable) paths returned.
 function Get-PredecessorRoots {
+    # -AllowSignIn: only an EXPLICIT user action (Find predecessor) may offer a credential prompt for a root that
+    # cannot be opened. Without it a root that stays shut is simply skipped - the predecessor hint that runs while
+    # the packager is still typing must never pop a modal dialog (Porsche, 23.09.2026).
+    param([switch]$AllowSignIn)
     $roots = New-Object System.Collections.Generic.List[string]
     $seen = @{}
     $add = { param($p) if ("$p".Trim()) { $k = "$p".TrimEnd('\').ToLower(); if (-not $seen.ContainsKey($k)) { $seen[$k] = $true; $roots.Add("$p") } } }
     & $add (Get-Setting PredecessorPath)
     foreach ($p in @(Get-Setting 'PredecessorPaths')) { & $add $p }
     # GPF copy: settings-driven ONLY - never any hardcoded MTB share (the MTB tool's 2nd live repo was removed here).
-    # A root that cannot be opened (Porsche, 22.09.2026: the predecessor share needs OTHER credentials) is offered a
-    # sign-in through the window's Connect-PBShare when one is loaded; headless runs simply skip it as before.
-    return @($roots | Where-Object { (Test-Path $_) -or ((Get-Command Connect-PBShare -ErrorAction SilentlyContinue) -and (Connect-PBShare -Path $_ -Purpose 'the predecessor location')) })
+    # A root that cannot be opened is offered a sign-in ONLY when the caller asked for one (-AllowSignIn), i.e. the
+    # packager clicked Find predecessor. Every other caller (the typing hint, headless runs) just skips it.
+    return @($roots | Where-Object { (Test-Path $_) -or ($AllowSignIn -and (Get-Command Connect-PBShare -ErrorAction SilentlyContinue) -and (Connect-PBShare -Path $_ -Purpose 'the predecessor location' -AllowPrompt)) })
 }
 
 function Get-PredecessorCandidates {

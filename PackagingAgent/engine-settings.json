@@ -1,0 +1,17 @@
+{
+  "_comment": "Where the agent looks for things. These are the same share paths the packaging team uses; the agent only READS from them.",
+
+  "WorkRoot":        "C:\\temp\\PackagingAgent",
+  "_WorkRoot":       "reports, evaluation sheets and the audit log of every AI call land here",
+
+  "RepositoryPath":  "\\\\mndemucfsm01\\SEC-EQS-Lib-Gate\\EQS_SEC\\EQS\\Packages\\Incoming",
+  "_RepositoryPath": "incoming orders (the folder picker starts here)",
+
+  "PredecessorPath": "\\\\mbddfsovpc01.mn-man.biz\\SWDLive-Gate\\CMLib_LIVE\\Apps",
+  "_PredecessorPath":"live packages - used to find the previous version of an app",
+
+  "OutgoingPath":    "\\\\mndemucfsm01\\SEC-EQS-Lib-Gate\\EQS_SEC\\EQS\\Packages\\Outgoing",
+
+  "StageSourceLocal": true,
+  "_StageSourceLocal":"copy a network source folder locally once before reading it"
+}

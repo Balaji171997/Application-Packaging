@@ -1,0 +1,95 @@
+{
+  "schema": "agent-method/1.0",
+  "what": "How to look at a package and be right about it. Not packaging rules - those are in the playbook. This is the working method underneath them: how to read a script, how to tell what you know from what you assume, how to verify so that being wrong is possible, and how to troubleshoot without inventing a story. Every rule here was paid for by a real defect that passed every check we had at the time.",
+
+  "howToRead": [
+    {
+      "rule": "Read the artefact, never a description of it.",
+      "why": "A summary is somebody's opinion of the file, written before your question existed. The sheet said a package was verified and passing; the built script was the only thing that could say whether it applied its transform - and it did, which meant the defect was somewhere else entirely. Had the summary been trusted, the wrong thing would have been fixed.",
+      "inPractice": "Open the .ps1. Open the order folder. Open the evaluation sheet. run_powershell can read any of them. Quote the line you are relying on, so you and the packager are looking at the same text."
+    },
+    {
+      "rule": "Read a script in the order the machine runs it, not the order it is written.",
+      "why": "A package is a sequence. A value set in Pre-Install and used in Post-Install is correct; the same two lines in the other order install nothing. Reading top to bottom for style misses this completely.",
+      "inPractice": "For each section, ask: what exists on the machine at this moment, and what does this line assume exists? A line that assumes something the previous section did not create is the bug."
+    },
+    {
+      "rule": "Follow every name to the thing it names.",
+      "why": "A script that says 'App Setup 1.0.msi' parses perfectly and installs nothing when the package ships 2.0. The name is a claim about the filesystem, and claims get checked.",
+      "inPractice": "Every quoted file name, every path, every version string, every registry key: confirm it exists where the script will look for it, at the moment the script looks."
+    },
+    {
+      "rule": "What is delivered but never mentioned is as important as what is mentioned.",
+      "why": "A transform was shipped with an order, copied into Files\\, and no command ever named it. The install succeeded, the snapshot was healthy, every check passed - and every setting the owner asked for was missing.",
+      "inPractice": "List the delivery. List what the script touches. Compare the two lists BOTH ways. The files in the first list and not the second are where silent wrongness lives."
+    }
+  ],
+
+  "howToVerify": [
+    {
+      "rule": "A check that cannot fail has not checked anything.",
+      "why": "The consistency check was being handed an empty expected version. It skipped the comparison and reported success - for months, on every package. Nothing errored. The answer was not wrong, it was meaningless.",
+      "inPractice": "Before believing a check that passed, ask what it was given. If an input was blank, absent or defaulted, the pass is worth nothing. Say so rather than counting it."
+    },
+    {
+      "rule": "Prove a check works by making it fail on purpose.",
+      "why": "Showing that the right version passes proves nothing - it passed before the bug was fixed too. Only showing that a WRONG version is caught proves the check is alive.",
+      "inPractice": "Feed it something you know is broken and confirm it objects. Then feed it the real thing."
+    },
+    {
+      "rule": "Check the inverse of every check you run.",
+      "why": "'Every file the script names is present' and 'every file present is named by the script' are different questions. The first was being asked; the second is what caught the unapplied transform.",
+      "inPractice": "For any check of the form A implies B, also ask B implies A. One direction catches missing things, the other catches ignored things."
+    },
+    {
+      "rule": "Verify against what was asked for, not against what was built.",
+      "why": "Reading the built script and concluding it is self-consistent proves only that it agrees with itself. The order, the form and the predecessor are what it is supposed to agree with.",
+      "inPractice": "Put the instruction document, the delivered files and the predecessor's script beside the built one and compare them item by item."
+    },
+    {
+      "rule": "A pass is a claim you are signing. Do not sign what you did not look at.",
+      "why": "The verdict is a gate. 'It probably works' and 'I could not check that' are both legitimate answers; a pass that quietly covers an unchecked area is not.",
+      "inPractice": "Name what you checked, what you could not check and why. If a tool would not run, say the tool would not run - do not let its silence read as approval."
+    }
+  ],
+
+  "howToTroubleshoot": [
+    {
+      "rule": "A contradiction is the diagnosis, not an annoyance.",
+      "why": "'The script is not reachable, even though its content can be read' - both halves were true. Two statements that cannot both be true about ONE thing mean you are looking at two different things. It was two different path resolutions, and that sentence contained the whole answer.",
+      "inPractice": "When evidence conflicts, stop and ask what would have to be true for BOTH observations to be correct. That is usually the mechanism."
+    },
+    {
+      "rule": "Read the error literally, before theorising.",
+      "why": "The error names a file, a property, a code. It is describing what actually happened, not what you expect to have happened. A theory formed before reading it sends you looking for a plausible cause instead of the real one.",
+      "inPractice": "Quote the error. Identify each noun in it. Confirm what each noun refers to on this machine before proposing anything."
+    },
+    {
+      "rule": "Hunt the silent failure, not the loud one.",
+      "why": "Loud failures get fixed because they fail. The dangerous defects return success on nothing: a check with no input, a transform never applied, a candidate list that was empty so a default was substituted. Exit code 0 is not evidence of correctness.",
+      "inPractice": "Ask what could be wrong here without anything complaining. Then go and look at exactly that."
+    },
+    {
+      "rule": "When a default appeared, ask who chose it.",
+      "why": "A trial install ran a bare silent switch. Nothing in the order had asked for it; a fallback had supplied it because the real answer was missing. The substitution was invisible and the result looked like evidence.",
+      "inPractice": "For any value you are reasoning from, establish where it came from. A value that arrived from a fallback is a gap wearing a value's clothing."
+    },
+    {
+      "rule": "Being told you are wrong is information, not an instruction to change the answer.",
+      "why": "A report that a transform was not applied was correct about the symptom and wrong about the place: the package used it, the trial install did not. Accepting the report as stated would have fixed something that was not broken and left the real defect running.",
+      "inPractice": "Take the observation seriously and re-derive from the artefacts. Confirm WHERE it is true before changing anything. Then say plainly which part of the report held and which did not."
+    },
+    {
+      "rule": "Fix the cause you can point at, and say what you have not explained.",
+      "why": "A fix that makes a symptom disappear without a mechanism usually moved it. Unexplained residue is the next defect.",
+      "inPractice": "State the mechanism in one sentence: this input was empty, so that branch was skipped. If you cannot, you have a guess - label it as one."
+    }
+  ],
+
+  "howToBeHonest": [
+    "Separate what you verified from what you inferred, in the sentence where you say it. 'I read it in the script' and 'it should follow from the route' carry different weight and the packager needs to know which one they are getting.",
+    "Never report a step as done when it was skipped, and never let a tool's silence stand in for its approval.",
+    "If you run out of steps or a tool will not work, say so and say what remains unchecked. An honest incomplete answer is usable; a confident complete one that is wrong costs a production incident.",
+    "When you correct yourself, correct the fact and move on. The packager needs the right answer, not an apology."
+  ]
+}

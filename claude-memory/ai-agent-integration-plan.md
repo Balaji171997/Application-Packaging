@@ -1,22 +1,28 @@
 ---
 name: ai-agent-integration-plan
-description: Sept 2026 Packaging Agent (Gemini) — STANDALONE app in repo\PackagingAgent (own window + Run-PackagingAgent.cmd executor); MUST NOT be integrated into Package Assistance (user rule); tool folders are used only as a library; VDI = test machine; key per session; demo Monday 21 Sep
-metadata: 
+description: "Packaging Agent = STANDALONE app in repo\\PackagingAgent (Src/Engine/Knowledge/Template/Tests/Tools/Docs + Run-PackagingAgent.cmd); never integrated into Package Assistance; flow intake→plan→prepare→evaluate→build→verify→handover; our template only; key/secret per session, never written anywhere"
+metadata:
   node_type: memory
   type: project
   originSessionId: a96ed47a-37eb-4079-887f-9966cf709555
-  modified: 2026-09-21T06:12:11.500Z
+  modified: 2026-09-28T12:42:56.731Z
 ---
 
-User asked (19 Sep 2026) for an AI agent (Gemini "Lite" API key) for the packaging process; goal = max ROI, less manual work, human verification at gates. Plan file: `Application-Packaging\AgentPlan\Package-Assistance-AI-Agent-Plan.md` (process-wide v2).
+Standing rules for the Packaging Agent (Sept 2026, still binding):
 
-**BINDING USER RULES (20 Sep):** (1) the agent is a SEPARATE product in `Application-Packaging\PackagingAgent\` — "keep agent in separate folder, don't mix things up"; I first wired an Assistant button into MTB-PackageAssistance and the user objected ("why I told you to create separately") → ALL MTB changes were reverted (GUI.ps1/Core.ps1/Pack-Engine/Build-Exe/settings.json/README/HANDOFF, pak repacked, team copy refreshed). Never put agent code or buttons into the tool folders again. (2) Portable: the user may copy the folder to other environments → it must work with any `*PackageAssistance*` folder beside it (`-Tool` override). (3) No key given to me; the user types it when testing, not stored. (4) No test VM — the Citrix VDI is the evaluation machine (tool's Snapshot engine, Admin/SYSTEM). (5) Mail draft not needed now.
+- **Separate product** in `Application-Packaging\PackagingAgent\`, one self-contained folder (copy it anywhere and it
+  runs). NEVER put agent code or buttons into any Package Assistance folder — an early attempt was reverted at the
+  user's demand. `Engine\` is the agent's own library now (no sync).
+- **Our template only; the tool builds, the AI judges.** The package is built by the hands from the team's PSADT
+  template (`Template\`), from the predecessor's script on a reuse; the AI's changes go in as exact edits, never a
+  rewrite of the template.
+- **Secrets**: the API key and client secret live only in the git-ignored `agent.settings.json` (the user enters
+  them) or the session; never print, copy or write them anywhere else.
+- **Machine**: the Citrix VDI / the user's workstation is the evaluation machine; network shares and the
+  predecessor package are read-only to the AI, local disk is its workshop; the AI is told to be careful with the
+  system rather than being fenced off from it.
+- **Testing**: the user runs live tests; do not run live models for installs/troubleshooting unless asked.
+- Folder holds only what the agent needs (user, 28 Sep 2026) — the Demo folder was removed.
 
-**What exists (all tests pass, smoke-tested window):** `Run-PackagingAgent.cmd` / `Start-PackagingAgent.ps1` (executor: finds tool library, loads engines as library, opens WPF window or `-Console`), `Agent.App.ps1` (window: intake in background runspace → evaluation state machine baseline→install→analyze→classify → Show changes (html) → Export = evaluation sheet + `agent-handover.json` + `WorkRoot\Reports\<pkg>.snapshot.json` loadable by Package Assistance "Analyze installer > Load report..."), `Agent.Gemini.ps1` (REST, function calling, images/PDF, audit, cost; state var `$script:PkgAgent`), `Agent.Docs.ps1` (docx/xlsx OOXML readers; `w:sdt`-wrapped cells; captions = before|after lines), `Agent.Core.ps1` (sheet, scrub, facts, rule gaps, 3 model tasks, install runner), `agent.settings.json` (own AI config; never the key), `Test-Agent.ps1`, `Invoke-PackagingAgent.ps1`.
-- Stand-in test done: I answered the REAL Gemini requests as the model (file transport, viewed the 9 screenshots) → extraction + assessment ran end to end on the IrfanView order (2 calls ≈ $0.014). Real key not used yet (Monday). Evaluation/install step not run (session not elevated).
-
-**Key/endpoint (21 Sep):** user's key is `sk-…` = OpenAI-compatible GATEWAY key (VW-brand licensed, model `gemini-2.5-flash-lite`), NOT a Google `AIza…` key → the 400 "API key not valid" came from sending it to Google. Agent now has provider `openai` (BaseUrl + Bearer, OpenAI chat/tool-calls shape converted from the Gemini-shaped internals; verified over HTTP against a local mock gateway incl. function calling). URL/model/key are RUNTIME inputs (key dialog + console prompts, `Set-AgentEndpoint`), stored only on "remember". `Test-AgentEndpoint.ps1` = verifier (dns → proxy → service → key → model → function calling). MAN VDI proxy seen: `in-pr-muc.mn-man.biz:8000` (503 via proxy = host not allowed). User's "url" is the VW Group Keycloak TOKEN endpoint (realm kums-mfa, openid-connect/token) + they hold a client id/secret → gateway sits behind an IdP. Agent now does OAuth client-credentials (`Set-AgentAuth`, secret memory-only, token cached) and the verifier auto-probes auth modes (token+key x-api-key / api-key / token / key), verified against a mock IdP-protected gateway. NEVER write the user's key/URLs/secret into files or memory (user asked to keep them in chat only). STILL NEEDED from user: the AI API base URL (the …/v1 chat endpoint — different from the token URL).
-
-**Traps found:** `$Args` param binds empty → `$Arguments`; handlers inside a function can't see `$script:` vars (functions can) → use functions/`$ctx`; a driver `param([string]$Agent)` clobbered `$script:Agent` → renamed `$script:PkgAgent`; `@($null).Count`=1 → `Get-AgentList`; List[object] `@()` wrap throws → `.ToArray()`; Write tool drops BOM and decodes `\uXXXX` → re-save with BOM; smoke drivers: click via `Dispatcher.BeginInvoke`, never `$script:Step`.
-
-**How to apply:** continue in `PackagingAgent\` only; read its README. Related: [[pb-agent-story]], [[eqs-evaluation-corpus]], [[ps-wpf-closure-scope]].
+Current design and history: [[packaging-agent-process-record]] (read first) and [[packaging-agent-architecture]];
+connection details in [[vw-llmaas-connection]].

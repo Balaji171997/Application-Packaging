@@ -1,88 +1,141 @@
 # Packaging Agent
 
-A **standalone** AI agent for software packaging: reads an order (AO form incl. wizard screenshots, installers,
-predecessor, knowledge base), says what is missing, evaluates the install on this machine (snapshot), proposes the
-packaging method - and hands the result over as files. Gemini API, PowerShell 5.1 only; no Python, no modules.
+An AI packaging engineer for the team's PSADT v4 packages. The **AI is the brain**: it reads the order, finds the
+previous version, chooses the route, says exactly what to install and what the test must prove, judges what the
+machine showed, and checks and finishes the built package. **This agent is its hands and its training**: it
+gathers everything the AI needs, runs what the AI decides on this workstation, measures, builds from the team's
+template — and carries the knowledge that makes a model behave like a packager with fifteen years here.
 
-It does **not** change Package Assistance. It only *loads* a Package Assistance folder as a library (its engine `.ps1`
-files for source/predecessor/snapshot/knowledge base + its `settings.json` for the share paths).
+The closest thing in our own world is SCCM: Software Center fetches, runs and reports and decides nothing; the
+site server decides. When a design question comes up, ask: *is this the hands or the brain?*
 
-## Run
+**Standalone.** Everything it needs is in this folder; it never touches Package Assistance and is never integrated
+into it. PowerShell 5.1 only — no Python, no modules to install.
 
-| How | What |
-|---|---|
-| **`Run-PackagingAgent.cmd`** (double-click) | opens the agent window |
-| drop an order folder onto `Run-PackagingAgent.cmd` | opens the window with that order |
-| `Run-PackagingAgent.cmd /console` | text mode: pick an order, enter the key, get the summary + HTML sheet |
-| `powershell -STA -ExecutionPolicy Bypass -File .\Start-PackagingAgent.ps1 [-Folder <order>] [-Tool <tool folder>] [-Console] [-NoModel]` | same, scripted |
-| `Invoke-PackagingAgent.ps1 -Folder <order> -Open` / `-Newest 5` | batch intake (CLI) |
-| `Test-Agent.ps1` | offline tests (fake model) - run after any change |
+---
 
-In the window: **Run intake** → missing items / questions or READY → **Start evaluation** (baseline snapshot → the
-proposed silent install on THIS machine → after snapshot → the agent's keep/remove/disable verdicts) → **Show changes**
-→ **Export for Package Assistance**.
+## The flow
 
-## Files
+```
+intake → plan → prepare → evaluate → build → verify → handover
+ hands    AI     hands     hands+AI   hands    AI       hands
+```
 
-| File | Role |
-|---|---|
-| `Start-PackagingAgent.ps1` / `Run-PackagingAgent.cmd` | executor: finds the tool library, loads everything, opens the window (or console mode) |
-| `Agent.App.ps1` | the window (WPF): intake, evaluation state machine, export |
-| `Agent.Gemini.ps1` | Gemini REST client: function calling, images/PDF parts, retries + model fallback, key handling, audit log, cost meter, offline transport double |
-| `Agent.Docs.ps1` | readers for the order documents: `.docx` (tables, ☐/☒, screenshots + captions), `.xlsx`, order-folder classifier |
-| `Agent.Core.ps1` | the agent: evaluation sheet, PII scrubber, facts + rule gaps, model tasks (form extraction → assessment → snapshot decision), install runner, reports |
-| `Invoke-PackagingAgent.ps1` | headless intake |
-| `agent.settings.json` (created from `settings.agent.example.json`) | model, cost cap, screenshots on/off, proxy - **never the key** |
-
-## Where the tool library comes from
-
-`Start-PackagingAgent.ps1` looks for a folder with `Core.ps1` **next to this folder** (`MTB-PackageAssistance`,
-`MTB_PackageAssistance`, `GPF-…`, `PAG-…`, any `*PackageAssistance*`) or **inside** this folder, or takes `-Tool`.
-So to move the agent to another environment, copy this folder plus one tool folder beside it.
-
-## What comes out (`Export for Package Assistance`)
-
-Under `WorkRoot\AI\<package>\` (WorkRoot from the tool's settings, default `C:\temp\PackageAssistance`):
-- `evaluation-sheet.html` / `.json` - Declared / Observed / Decided, questions for the AO, ranked install candidates, verdicts
-- `agent-handover.json` - install args, uninstall command, product code, detection, per-user mode, cleanup commands, notes
-- `NNN-<task>.json` - every model request/response (audit; image bytes replaced by their size)
-
-And `WorkRoot\Reports\<package>.snapshot.json` - the same file Package Assistance's own analyzer writes, so the
-packager loads it there with **Analyze installer → Load report…** and applies it as usual.
-
-## Which key / endpoint (two providers)
-
-| Your key looks like | Provider | Endpoint URL to enter |
+| Stage | Who | What happens |
 |---|---|---|
-| `AIza…` (39 chars) | Google Gemini API directly | leave empty |
-| `sk-…` | an **OpenAI-compatible gateway** (company AI platform, e.g. VW/MAN gateway serving `gemini-2.5-flash-lite`) | the base URL that came with the key, e.g. `https://gateway.company.com/v1` |
+| **intake** | hands | Copy the order locally (file dates kept), fingerprint every installer, read the form's tick boxes, look for the previous version by name, look it up in the catalogue. No judgement. |
+| **plan** | AI | One job on the **dossier**: settle the predecessor, choose the route, the exact install lines with their sources, what the test must prove, what must come off this machine first, and the package itself (changes to the reused script, or extra steps for a fresh one). Questions for the owner. |
+| **prepare** | hands | Hand the packager what only a person can do (record a response file, supply a licence) — exactly as the plan asked. |
+| **evaluate** | hands, then AI — **your go-ahead first** | Remove what the plan said, baseline snapshot, run the plan's lines one at a time (optionally the previous version first), snapshot again. The AI judges what the installer really did. |
+| **build** | hands | From the predecessor's script (the plan's changes applied as written) or fresh from the template (the plan's steps under the markers). Delivered files placed with their folder tree. |
+| **verify** | AI | Reads the built script against the order, the source, the test and the predecessor; fixes it in place with `edit_script`; runs `check_package`. **Only a pass signs it off.** |
+| **handover** | hands | Evaluation sheet, `agent-handover.json`, the snapshot report Package Assistance loads — and the order is added to the case library. |
 
-A `sk-…` key sent to Google gives `400 API key not valid` - that is the wrong endpoint, not a wrong key.
+When a stage fails, the AI looks first (whose fault, what next); a person is asked only when it says so. When
+the packager types in the chat box, the AI answers — while a stage runs, on its next round.
 
-**Gateway behind an identity provider** (you also got a *client id + client secret* and a URL ending in
-`…/protocol/openid-connect/token` or `…/oauth2/token`): that URL is the **token endpoint**, not the AI API. Enter it
-as *Token URL* with the client id/secret; the agent fetches an access token (client credentials, cached) and sends
-`Authorization: Bearer <token>` plus the `sk-` key in an extra header. Which header the gateway wants differs, so the
-verifier / *Test* button tries `x-api-key`, `api-key`, token-only and key-only in turn and keeps the one that answers
-(`AuthMode` / `ApiKeyHeader`). The client secret is never written anywhere.
-URL, model and key are typed at runtime (key dialog in the window, or the prompts in console mode); nothing is stored
-unless you tick "remember" (URL + model → `agent.settings.json`, key → Credential Manager).
+## How the AI works, cheaply
 
-**Verify from your machine first:** `powershell -ExecutionPolicy Bypass -File .\Test-AgentEndpoint.ps1` - asks URL, model
-and key (hidden) and reports each step: name resolution → proxy → service reached → key accepted → model answers →
-**function calling works** (the agent needs tool calls). A wrong-network case shows as DNS/503 via the proxy ("host not
-allowed from this network"), a licence/tenant problem as 401/403 ("key rejected"), a wrong model name as 400/404 plus the
-model names the gateway lists.
+- **The dossier** — everything true for the whole order, sent once as the first message: the documents **in full**
+  with their screenshots, every delivered file, the previous package opened with its whole script, what is installed
+  on this machine, the template's toolkit, what the team knows about these installers, and the closest past cases.
+  The screenshots are dropped once the plan has been made from them.
+- **Jobs, then folds** — each job (plan, judge the test, verify, …) works with its hands until it submits one
+  result; then its working turns are folded into two short lines: what was asked, what was decided. Every later
+  request is about the size of the dossier, not the size of everything ever said. The stable prefix (handbook +
+  dossier) is what a caching gateway serves cheaply.
+- **Checked once** — the hands check what they can see for certain (is the named installer really delivered, is a
+  delivered transform applied, does a *pass* survive the mechanical checks) and send the answer back **once**.
+  That is what keeps a cheaper model from shipping a careless answer.
+- **Hands, not scaffolding** — `run_powershell`, `read_document`, `open_package`, `search_previous_packages`,
+  `read_knowledge`, `take_screenshot`, `remember_this`, and on a built package `edit_script` / `check_package`.
 
-## Key and data
+Model: `gemini-2.5-pro` for every job (fallbacks `claude-sonnet-4.6`, `gpt-5.1`, used only when it is unavailable).
+`agent.settings.json` holds only the connection (URL, token URL, client id, client secret, API key, headers), the
+model, the fallbacks and `MaxCostPerPackageUSD`, which stops any order that runs away. Prices for that cap live in
+the code.
 
-Key lookup: typed in the window (session only) → `GEMINI_API_KEY` → Credential Manager `PackagingAgent-Gemini` (only
-if "remember" was ticked). What leaves the machine: scrubbed form text (names/phones/e-mails removed), the wizard
-screenshots (optional), installer metadata, snapshot summaries. Never installer binaries.
+**The test install is patient and honest**: an installer is started the way deployment starts it (no shell, no
+security prompt; an MSI with the template's own parameters), watched while it works, and when a window sits still the
+AI is shown the screen and says what it is. What the install opens afterwards is judged and closed, the uninstall is
+tested the same way, and the judgement is checked against what the machine really showed.
+
+## It keeps learning
+
+`Knowledge\` is the training (see `Knowledge\README.md`): how to work, the installer playbook, switches measured
+across 238 shipped MAN packages, diagnosed problems, what the packagers have said, research notes — and
+**`Cases.json`, written automatically at every handover**. The next order of the same vendor, application or
+technology starts from those worked examples, and from the ~900-package catalogue in `Engine\`.
+
+---
+
+## Folder layout
+
+```
+PackagingAgent\
+├─ Run-PackagingAgent.cmd        double-click to start (or drop an order folder onto it)
+├─ Start-PackagingAgent.ps1      the launcher: loads everything, opens the window
+├─ Invoke-PackagingAgent.ps1     headless: -Folder <order> [-Stage <id>] [-Flow] / -Newest N
+├─ agent.settings.json           endpoint, model, key + secret — GIT-IGNORED, never shared
+├─ agent.settings.example.json   the same without secrets
+├─ engine-settings.json          share paths (Incoming, live packages, work folder)
+│
+├─ Src\                          the agent
+│   ├─ Agent.Brain.ps1           the dossier, the job runner + fold, the hands, the schemas, every AI job
+│   ├─ Agent.Prompts.ps1         the handbook (system prompt) and the job briefs
+│   ├─ Agent.Core.ps1            the sheet, the flow, intake, build, the install runner, the report
+│   ├─ Agent.Tools.ps1           7-Zip, MSI library, autorunsc, Procmon, memory, case library, catalogue
+│   ├─ Agent.Ops.ps1             run_powershell: guarded execution, activity log, transcript
+│   ├─ Agent.Gemini.ps1          the gateway: token, request, retries, audit, cost (incl. cached tokens)
+│   ├─ Agent.Docs.ps1            .docx / .xlsx / legacy .doc readers
+│   ├─ Agent.Console.ps1         the window: the flow, the channel, the feed, the chat box, the watcher
+│   └─ Agent.Ui.ps1              WPF helpers, key dialog, runspaces, the handover export
+├─ Knowledge\                    the training — see Knowledge\README.md
+├─ Engine\                       the agent's own library (resolver, predecessor, snapshot, builders, catalogue)
+├─ Template\                     the team's PSADT template — fixed, never rewritten
+├─ Tools\                        7-Zip, WiX MSI library, Sysinternals (git-ignored), endpoint check, priors builder
+├─ Tests\                        offline suite (scripted model, no network) + gateway tests
+└─ Docs\                         How-it-works.md (the design) · Process-record.md (decisions and lessons)
+```
+
+## Run it
+
+| How | What happens |
+|---|---|
+| `Run-PackagingAgent.cmd` | the agent window opens |
+| drop an order folder onto the .cmd | the window opens with that order |
+| `Invoke-PackagingAgent.ps1 -Folder <order>` | runs intake, plan, prepare, then prints the flow |
+| `Invoke-PackagingAgent.ps1 -Folder <order> -Flow` | where this order stands; calls nothing |
+| `Invoke-PackagingAgent.ps1 -Folder <order> -Stage verify -BuiltScript <path>` | one named stage |
+| `Tests\Test-Agent.ps1` | offline tests — run after every change |
+
+## Connection (VW LLMaaS)
+
+```
+BaseUrl      https://llmapi.ai.vwgroup.com/v1
+AuthMode     token+key
+ApiKeyHeader X-LLM-API-CLIENT-ID     ApiKeyPrefix "Bearer "
+```
+
+Both credentials travel, in two headers: `Authorization: Bearer <access token>` and
+`X-LLM-API-CLIENT-ID: Bearer <API key>`. The client secret is as necessary as the key — a missing secret shows up
+as a misleading 401. Key and secret come from the window (this session), `agent.settings.json`, `GEMINI_API_KEY`,
+or Credential Manager. Stages run in background runspaces that re-load the agent, so any new credential setting
+must also travel in `Start-AgentRunspace`'s payload.
+
+## What leaves the machine
+
+| Sent to the AI | Never sent |
+|---|---|
+| Document text (names, phones, e-mails scrubbed) and their screenshots | installers or any binaries |
+| installer metadata, snapshot summaries, script text, command output | passwords, credentials |
+
+Every request and response is audited under `WorkRoot\AI\<package>\`.
 
 ## Rules when editing
 
-- Save every `.ps1` as **UTF-8 with BOM** (☐/☒ in the sources; PowerShell 5.1 reads BOM-less UTF-8 as ANSI).
-- Never name a parameter `$Args`; keep the state variable `$script:PkgAgent`; inside WPF handlers use functions and
-  the shared `$ctx` (a `$script:` variable does not resolve there).
-- Run `Test-Agent.ps1` after any change.
+- Save every `.ps1` as **UTF-8 with BOM**.
+- The AI decides; the hands never choose a command, never tidy one the AI wrote, never rewrite the template.
+- Protected, always: the network shares and the predecessor package are read-only; the built deploy script is
+  edited in place, never replaced. Local disk is the AI's workshop.
+- Run `Tests\Test-Agent.ps1` after every change.

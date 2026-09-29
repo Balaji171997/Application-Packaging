@@ -1,0 +1,396 @@
+﻿{
+    "generated":  "2026-09-25T20:20:09",
+    "source":  "\\\\mndemucfsm01\\SEC-EQS-Lib-Gate\\EQS_SEC\\EQS\\Packages\\Outgoing",
+    "packagesScanned":  238,
+    "installLaunches":  674,
+    "families":  [
+                     {
+                         "family":  "vendor-specific",
+                         "seen":  251,
+                         "share":  37,
+                         "arguments":  [
+                                           {
+                                               "args":  "/configure `",
+                                               "seen":  56,
+                                               "examplePackage":  "Corrected_Officeapp"
+                                           },
+                                           {
+                                               "args":  "/logpath `",
+                                               "seen":  20,
+                                               "examplePackage":  "Citrix_VirtualDeliveryAgentCorePDIStep1_x64_2507.0.1100.167-0001_ZXX"
+                                           },
+                                           {
+                                               "args":  "/U `",
+                                               "seen":  10,
+                                               "examplePackage":  "EuroPlus_NiceLabel 2017_x64_17.3.0.2332-0003_MUL"
+                                           },
+                                           {
+                                               "args":  "change --prod_key 899S1 --prod_ver 2027.0.0.F --lic_method `",
+                                               "seen":  8,
+                                               "examplePackage":  "Autodesk_MoldflowInsight_x64_50.0.38-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "change --prod_key 575S1 --prod_ver 2027.0.0.F --lic_method `",
+                                               "seen":  8,
+                                               "examplePackage":  "Autodesk_MoldflowInsight_x64_50.0.38-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "change --prod_key 573S1 --prod_ver 2027.0.0.F --lic_method `",
+                                               "seen":  8,
+                                               "examplePackage":  "Autodesk_MoldflowInsight_x64_50.0.38-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "change --prod_key 206S1 --prod_ver 2027.0.0.F --lic_method `",
+                                               "seen":  8,
+                                               "examplePackage":  "Autodesk_AutoCADMechanical_x64_31.0.52.0-0001_de-DE"
+                                           },
+                                           {
+                                               "args":  "change --prod_key 579S1 --prod_ver 2027.0.0.F --lic_method `",
+                                               "seen":  8,
+                                               "examplePackage":  "Autodesk_MoldflowInsight_x64_50.0.38-0001_MUL"
+                                           }
+                                       ]
+                     },
+                     {
+                         "family":  "NSIS",
+                         "seen":  104,
+                         "share":  15,
+                         "arguments":  [
+                                           {
+                                               "args":  "/S",
+                                               "seen":  76,
+                                               "examplePackage":  "AUDI_CPTool_x86_3.2.23.6-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "/allusers /S",
+                                               "seen":  4,
+                                               "examplePackage":  "Grandstream_Wave_x64_1.31.6-0001_en-US"
+                                           },
+                                           {
+                                               "args":  "/s /u all keyman",
+                                               "seen":  3,
+                                               "examplePackage":  "Vector_VectorDriverSetup_x64_26.20.14-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "REMOVE=TRUE MODIFY=FALSE /S",
+                                               "seen":  3,
+                                               "examplePackage":  "Zebra_PrinterSetupUtilities_x86_1.1.9.1327-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "/s REMOVE=TRUE MODIFY=FALSE",
+                                               "seen":  2,
+                                               "examplePackage":  "Datacolor_ColibriClassic_x86_25.2.0.16812-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "/S /L1033 /v`",
+                                               "seen":  2,
+                                               "examplePackage":  "Vector_vCDM_x64_24.1.18-0001_en-US"
+                                           },
+                                           {
+                                               "args":  "/NCRC /S /desktopicon=no /quicklaunchicon=no",
+                                               "seen":  2,
+                                               "examplePackage":  "Wireshark_Wireshark_x64_4.6.5-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "/s /uo /i all keyman /ncmr /installCert",
+                                               "seen":  2,
+                                               "examplePackage":  "Vector_VectorDriverSetup_x64_26.20.14-0001_MUL"
+                                           }
+                                       ]
+                     },
+                     {
+                         "family":  "Burn-WiX-or-Microsoft",
+                         "seen":  78,
+                         "share":  12,
+                         "arguments":  [
+                                           {
+                                               "args":  "/q /norestart /log `",
+                                               "seen":  24,
+                                               "examplePackage":  "Autodesk_AutoCADMechanical_x64_31.0.52.0-0001_de-DE"
+                                           },
+                                           {
+                                               "args":  "/install /quiet /norestart",
+                                               "seen":  15,
+                                               "examplePackage":  "AdeQuateSolutions_TopSolid_x64_7.19-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "/quiet /norestart",
+                                               "seen":  6,
+                                               "examplePackage":  "Citrix_VirtualDeliveryAgentStep1_x64_2507.0.1100.167-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "/quiet /norestart /log `",
+                                               "seen":  6,
+                                               "examplePackage":  "ICA_ICASecureStore_x64_8.0.1-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "/uninstall /quiet",
+                                               "seen":  4,
+                                               "examplePackage":  "001 AVLList_EngineersOfficePUMAOpen2_x64_6.6.2642.2-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "/install /quiet /norestart /log `",
+                                               "seen":  4,
+                                               "examplePackage":  "Extron_ConferenceShare_x64_1.1.0.1313-0001_en-US"
+                                           },
+                                           {
+                                               "args":  "/uninstall /quiet /norestart",
+                                               "seen":  4,
+                                               "examplePackage":  "CarlZeiss_PiWebEnterprise_x64_26.1.13-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "/q /norestart",
+                                               "seen":  3,
+                                               "examplePackage":  "IPETRONIK_IPEmotion_x64_15.02.02-0001_MUL"
+                                           }
+                                       ]
+                     },
+                     {
+                         "family":  "unix-style-single-dash",
+                         "seen":  70,
+                         "share":  10,
+                         "arguments":  [
+                                           {
+                                               "args":  "-i uninstall -q --trigger_point system -m `",
+                                               "seen":  24,
+                                               "examplePackage":  "Autodesk_AutoCADMechanical_x64_31.0.52.0-0001_de-DE"
+                                           },
+                                           {
+                                               "args":  "-q",
+                                               "seen":  14,
+                                               "examplePackage":  "Autodesk_AutoCADMechanical_x64_31.0.52.0-0001_de-DE"
+                                           },
+                                           {
+                                               "args":  "-i silent",
+                                               "seen":  8,
+                                               "examplePackage":  "HBM_nCodeGlyphworks_x64_26.0.0.0-0001_en-US"
+                                           },
+                                           {
+                                               "args":  "-i silent -f `",
+                                               "seen":  7,
+                                               "examplePackage":  "Altair_HyperWorks_x64_2026.1-0001_en-US"
+                                           },
+                                           {
+                                               "args":  "REMOVE=TRUE MODIFY=FALSE -s",
+                                               "seen":  5,
+                                               "examplePackage":  "dSPACE_RCPandHIL_x64_24.1.4-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "-i silent -DINSTALLMETHOD=Custom -DPRODUCTEXCELLENCEPROGRAM=decline -DINSTALLDIR=`",
+                                               "seen":  4,
+                                               "examplePackage":  "Siemens_AutomationLicenseManager_x64_06.02.0400-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "-q -varfile `",
+                                               "seen":  2,
+                                               "examplePackage":  "BRAK_beAClientSecurity_x64_4.4.4.604-0001_de-DE"
+                                           },
+                                           {
+                                               "args":  "-i silent -p `",
+                                               "seen":  1,
+                                               "examplePackage":  "sie"
+                                           }
+                                       ]
+                     },
+                     {
+                         "family":  "unix-style-double-dash",
+                         "seen":  68,
+                         "share":  10,
+                         "arguments":  [
+                                           {
+                                               "args":  "--install --ignorependingreboot --noreboot --nogui",
+                                               "seen":  40,
+                                               "examplePackage":  "dSPACE_RCPandHIL_x64_24.1.4-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "--prevent-reboot --accept-eulas --quiet --passive",
+                                               "seen":  8,
+                                               "examplePackage":  "NationalInstruments_PAtools_x86_8.4.26041.0-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "--install --ignorependingreboot --noreboot --nogui --verbose",
+                                               "seen":  6,
+                                               "examplePackage":  "dSPACE_SYNECT_x64_24.1.4-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "--install --load `",
+                                               "seen":  6,
+                                               "examplePackage":  "dSPACE_RCPandHIL_x64_24.1.4-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "--uninstall --ignorependingreboot --noreboot --nogui --logfolder `",
+                                               "seen":  4,
+                                               "examplePackage":  "dSPACE_SYNECT_x64_24.1.4-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "install --accept-licenses --default-answer --confirm-command",
+                                               "seen":  2,
+                                               "examplePackage":  "RIB_avasign_x64_2.5.0-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "--silent",
+                                               "seen":  1,
+                                               "examplePackage":  "Adobe_AcrobatPro_x86_25.001.20997-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "--uninstall --ignorependingreboot --noreboot",
+                                               "seen":  1,
+                                               "examplePackage":  "dSPACE_RCPandHIL_x64_24.1.4-0001_MUL"
+                                           }
+                                       ]
+                     },
+                     {
+                         "family":  "InnoSetup",
+                         "seen":  61,
+                         "share":  9,
+                         "arguments":  [
+                                           {
+                                               "args":  "/NORESTART /SUPPRESSMSGBOXES /VERYSILENT /LOADINF=`",
+                                               "seen":  8,
+                                               "examplePackage":  "ERSAsoft_SIMDIAConnectionTest_x86_3.3.0.107-0001_de-DE"
+                                           },
+                                           {
+                                               "args":  "/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /Dir=`",
+                                               "seen":  4,
+                                               "examplePackage":  "DSA_PRODISAuthoring_x64_5.10.9-0001_en-US"
+                                           },
+                                           {
+                                               "args":  "/NORESTART /SUPPRESSMSGBOXES /VERYSILENT /LOG=`",
+                                               "seen":  4,
+                                               "examplePackage":  "SpanglerAutomation_Versiontool_x86_2.15.1.2-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "/VERYSILENT /ALLUSERS /LOADINF=`",
+                                               "seen":  4,
+                                               "examplePackage":  "SpheraSolutions_LCAforExperts_x64_10.9.5.2-0001_en-US"
+                                           },
+                                           {
+                                               "args":  "/VERYSILENT /NOCANCEL /NORESTART",
+                                               "seen":  3,
+                                               "examplePackage":  "ITSolution_trustDeskMAN_x86_7.0.420.1-0001_de-DE"
+                                           },
+                                           {
+                                               "args":  "/SILENT /VERYSILENT",
+                                               "seen":  3,
+                                               "examplePackage":  "Siemens_TopStart_x64_10.0-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "/SP- /VERYSILENT /SUPPRESSMSGBOXES /NOCANCEL /NORESTART /NORUN",
+                                               "seen":  2,
+                                               "examplePackage":  "ShareXTeam_ShareX_x64_21.0.0-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "/SP- /VERYSILENT /SUPPRESSMSGBOXES  /TYPE=full /NORESTART /LOG=`",
+                                               "seen":  2,
+                                               "examplePackage":  "RACONSULTING_DiagRA_x86_7.69.45.62794-0001_MUL"
+                                           }
+                                       ]
+                     },
+                     {
+                         "family":  "InstallShield",
+                         "seen":  32,
+                         "share":  5,
+                         "arguments":  [
+                                           {
+                                               "args":  "/s /f1`",
+                                               "seen":  12,
+                                               "examplePackage":  "Hexagon_Actran_x64_2025.1-0001_en-US"
+                                           },
+                                           {
+                                               "args":  "/S /v`",
+                                               "seen":  7,
+                                               "examplePackage":  "ABB_RobotStudio_x86_26.2.11700.0-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "/s /removeonly /f1`",
+                                               "seen":  3,
+                                               "examplePackage":  "BTCEmbeddedSys_MANtese_x64_1.18.0.35-0001_en-US"
+                                           },
+                                           {
+                                               "args":  "/s /sms /f1`",
+                                               "seen":  2,
+                                               "examplePackage":  "IOM_HMS-Client-Server_X86_4.7.1-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "-runfromtemp -l0x0409 -removeonly /s /f1`",
+                                               "seen":  2,
+                                               "examplePackage":  "Hexagon_Actran_x64_2025.1-0001_en-US"
+                                           },
+                                           {
+                                               "args":  "/S /v/qn",
+                                               "seen":  2,
+                                               "examplePackage":  "BTCEmbeddedSys_MANtese_x64_1.18.0.35-0001_en-US"
+                                           },
+                                           {
+                                               "args":  "/s /f1$($adtSession.DirFiles)\\install.iss /f2`",
+                                               "seen":  2,
+                                               "examplePackage":  "HALCOM_SIHalcomEBanking_x86_26.0.2.01-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "-runfromtemp -l0x0409 UNINSTALL -removeonly /s /f1$($adtSession.DirFiles)\\uninstall.iss /f2`",
+                                               "seen":  2,
+                                               "examplePackage":  "HALCOM_SIHalcomEBanking_x86_26.0.2.01-0001_MUL"
+                                           }
+                                       ]
+                     },
+                     {
+                         "family":  "MSI-style",
+                         "seen":  10,
+                         "share":  1,
+                         "arguments":  [
+                                           {
+                                               "args":  "/exenoui /exenoupdates /qn",
+                                               "seen":  8,
+                                               "examplePackage":  "SmartManufacturingTechnology_MASTARLM_x64_15.1.192.386-0001_MUL"
+                                           },
+                                           {
+                                               "args":  "/qn",
+                                               "seen":  2,
+                                               "examplePackage":  "TEDATA_MDESIGN_x64_21-0001_MUL"
+                                           }
+                                       ]
+                     }
+                 ],
+    "uninstallArguments":  [
+                               {
+                                   "args":  "/S",
+                                   "seen":  31
+                               },
+                               {
+                                   "args":  "-i silent",
+                                   "seen":  8
+                               },
+                               {
+                                   "args":  "-silent",
+                                   "seen":  6
+                               },
+                               {
+                                   "args":  "/AllUsers /S",
+                                   "seen":  5
+                               },
+                               {
+                                   "args":  "-uninstall -i silent",
+                                   "seen":  4
+                               },
+                               {
+                                   "args":  "--mode unattended",
+                                   "seen":  4
+                               },
+                               {
+                                   "args":  "/mode silent",
+                                   "seen":  4
+                               },
+                               {
+                                   "args":  "/S /U:",
+                                   "seen":  3
+                               },
+                               {
+                                   "args":  "-q",
+                                   "seen":  3
+                               },
+                               {
+                                   "args":  "--mode silent",
+                                   "seen":  2
+                               }
+                           ]
+}

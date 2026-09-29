@@ -374,10 +374,6 @@ function Show-InstallerPicker {
               <Button x:Name="BtnAddInst" Margin="0,0,8,8"><StackPanel Orientation="Horizontal"><TextBlock Style="{DynamicResource PbGlyph}" Text="&#xE8E5;"/><TextBlock Text="Add installer(s) / source..."/></StackPanel></Button>
             </WrapPanel>
             <TextBox x:Name="LblPred" Foreground="#56C8D6" TextWrapping="Wrap" Margin="0,0,0,6" Style="{DynamicResource PbCopyText}"/>
-            <Button x:Name="BtnPredCmds" Padding="8,3" Margin="0,0,0,8" HorizontalAlignment="Left" Visibility="Collapsed"
-                    ToolTip="Shows exactly how the predecessor INSTALLS (in order) and UNINSTALLS (reverse) - including each component for a multi-installer package.">
-              <StackPanel Orientation="Horizontal"><TextBlock Style="{DynamicResource PbGlyph}" Text="&#xE8A5;"/><TextBlock Text="View predecessor install / uninstall..."/></StackPanel>
-            </Button>
             <CheckBox x:Name="ChkAddUninstall" Visibility="Collapsed" Foreground="#E7E9ED" Margin="0,0,0,10"
                       Content="Add predecessor uninstall block (remove the old version on install)"/>
             <TextBox x:Name="LblSrc"  Foreground="#CE9178" TextWrapping="Wrap" Style="{DynamicResource PbCopyText}"/>
@@ -1009,7 +1005,7 @@ foreach ($n in 'N1','N2','N3','N4','S1','S2','S3','S4','G1','G2','G3','G4','ST1'
                 'LblHdrPkg','PnlHdrRitm','LblHdrRitm','LblHdrRitmCaption','PnlHdrBrand','LblHdrBrand','LblOrigin','LblStatusBar','LblRitmExample',
                 'SecMsi','SecExe','SecAnalysis','SecMulti','SecLoose','PnlKbInst','PnlPublishStatus','ChkCarryPredMst','LblNameLen','PnlSummary','PnlReviewItems','LblReviewHdr',
                 'P1','P2','P3','P4','TabsP4','TxtPkg','LblParsed','BtnPred','BtnFetch','BtnAddInst','ChkAddUninstall',
-                'BtnPredCmds','LblReview','LblCreateResult','BtnCopyOutgoing','TxtPubPkgName','BtnLoadOutgoing','BtnBrowsePkg','PnlPublish','TxtPubProductName','TxtPubPublisher','TxtPubVersion','TxtPubProductCode',
+                'LblReview','LblCreateResult','BtnCopyOutgoing','TxtPubPkgName','BtnLoadOutgoing','BtnBrowsePkg','PnlPublish','TxtPubProductName','TxtPubPublisher','TxtPubVersion','TxtPubProductCode',
                 'TxtPubBrandingKey','TxtPubUninstallKey','TxtPubDetectVersion','TxtPubInstall','TxtPubUninstall','TxtPubRepair','TxtPubDescription','CmbDetectType','ChkPubAllowInteract',
                 'CreatePanel','BtnCreateSccm','BtnCreateIntune','BtnOpenCmTrace','BtnOpenWork','PbPublish','LblPbPct','LblPubStatus','LblPublishLog',
                 'BtnFetchDetection','BtnUpdateDetection','BtnUpdateContent','BtnContentStatus','BtnDeleteApp',
@@ -1115,7 +1111,25 @@ function Set-PBProgress {
     param([int]$Percent = -1, [string]$Status = '')
     try { if ($Status) { $script:Busy.Detail = $Status }; $script:Busy.Percent = $Percent } catch {}
 }
-function Hide-PBBusy { try { $script:Busy.Show = $false; $script:Busy.Percent = -1; if (Get-Command Set-PBStatus -EA SilentlyContinue) { Set-PBStatus '' } } catch {} }
+function Hide-PBBusy { try { $script:Busy.Show = $false; $script:Busy.Percent = -1; $script:BusySuspend = 0; if (Get-Command Set-PBStatus -EA SilentlyContinue) { Set-PBStatus '' } } catch {} }
+
+# THE BUSY CARD MUST STEP ASIDE FOR A QUESTION. It lives on its own STA thread and is Topmost, so it floats over
+# ANY dialog - including "which source do you want?" when several installers are found. The packager then sees a
+# progress card covering the window and has to drag the window to reach the picker (23.09.2026). So every modal
+# suspends it and the card comes back when the dialog closes. Counted, because dialogs nest.
+$script:BusySuspend = 0
+function Suspend-PBBusy {
+    try { if ($script:Busy -and $script:Busy.Show) { $script:BusySuspend++; $script:Busy.Show = $false; Start-Sleep -Milliseconds 60 } } catch {}
+}
+function Resume-PBBusy {
+    try { if ($script:BusySuspend -gt 0) { $script:BusySuspend--; if ($script:BusySuspend -eq 0) { $script:Busy.Show = $true } } } catch {}
+}
+# Run a block with the busy card out of the way (for a MessageBox, which has no window object to hook).
+function Invoke-PBWithoutBusy {
+    param([scriptblock]$Action)
+    Suspend-PBBusy
+    try { & $Action } finally { Resume-PBBusy }
+}
 Start-PBBusyHost
 # While the main thread is blocked, Windows would otherwise paint "(Not Responding)" into the title and grey the
 # window - alarming, and wrong: the busy card says exactly what is happening. Standard call for tools that block
@@ -1637,7 +1651,7 @@ function Populate-Step3 {
             if ($notices.Count -and $sig -ne "$($script:LastNoticeSig)") {
                 $script:LastNoticeSig = $sig
                 $body = ($notices | ForEach-Object { "-  $_" }) -join "`r`n`r`n"
-                [Windows.MessageBox]::Show("$body", 'Heads-up - please read', 'OK', 'Information') | Out-Null
+                Invoke-PBWithoutBusy { [Windows.MessageBox]::Show("$body", 'Heads-up - please read', 'OK', 'Information') | Out-Null }
             }
         }
         # Structural (parse) problems outrank source warnings - they mean the script is BROKEN.
@@ -1971,28 +1985,8 @@ function Test-OrderNumberGate { return $true }
 # if found, tell the user predecessor reuse is available. Server-side -Filter keeps it fast; cached per app so it
 # scans at most once per vendor+app; skipped once a predecessor is already chosen. Run on LostFocus (not per
 # keystroke) so typing never hitches.
-function Suggest-Predecessor {
-    $p = $script:State.Parsed
-    if (-not $p -or -not $p.IsValid) { return }
-    if ($script:State.PredecessorModel) { return }
-    $key = "$($p.Vendor)|$($p.AppName)"
-    if ($script:LastPredScanKey -eq $key) { return }
-    $script:LastPredScanKey = $key
-    $roots = if (Get-Command Get-PredecessorRoots -EA SilentlyContinue) { @(Get-PredecessorRoots) } else { @(Get-Setting PredecessorPath) }
-    if (-not $roots.Count) { return }
-    try {
-        $allHits = New-Object System.Collections.Generic.List[object]
-        foreach ($predPath in $roots) {
-            foreach ($h in @(Get-ChildItem -LiteralPath $predPath -Directory -Filter "$($p.Vendor)_$($p.AppName)_*" -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne $p.FullName })) { $allHits.Add($h) }
-        }
-        $hits = @($allHits | Sort-Object Name -Unique | Select-Object -First 8)
-    } catch { return }
-    if (-not $hits.Count) { return }
-    $vers = @($hits | ForEach-Object { (Parse-PackageName $_.Name).Version } | Where-Object { $_ } | Select-Object -Unique)
-    if (-not $vers.Count) { $vers = @($hits | ForEach-Object { $_.Name }) }
-    $LblPred.Text = "A previous version of this app is already in the live share (version(s): $($vers -join ', ')) - click 'Find predecessor' to REUSE it (predecessor reuse carries the old commands and skips Detection)."
-    $LblPred.Foreground = '#56C8D6'
-}
+# (The automatic 'a previous version exists' hint was removed 23.09.2026 on the team's request: it searched the
+#  live share while the packager was still typing, which is exactly what Find predecessor is for.)
 
 # Copy a NETWORK source folder to a LOCAL cache ONCE so all later work (re-resolve, Icons/Docs detection, the build
 # copy) reads locally instead of hammering the share. Local sources pass through unchanged. Returns the path to use.
@@ -2001,10 +1995,16 @@ function Stage-SourceLocal {
     if (-not $Folder -or -not (Test-Path -LiteralPath $Folder)) { return $Folder }
     if ($Folder -notmatch '^\\\\') { return $Folder }                 # only stage UNC / network sources
     if ((Get-Setting 'StageSourceLocal' $true) -eq $false) { return $Folder }   # opt-out via settings.json
+    $ownCard = $false   # set once the card is ours; the finally below is what guarantees it comes down
     try {
         $leaf = Split-Path $Folder -Leaf
         $dest = Join-Path (Get-WorkPath 'Source') $leaf
         if ($LblSrc) { $LblSrc.Text = "Copying source locally (one-time, from the share)..."; try { (Get-PBMainWindow).Dispatcher.Invoke([action]{}, [System.Windows.Threading.DispatcherPriority]::Render) } catch {} }
+        # Inside Fetch the card is already up - just change its line; from any other caller show it ourselves, so a
+        # multi-minute copy is never a frozen window with no explanation.
+        $ownCard = -not $script:Busy.Show
+        if ($ownCard) { Show-PBBusy -Title 'Copying source locally' -Detail "One-time copy of $leaf from the share..." }
+        else { Set-PBProgress -Percent -1 -Status "Copying $leaf from the share to this machine (one-time)..." }
         if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force -ErrorAction SilentlyContinue }   # refresh any stale copy
         # an access problem on the share offers a sign-in and copies once more (Invoke-PBWithShareAccess)
         Invoke-PBWithShareAccess -Path $Folder -Purpose 'the source folder' -Action {
@@ -2017,7 +2017,7 @@ function Stage-SourceLocal {
     } catch {
         Write-Log "Could not stage source locally ($($_.Exception.Message)) - working directly from the share." Warning
         return $Folder
-    }
+    } finally { if ($ownCard) { Hide-PBBusy } }   # the ONLY place the card comes down: every exit passes here
 }
 
 function Set-ResolvedSource {
@@ -2078,7 +2078,7 @@ function Set-ResolvedSource {
     # commands are kept (with the version/filename/ProductCode swaps) and must be reviewed/aligned.
     $warn = Get-SourceWarning
     if ($warn -and $warn -match 'Source (TYPE|STRUCTURE)|MULTI-COMPONENT') {
-        [System.Windows.MessageBox]::Show($warn, 'Source differs from the predecessor', 'OK', 'Warning') | Out-Null
+        Invoke-PBWithoutBusy { [System.Windows.MessageBox]::Show($warn, 'Source differs from the predecessor', 'OK', 'Warning') | Out-Null }
     }
 }
 
@@ -2771,6 +2771,13 @@ $LstAnchors.add_SelectionChanged({
     $script:AeEditor.TextArea.Focus() | Out-Null
 })
 $BtnRebuild.add_Click({
+    # a rebuild needs an identity to build FROM - otherwise the click looks ignored
+    if (-not $script:State.Parsed -or -not $script:State.Parsed.IsValid) {
+        [Windows.MessageBox]::Show("Nothing to rebuild from yet.
+
+Enter the package name on the Info step (and choose the installer on Configure); the script is then built from those.", 'Nothing to rebuild', 'OK', 'Information') | Out-Null
+        return
+    }
     Show-PBBusy -Title 'Building script' -Detail $(if ($script:State.PredecessorModel) { 'Reusing the predecessor script: converting, swapping identity, merging the snapshot...' } else { 'Filling the template from the installer, transform and analysis...' })
     try { $script:State.ScriptText = Build-Step3Script } finally { Hide-PBBusy }   # discard manual edits, rebuild from inputs
     Populate-Step3
@@ -2780,7 +2787,16 @@ $BtnRebuild.add_Click({
     if ($BtnSaveScript) { $BtnSaveScript.IsEnabled = $false }
     if ($LblScriptHdr) { $LblScriptHdr.Text = 'Invoke-AppDeployToolkit.ps1'; $LblScriptHdr.Foreground = '#56C8D6' }
 })
-$BtnReview.add_Click({ Show-ReviewPopup })
+$BtnReview.add_Click({
+    # nothing built yet -> say so; an unexplained no-op reads as a broken button
+    if (-not "$($script:State.ScriptText)".Trim()) {
+        [Windows.MessageBox]::Show("There is nothing to review yet - the script has not been built.
+
+Open the Editor step (it builds the script from the Info and Configure steps), or press 'Rebuild from inputs'.", 'Nothing to review', 'OK', 'Information') | Out-Null
+        return
+    }
+    Show-ReviewPopup
+})
 
 # LOAD / SAVE an existing .ps1 directly in the editor - so after testing a package you can tweak its script and save
 # WITHOUT opening the file externally. Save is enabled only once a file is Loaded (so we only ever overwrite the file
@@ -3509,7 +3525,12 @@ $BtnMsiPropsView.add_Click({
             $pMsi = Get-ChildItem -LiteralPath $script:State.PredecessorPath -Recurse -Filter *.msi -ErrorAction SilentlyContinue | Sort-Object Length -Descending | Select-Object -First 1
             $pMst = Get-ChildItem -LiteralPath $script:State.PredecessorPath -Recurse -Filter *.mst -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($pMsi -and $pMst) { $ps = Read-MstSettings -MsiPath $pMsi.FullName -MstPath $pMst.FullName; if ($ps) { if ($ps.ExtraProps) { $script:State.PredMstProps = $ps.ExtraProps }; if ($ps.OtherItems) { $script:State.MstOtherItems = @($ps.OtherItems) } } }
-        } catch {}
+            elseif ($LblMatchMst) { $LblMatchMst.Text = "The predecessor has no MSI+MST pair to carry forward - showing this MSI's own properties only."; $LblMatchMst.Foreground = '#A0A8B4' }
+        } catch {
+            # NOT silent: without this the dialog just opens with no predecessor column and nobody knows why
+            Write-Log "Could not read the predecessor MST ($($script:State.PredecessorPath)): $($_.Exception.Message)" Warning
+            if ($LblMatchMst) { $LblMatchMst.Text = "The predecessor's MST could not be read - its changes are NOT carried forward. $($_.Exception.Message)"; $LblMatchMst.Foreground = '#E0BE7C' }
+        }
     }
     $predLoaded = [bool]($script:State.PredecessorPath -and (Test-Path "$($script:State.PredecessorPath)") -and (@($script:State.PredMstProps.Keys).Count -or @($script:State.MstOtherItems).Count))
     $declinedNow = @(); try { $declinedNow = @($script:State.PredMstDeclined[$msi.FullName]) } catch {}
@@ -3620,7 +3641,7 @@ $TxtPkg.add_TextChanged({
     $LblSrc.Text  = 'No source yet - Fetch source, or add the installer by hand.'; $LblSrc.Foreground = '#A0A8B4'
     Update-PBChrome
 })
-$TxtPkg.add_LostFocus({ Parse-Current | Out-Null; Suggest-Predecessor; Update-PBChrome })
+$TxtPkg.add_LostFocus({ Parse-Current | Out-Null; Update-PBChrome })
 $TxtRitm.add_TextChanged({
     if ($script:Rehydrating) { return }
     $script:State.Ritm = $TxtRitm.Text.Trim()
@@ -3679,11 +3700,11 @@ function Set-PredecessorUi {
     $pm = $script:State.PredecessorModel
     if ($pm) {
         $ic = [int]$pm.InstallCount; $uc = @($pm.UninstallSeq).Count
-        if ($pm.IsMulti) { $LblPred.Text += "   -  MULTI-COMPONENT: installs $ic component(s) in order, uninstalls $uc in reverse (click 'View...' to see each)." }
+        if ($pm.IsMulti) { $LblPred.Text += "   -  MULTI-COMPONENT: installs $ic component(s) in order, uninstalls $uc in reverse (hover for the full sequence)." }
         else             { $LblPred.Text += "   -  installs 1 component$(if($uc){", uninstalls in $uc step(s)"}else{''})." }
         try { $LblPred.ToolTip = Format-PredecessorSeq -Model $pm } catch {}
-        if ($BtnPredCmds) { $BtnPredCmds.Visibility = 'Visible' }
-    } elseif ($BtnPredCmds) { $BtnPredCmds.Visibility = 'Collapsed' }
+
+    }
     # Predecessor just loaded -> auto-apply its MST (replaces the old "Match predecessor MST" button). Set the key so
     # the Step-2 refresh doesn't apply it a second time. Re-applies automatically if the MSI later changes (new key).
     $script:State.PredMstAppliedKey = ''
@@ -3696,6 +3717,7 @@ function Set-PredecessorUi {
 }
 $BtnPred.add_Click({
     if (-not (Parse-Current)) { return }
+    Reset-PBShareAsk   # a cancel earlier must not silence this click
     if (Test-LiveShareDuplicate) { return }
     # SYNCHRONOUS by design (reverted from the r148 async experiment that repeatedly broke this critical path via
     # closure/runspace scope traps). The live-share walk takes a couple of seconds - a brief pause is fine; a working
@@ -3705,8 +3727,12 @@ $BtnPred.add_Click({
     try { $script:Win.Dispatcher.Invoke([action]{}, [System.Windows.Threading.DispatcherPriority]::Render) } catch {}
     $predBox = @{ Cands = @() }   # filled by the search block; an access error offers a sign-in and searches once more
     $predRoot = "$(Get-Setting 'PredecessorPath')"; if (-not $predRoot) { $predRoot = "$(Get-Setting 'RepositoryPath')" }
+    # THIS is the one place a predecessor sign-in belongs: the packager asked for the predecessor. Connect-PBShare
+    # only prompts when the location is actually DENIED - a missing / unreachable path just falls through to the
+    # "browse to the folder / pick a .zip" prompt below, as it always did.
+    if ($predRoot -and -not (Test-Path -LiteralPath $predRoot)) { [void](Connect-PBShare -Path $predRoot -Purpose 'the predecessor location' -AllowPrompt) }
     try {
-      Invoke-PBWithShareAccess -Path $predRoot -Purpose 'the predecessor location' -Action {
+      Invoke-PBWithShareAccess -Path $predRoot -Purpose 'the predecessor location' -AllowPrompt -Action {
         # GPF: candidates come from the request's OWN Predecessor\ folder ONLY (no share scans - user rule).
         # If the packager clicks Predecessor BEFORE Fetch, locate the request here so it still works.
         $predBox.Cands = if ((Test-PBGpfFamily)) {
@@ -3744,47 +3770,54 @@ $BtnPred.add_Click({
     }
     $BtnPred.IsEnabled = $true
     if (-not $cands -or $cands.Count -eq 0) {
-        # LAST RESORT: let the packager point at the predecessor package folder themselves (request folder empty /
-        # share not reachable / unexpected layout). The picked folder becomes the single candidate.
-        # F45: offer BOTH a folder pick and a ZIP-file pick, so a zipped predecessor (which auto-detection can miss) is
-        # still selectable. "Yes" = browse to a folder; "No" = pick a .zip file; "Cancel" = give up.
-        $ask = [System.Windows.MessageBox]::Show(
-            "No predecessor was found automatically.`n`nYES  - browse to the predecessor package FOLDER`nNO   - pick a predecessor .ZIP file`nCANCEL - skip",
-            'Predecessor not found', 'YesNoCancel', 'Question')
+        # SAY WHAT HAPPENED. Not "nothing found" plus a browse box: each location the search used is reported with
+        # its own verdict (no rights / not there / nothing matching, with the closest names). Then two ways on -
+        # sign in and search again (only when a location refused us), or pick the package yourself. ONE picker:
+        # it takes a folder OR a zip and works out the rest (Resolve-PredecessorSelection).
+        $rep = Get-PredecessorSearchReport -Parsed $script:State.Parsed
+        $body = "No earlier release of $($script:State.Parsed.Vendor) $($script:State.Parsed.AppName) could be found.`r`n`r`n" +
+                (@($rep.Lines | ForEach-Object { "  -  $_" }) -join "`r`n")
         $selPath = $null
-        if ($ask -eq 'Yes') {
-            $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-            $dlg.Description = 'Select the PREDECESSOR package folder (holds Content\ or Deploy-Application.ps1, or a package .zip)'
-            if ($dlg.ShowDialog() -eq 'OK' -and $dlg.SelectedPath) { $selPath = $dlg.SelectedPath }
-        } elseif ($ask -eq 'No') {
-            $fd = New-Object System.Windows.Forms.OpenFileDialog
-            $fd.Title = 'Select the PREDECESSOR package .zip'; $fd.Filter = 'Zip packages (*.zip)|*.zip'
-            if ($fd.ShowDialog() -eq 'OK' -and $fd.FileName) { $selPath = $fd.FileName }
+        while ($true) {
+            $choice = Show-PredecessorMissingDialog -Body $body -CanSignIn $rep.CanSignIn
+            if ($choice -eq 'signin') {
+                $any = $false
+                foreach ($r in @($rep.Roots)) { if ("$r" -match '^\\\\' -and -not (Test-Path -LiteralPath $r)) { if (Connect-PBShare -Path $r -Purpose 'the predecessor location' -AllowPrompt -Retry) { $any = $true } } }
+                if ($any) { $LblPred.Text = 'Signed in - searching again...'; $BtnPred.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Primitives.ButtonBase]::ClickEvent))); return }
+                $rep = Get-PredecessorSearchReport -Parsed $script:State.Parsed
+                $body = "Still no access to the predecessor location.`r`n`r`n" + (@($rep.Lines | ForEach-Object { "  -  $_" }) -join "`r`n")
+                continue
+            }
+            if ($choice -eq 'browse') {
+                $dlg = New-Object System.Windows.Forms.OpenFileDialog
+                $dlg.Title = 'Select the predecessor package - its folder, any file inside it, or its .zip'
+                $dlg.Filter = 'Package or zip (*.zip;*.ps1;*.exe;*.msi)|*.zip;*.ps1;*.exe;*.msi|All files (*.*)|*.*'
+                $dlg.CheckFileExists = $false; $dlg.FileName = 'Select this folder'
+                foreach ($r in @($rep.Roots)) { if (Test-Path -LiteralPath $r) { $dlg.InitialDirectory = $r; break } }
+                if ($dlg.ShowDialog() -eq 'OK' -and $dlg.FileName) {
+                    # "Select this folder" (or any file inside the package) resolves to the folder itself
+                    $selPath = $(if (Test-Path -LiteralPath $dlg.FileName -PathType Leaf) { $dlg.FileName } else { Split-Path $dlg.FileName -Parent })
+                }
+                break
+            }
+            break   # skip
         }
         if ($selPath) {
-            $selItem  = Get-Item -LiteralPath $selPath
-            # for a .zip the identity comes from the file's base name (drop .zip); for a folder, from the folder name.
-            $rawName  = if ($selItem.PSIsContainer) { $selItem.Name } else { $selItem.BaseName }
-            # A picked .zip is extracted NOW so FullName is the package folder (MST replication + Read-PredecessorModel
-            # both scan the folder). Read-PredecessorModel also extracts as a safety net if a .zip path still reaches it.
-            $fullPath = $selItem.FullName
-            if (-not $selItem.PSIsContainer -and ($selItem.Extension -match '(?i)^\.zip$') -and (Get-Command Expand-PredecessorZip -EA SilentlyContinue)) {
-                $ex = Expand-PredecessorZip -ZipPath $selItem.FullName
-                if ($ex) { $fullPath = $ex } else { Write-Log "Predecessor zip '$rawName' has no deployment script inside." Warning }
-            }
-            $normName = if (Get-Command Get-GpfPredecessorPackageName -EA SilentlyContinue) { Get-GpfPredecessorPackageName $rawName } else { $rawName }
-            $pp = Parse-PackageName $normName
-            $pv = try { [version]($pp.Version -replace '[^0-9.]','') } catch { $null }
-            $cands = @([pscustomobject]@{ Name=$normName; FullName=$fullPath; Version=$pp.Version; Ver=$pv
-                                          Revision=$pp.Release; SameVersion=($pp.Version -eq $script:State.Parsed.Version) })
-            if (-not $pp.IsValid) { Write-Log "Manually selected predecessor '$rawName' does not parse as Vendor_App_Arch_Version-Rev_Lang - identity fields may need manual review." Warning }
+            $reason = ''
+            $cands = @(Resolve-PredecessorSelection -Path $selPath -Parsed $script:State.Parsed -Reason ([ref]$reason))
+            if (-not $cands.Count -and $reason) { $LblPred.Text = $reason; $LblPred.Foreground = '#E0BE7C'; Write-Log "Predecessor selection: $reason" Warning }
+            elseif ($cands.Count) { Write-Log "Predecessor selected by hand: $($cands.Count) package(s) from $selPath" }
         }
         if (-not $cands -or $cands.Count -eq 0) {
             $script:State.PredecessorPath=$null; $script:State.PredecessorModel=$null
-            $LblPred.Text = "No predecessor found under PredecessorPath (the package itself is never offered)."
-            $LblPred.ToolTip = $null
+            # keep the diagnosis on screen (and in the tooltip in full) instead of a bare "not found"
+            if (-not "$($LblPred.Text)".Trim() -or $LblPred.Text -like 'Searching*') {
+                $LblPred.Text = "No predecessor used - $(@($rep.Lines)[0])"
+                $LblPred.Foreground = '#E0BE7C'
+            }
+            $LblPred.ToolTip = $body
             $ChkAddUninstall.Visibility = 'Collapsed'
-            if ($BtnPredCmds) { $BtnPredCmds.Visibility = 'Collapsed' }
+
             Invalidate-From 3
             return
         }
@@ -3805,7 +3838,7 @@ $BtnPred.add_Click({
     try {
         Show-PBBusy -Title 'Loading predecessor' -Detail "$($chosen.Name) - reading its script, transforms and icons..."
         # an access problem inside the predecessor package offers a sign-in and reads once more
-        try { $script:State.PredecessorModel = Invoke-PBWithShareAccess -Path "$($chosen.FullName)" -Purpose 'the predecessor package' -Action { Read-PredecessorModel -PackagePath $chosen.FullName -PackageName $chosen.Name } } finally { Hide-PBBusy }
+        try { $script:State.PredecessorModel = Invoke-PBWithShareAccess -Path "$($chosen.FullName)" -Purpose 'the predecessor package' -AllowPrompt -Action { Read-PredecessorModel -PackagePath $chosen.FullName -PackageName $chosen.Name } } finally { Hide-PBBusy }
     } catch {
         $script:State.PredecessorModel = $null; Write-Log "Predecessor load failed: $($_.Exception.Message)" Error
         $LblPred.Text = $LblPred.Text -replace '   - loading\.\.\.$', ''; $LblPred.Text += '   - LOAD FAILED (see log)'
@@ -3817,15 +3850,15 @@ $BtnPred.add_Click({
     Update-PBChrome
 })
 # Show the predecessor's full install + uninstall sequence (how it goes, in order / reverse) in a dialog.
-$BtnPredCmds.add_Click({
-    $pm = $script:State.PredecessorModel
-    if (-not $pm) { return }
-    $txt = Format-PredecessorSeq -Model $pm
-    $hdr = "Predecessor: $(Split-Path "$($script:State.PredecessorPath)" -Leaf)`r`n(Predecessor reuse keeps these commands and swaps version / installer filename / MSI ProductCode. For a MULTI-component predecessor, verify each command matches your new source.)`r`n`r`n"
-    Show-TextDialog -Title 'Predecessor install / uninstall sequence' -Text ($hdr + $txt)
-})
+# ('View predecessor install / uninstall' was removed 23.09.2026 on the team's request - the same sequence stays
+#  on the predecessor label's tooltip and in the reuse report.)
 $BtnFetch.add_Click({
-    if (-not (Parse-Current)) { return }
+    # say why nothing happens instead of ignoring the click (control sweep, 24.09.2026)
+    if (-not (Parse-Current)) {
+        $LblSrc.Text = 'Enter a valid package name first (Vendor_App_Arch_Version-Release_Lang) - the source is looked up by that name.'
+        $LblSrc.Foreground = '#E0BE7C'; $TxtPkg.Focus() | Out-Null; return
+    }
+    Reset-PBShareAsk   # a cancel earlier must not silence this click
     # SYNCHRONOUS (reverted from async - same closure-scope reliability reasons as BtnPred). A short share walk.
     $BtnFetch.IsEnabled = $false
     $LblSrc.Text = 'Searching the Incoming share for the source...'; $LblSrc.Foreground = '#A0A8B4'
@@ -3833,7 +3866,7 @@ $BtnFetch.add_Click({
     # The Incoming share may need other credentials than the signed-in user has (Porsche): a root that cannot be
     # opened gets a sign-in prompt first; an access error DURING the search offers one too and searches once more.
     $repoRoot = "$(Get-Setting 'RepositoryPath')"
-    if ($repoRoot -and -not (Connect-PBShare -Path $repoRoot -Purpose 'the Incoming share')) {
+    if ($repoRoot -and -not (Connect-PBShare -Path $repoRoot -Purpose 'the Incoming share' -AllowPrompt)) {
         $LblSrc.Text = "The Incoming share could not be opened ($repoRoot) - sign in when asked, or use 'Add installer(s) / source'."; $LblSrc.Foreground = '#F48771'
         $BtnFetch.IsEnabled = $true; Update-PBChrome; return
     }
@@ -3841,7 +3874,7 @@ $BtnFetch.add_Click({
     $folder = $null
     $found = @{ Folder = $null }   # filled by the search block (a scriptblock's own assignments stay inside it)
     try {
-        Invoke-PBWithShareAccess -Path $repoRoot -Purpose 'the Incoming share' -Action {
+        Invoke-PBWithShareAccess -Path $repoRoot -Purpose 'the Incoming share' -AllowPrompt -Action {
             $found.Folder = $null
             if ((Test-PBGpfFamily)) {
                 # GPF Incoming = one AES-1-... request folder per ticket. Find it by package name (with or without the
@@ -3868,7 +3901,7 @@ $BtnFetch.add_Click({
     $BtnFetch.IsEnabled = $true
     if ($folder) {
         Set-PBProgress -Status "Reading the installer files in $(Split-Path "$folder" -Leaf)..."
-        try { Invoke-PBWithShareAccess -Path "$folder" -Purpose 'the source folder' -Action { Set-ResolvedSource -Folder "$folder" } | Out-Null }
+        try { Invoke-PBWithShareAccess -Path "$folder" -Purpose 'the source folder' -AllowPrompt -Action { Set-ResolvedSource -Folder "$folder" } | Out-Null }
         catch { Hide-PBBusy; Write-Log "Reading the source failed: $($_.Exception.Message)" Error; $LblSrc.Text = "Reading the source FAILED: $($_.Exception.Message)"; $LblSrc.Foreground='#F48771'; Update-PBChrome; return }
         finally { Hide-PBBusy }
         # GPF: the request's Icons\ + docs/mails/'Shortcut Behavior' complete whatever the source resolver found.
@@ -4387,6 +4420,12 @@ function Set-PBDialogChrome {
         $Window.Content = $g
         if ($Window.SizeToContent -eq 'Manual' -and $Window.Height -gt 0) { $Window.Height = $Window.Height + 42 }
         if ($PrimaryName) { $pb = $Window.FindName($PrimaryName); if ($pb -is [Windows.Controls.Button]) { try { $pb.Style = $script:Win.FindResource('PbAccentButton') } catch {} } }
+        # Chrome is applied immediately before ShowDialog, so this is the one place that knows a modal is coming:
+        # take the busy card down for it and bring it back when the dialog closes.
+        if (Get-Command Suspend-PBBusy -ErrorAction SilentlyContinue) {
+            Suspend-PBBusy
+            $Window.Add_Closed({ try { Resume-PBBusy } catch {} })
+        }
     } catch { Write-Log "Dialog chrome not applied ($Title): $($_.Exception.Message)" Warning }
 }
 function New-PBCaption {
@@ -4427,29 +4466,191 @@ function Show-ConfirmTextDialog {
     return [bool]$script:__confirmResult
 }
 
-# SIGN IN TO A SHARE THAT CANNOT BE OPENED (Porsche, 22.09.2026: the predecessor location needs other credentials
-# than the Incoming share). Tests the path; when it fails and the path is a UNC, drops a stale session to the same
-# server (Windows error 1219, "multiple connections") and asks for a user name + password up to three times, then
-# connects with New-PSDrive -Credential (no password ever on a command line). Returns $true when the path opens.
-# A local path is simply tested. Remembered per server for the session so the question is asked once.
-$script:PBShareAsked = @{}
+# PRELIVE MIRROR GUARD. Creating / updating content runs robocopy /MIR, which REPLACES and PRUNES whatever is on the
+# prelive share. The old check sat in a try/catch{} that swallowed its own failure and then mirrored anyway - a guard
+# that fails OPEN is worse than none. This one never does: if the share cannot be read (no config, no rights, share
+# down) it says so and asks. $true = go ahead.
+function Confirm-PreliveMirror {
+    param([string]$PackageName, [string]$Action = 'This')
+    $ask = { param($t, $c) ([Windows.MessageBox]::Show($t, $c, 'YesNo', 'Warning') -eq 'Yes') }
+    $dest = ''
+    try { $cfg = Get-SccmConfig; $dest = Join-Path (Join-Path $cfg.ContentShare $PackageName) 'Content' }
+    catch {
+        Write-Log "Prelive content check could not run: $($_.Exception.Message)" Warning
+        return (& $ask "The prelive content share could not be read from settings:`n$($_.Exception.Message)`n`n$Action will MIRROR (replace and prune) whatever is already there. Continue anyway?" 'Prelive content could not be checked')
+    }
+    if (Test-Path -LiteralPath $dest) {
+        return (& $ask "Content for '$PackageName' already exists in PRELIVE:`n$dest`n`n$Action will MIRROR (replace) it. Continue?" 'Prelive content already exists')
+    }
+    # Test-Path says no - but "no" and "I am not allowed to look" are the same answer here. If the share root itself
+    # cannot be opened we do NOT know, so offer the sign-in (this is an explicit click) and then say what we found.
+    $root = "$($cfg.ContentShare)"
+    if ($root -and -not (Test-Path -LiteralPath $root)) {
+        if ((Get-Command Connect-PBShare -EA SilentlyContinue) -and (Connect-PBShare -Path $root -Purpose 'the prelive content share' -AllowPrompt)) {
+            if (Test-Path -LiteralPath $dest) {
+                return (& $ask "Content for '$PackageName' already exists in PRELIVE:`n$dest`n`n$Action will MIRROR (replace) it. Continue?" 'Prelive content already exists')
+            }
+            return $true
+        }
+        Write-Log "Prelive content share not reachable: $root - could not check for existing content." Warning
+        return (& $ask "The prelive content share cannot be opened from this machine:`n$root`n`nSo it is unknown whether content for '$PackageName' is already there. $Action will MIRROR (replace and prune) it if it is. Continue anyway?" 'Prelive content could not be checked')
+    }
+    return $true
+}
+
+# The "no predecessor" dialog: the diagnosis, then the ways on. Returns 'signin' | 'browse' | 'skip'.
+function Show-PredecessorMissingDialog {
+    param([string]$Body, [bool]$CanSignIn)
+    $win = New-Object Windows.Window
+    $win.Title = 'No predecessor found'; $win.Width = 760; $win.SizeToContent = 'Height'; $win.MinHeight = 240
+    $win.WindowStartupLocation = 'CenterOwner'; try { $win.Owner = $script:Win } catch {}
+    if (Get-Command Apply-PbTheme -ErrorAction SilentlyContinue) { Apply-PbTheme $win }
+    $g = New-Object Windows.Controls.Grid; $g.Margin = '16,14,16,14'
+    foreach ($h in 'Auto','Auto','Auto') { $rd = New-Object Windows.Controls.RowDefinition; $rd.Height = $h; [void]$g.RowDefinitions.Add($rd) }
+    $tb = New-Object Windows.Controls.TextBox
+    $tb.Text = "$Body"; $tb.IsReadOnly = $true; $tb.TextWrapping = 'Wrap'; $tb.AcceptsReturn = $true; $tb.BorderThickness = '0'
+    $tb.Background = 'Transparent'; $tb.Foreground = '#E7E9ED'; $tb.FontSize = 12.5; $tb.MaxHeight = 320; $tb.VerticalScrollBarVisibility = 'Auto'
+    [Windows.Controls.Grid]::SetRow($tb,0); [void]$g.Children.Add($tb)
+    $hint = New-Object Windows.Controls.TextBlock
+    $hint.Text = 'Picking it yourself accepts either form - the package folder, any file inside it, or the package .zip (a zip is unpacked for you).'
+    $hint.Foreground = '#A0A8B4'; $hint.FontSize = 11.5; $hint.TextWrapping = 'Wrap'; $hint.Margin = '2,12,0,0'
+    [Windows.Controls.Grid]::SetRow($hint,1); [void]$g.Children.Add($hint)
+    $bar = New-Object Windows.Controls.StackPanel; $bar.Orientation = 'Horizontal'; $bar.HorizontalAlignment = 'Right'; $bar.Margin = '0,14,0,0'
+    $script:__predMissing = 'skip'
+    $bSkip = New-Object Windows.Controls.Button; $bSkip.Content = 'Continue without a predecessor'; $bSkip.Padding = '14,5'; $bSkip.Margin = '0,0,8,0'; $bSkip.IsCancel = $true
+    $bSkip.add_Click({ $script:__predMissing = 'skip'; $win.DialogResult = $false; $win.Close() }.GetNewClosure())
+    [void]$bar.Children.Add($bSkip)
+    if ($CanSignIn) {
+        $bIn = New-Object Windows.Controls.Button; $bIn.Content = 'Sign in and search again'; $bIn.Padding = '14,5'; $bIn.Margin = '0,0,8,0'; $bIn.MinWidth = 150
+        $bIn.add_Click({ $script:__predMissing = 'signin'; $win.DialogResult = $true; $win.Close() }.GetNewClosure())
+        [void]$bar.Children.Add($bIn)
+    }
+    $bBrowse = New-Object Windows.Controls.Button; $bBrowse.Content = 'Select the package...'; $bBrowse.Padding = '16,5'; $bBrowse.MinWidth = 150; $bBrowse.IsDefault = $true
+    try { $bBrowse.Style = $script:Win.FindResource('PbAccentButton') } catch {}
+    $bBrowse.add_Click({ $script:__predMissing = 'browse'; $win.DialogResult = $true; $win.Close() }.GetNewClosure())
+    [void]$bar.Children.Add($bBrowse)
+    [Windows.Controls.Grid]::SetRow($bar,2); [void]$g.Children.Add($bar)
+    $win.Content = $g
+    Set-PBDialogChrome -Window $win -Glyph 'E721' -Title 'No predecessor found'
+    $win.ShowDialog() | Out-Null
+    return "$($script:__predMissing)"
+}
+
+# WHY WAS NO PREDECESSOR FOUND? Silence plus a browse prompt tells the packager nothing - they cannot tell a
+# location they have no rights to from one that simply holds no earlier release. This walks the locations the
+# search actually used and reports each one: not configured / cannot be opened (no rights, other domain) / open
+# but nothing matching / open with near-misses (same app spelled differently). Returns
+# @{ Lines=@(); CanSignIn=[bool]; Roots=@() } - CanSignIn drives the "Sign in and search again" button.
+function Get-PredecessorSearchReport {
+    param($Parsed)
+    $lines = New-Object System.Collections.Generic.List[string]
+    $roots = New-Object System.Collections.Generic.List[string]
+    $canSignIn = $false
+    foreach ($r in @((Get-Setting 'PredecessorPath'), (Get-Setting 'PredecessorPaths'))) { foreach ($p in @($r)) { if ("$p".Trim()) { [void]$roots.Add("$p") } } }
+    # the request's own Predecessor\ folder (GPF/PAG: this is the primary source)
+    $req = $script:State.GpfRequest
+    if ($req -and "$($req.PredecessorPath)".Trim()) { [void]$roots.Insert(0, "$($req.PredecessorPath)") }
+    elseif ($req) { [void]$lines.Add("The request folder '$(Split-Path "$($req.RequestPath)" -Leaf)' has no Predecessor\ folder.") }
+    if (-not $roots.Count) { [void]$lines.Add('No predecessor location is configured (settings.json -> PredecessorPath).') }
+    foreach ($root in $roots) {
+        $isUnc = "$root" -match '^\\\\'
+        if (-not (Test-Path -LiteralPath $root)) {
+            if ($isUnc) { $canSignIn = $true; [void]$lines.Add("Cannot open  $root`r`n      This machine has no access to it - a different account (another domain: DOMAIN\user) may be needed.") }
+            else { [void]$lines.Add("Does not exist  $root") }
+            continue
+        }
+        $kids = @(); try { $kids = @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction Stop) } catch { $canSignIn = $true; [void]$lines.Add("Cannot read  $root`r`n      $($_.Exception.Message)"); continue }
+        $zips  = @(try { Get-ChildItem -LiteralPath $root -Filter '*.zip' -File -ErrorAction SilentlyContinue } catch { @() })
+        $names = @($kids | ForEach-Object { $_.Name }) + @($zips | ForEach-Object { $_.BaseName })
+        # near misses: the same vendor OR the same app, so a spelling difference is visible instead of invisible
+        $near = @($names | Where-Object { $_ -like "$($Parsed.Vendor)_*" -or $_ -like "*_$($Parsed.AppName)_*" -or $_ -like "*$($Parsed.AppName)*" } | Select-Object -First 5)
+        if ($near.Count) { [void]$lines.Add("Nothing matching '$($Parsed.Vendor)_$($Parsed.AppName)_*' in  $root`r`n      Closest names there: $($near -join ', ')") }
+        else { [void]$lines.Add("No earlier release in  $root   ($($names.Count) package(s) present)") }
+    }
+    return @{ Lines = @($lines); CanSignIn = $canSignIn; Roots = @($roots) }
+}
+
+# ONE selection that works out for itself what it was given (the packager should not have to say "folder" or "zip"
+# up front). Accepts: a package .zip -> extracted; a package folder (Content\ / Deploy-Application.ps1 / *.ps1);
+# a folder holding ONE package zip -> that zip; a folder holding several packages -> the best name match, else
+# every entry offered. Returns @(candidate objects) or @() plus a reason in -Reason.
+function Resolve-PredecessorSelection {
+    param([string]$Path, $Parsed, [ref]$Reason)
+    $mk = {
+        param($name, $full)
+        $norm = if (Get-Command Get-GpfPredecessorPackageName -EA SilentlyContinue) { Get-GpfPredecessorPackageName $name } else { $name }
+        $pp = Parse-PackageName $norm
+        $pv = try { [version]($pp.Version -replace '[^0-9.]','') } catch { $null }
+        if (-not $pp.IsValid) { Write-Log "Selected predecessor '$name' does not parse as Vendor_App_Arch_Version-Rev_Lang - identity fields may need review." Warning }
+        [pscustomobject]@{ Name=$norm; FullName=$full; Version=$pp.Version; Ver=$pv; Revision=$pp.Release
+                           SameVersion=($pp.Version -eq "$($Parsed.Version)") }
+    }
+    $unzip = {
+        param($zip)
+        if (-not (Get-Command Expand-PredecessorZip -EA SilentlyContinue)) { return $zip }
+        $ex = Expand-PredecessorZip -ZipPath $zip
+        if ($ex) { return $ex }
+        Write-Log "Predecessor zip '$(Split-Path $zip -Leaf)' has no deployment script inside - using the zip as-is." Warning
+        return $zip
+    }
+    if (-not "$Path".Trim() -or -not (Test-Path -LiteralPath $Path)) { if ($Reason) { $Reason.Value = "That path does not exist: $Path" }; return @() }
+    $item = Get-Item -LiteralPath $Path
+    if (-not $item.PSIsContainer) {
+        if ($item.Extension -notmatch '(?i)^\.zip$') { if ($Reason) { $Reason.Value = "'$($item.Name)' is not a package zip - pick the package FOLDER or its .zip." }; return @() }
+        return @(& $mk $item.BaseName (& $unzip $item.FullName))
+    }
+    # a package folder? (its own script / Content folder / an MST + Files layout)
+    $looksLikePkg = @('Content','Files','SupportFiles') | Where-Object { Test-Path (Join-Path $item.FullName $_) }
+    $hasScript = @(Get-ChildItem -LiteralPath $item.FullName -Recurse -Depth 2 -Filter '*.ps1' -File -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Name -match '(?i)^(Invoke-AppDeployToolkit|Deploy-Application)\.ps1$' } | Select-Object -First 1)
+    if ($looksLikePkg.Count -or $hasScript.Count) { return @(& $mk $item.Name $item.FullName) }
+    # a folder of packages: sub-folders and/or zips - prefer the ones that match this app
+    $subs = @(Get-ChildItem -LiteralPath $item.FullName -Directory -ErrorAction SilentlyContinue)
+    $zips = @(Get-ChildItem -LiteralPath $item.FullName -Filter '*.zip' -File -ErrorAction SilentlyContinue)
+    $entries = @()
+    foreach ($s in $subs) { $entries += [pscustomobject]@{ Name=$s.Name; Full=$s.FullName; Zip=$false } }
+    foreach ($z in $zips) { $entries += [pscustomobject]@{ Name=$z.BaseName; Full=$z.FullName; Zip=$true } }
+    if (-not $entries.Count) { if ($Reason) { $Reason.Value = "'$($item.Name)' holds no package folder and no package zip." }; return @() }
+    $match = @($entries | Where-Object { $_.Name -like "$($Parsed.Vendor)_$($Parsed.AppName)_*" -or $_.Name -like "*$($Parsed.AppName)*" })
+    $use = if ($match.Count) { $match } else { $entries }
+    if ($use.Count -gt 12) { $use = @($use | Sort-Object Name -Descending | Select-Object -First 12) }
+    return @($use | ForEach-Object { & $mk $_.Name $(if ($_.Zip) { & $unzip $_.Full } else { $_.Full }) })
+}
+
+# SIGN IN TO A SHARE THAT CANNOT BE OPENED (Porsche: the predecessor location needs other credentials than the
+# Incoming share, and it can live in ANOTHER DOMAIN - which Windows reports as "network path not found", not as
+# "access denied"). ONE simple rule: the packager clicked something, the UNC path does not open -> ask. Drops a
+# stale session to the same server first (Windows error 1219) and connects with New-PSDrive -Credential, so no
+# password ever reaches a command line. A local or mapped path has nothing to sign in to and is just tested.
+$script:PBSharePrompts = 0          # only for tests: how often a credential dialog was actually raised
+$script:PBShareCancelled = @{}      # shares the packager said "no" to - cleared when they click something again
+# NEVER ask while the window is only reacting to typing (the predecessor hint on LostFocus, any background scan):
+# a modal credential prompt there steals the focus before the packager reaches the next field. (Porsche, 23.09.2026.)
+$script:PBNoSharePrompt = $false
+# Called at the start of every handler the packager starts, so one cancel does not silence the next attempt.
+function Reset-PBShareAsk { $script:PBShareCancelled = @{} }
 function Connect-PBShare {
-    param([string]$Path, [string]$Purpose = 'this folder', [switch]$Retry)
+    param([string]$Path, [string]$Purpose = 'this folder', [switch]$Retry, [switch]$AllowPrompt)
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    # ASKING IS OPT-IN. Without -AllowPrompt this only reports whether the path opens. Only a handler the packager
+    # STARTED (Fetch source, Find predecessor, Copy to Outgoing) passes it; everything that merely reacts to typing
+    # or repaints the window can call this freely and will never produce a dialog.
+    if (-not $AllowPrompt -or $script:PBNoSharePrompt) { return (Test-Path -LiteralPath $Path) }
     # -Retry = an ACCESS error already happened on this path (the share opens, a folder inside is denied): ask
-    # again even though Test-Path says the root is there, and even if this server was asked before.
+    # again even though Test-Path says the root is there.
     if (-not $Retry -and (Test-Path -LiteralPath $Path)) { return $true }
     $m = [regex]::Match("$Path", '^(\\\\[^\\]+\\[^\\]+)'); if (-not $m.Success) { return $false }
     $share = $m.Groups[1].Value; $server = ($share -split '\\')[2]
-    if (-not $Retry -and $script:PBShareAsked.ContainsKey($share.ToLower())) { return (Test-Path -LiteralPath $Path) }
-    $script:PBShareAsked[$share.ToLower()] = $true
+    if ($script:PBShareCancelled.ContainsKey($share.ToLower())) { return (Test-Path -LiteralPath $Path) }
     # a stale session under another account blocks every new one (1219) - drop it and look again
     try { foreach ($line in @(net use 2>$null)) { if ($line -match ('(\\\\' + [regex]::Escape($server) + '\\\S+)')) { $null = net use $matches[1] /delete /y 2>$null } } } catch {}
     if (-not $Retry -and (Test-Path -LiteralPath $Path)) { return $true }
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         $cred = $null
-        try { $cred = Get-Credential -Message "Sign in to $share to open $Purpose (attempt $attempt of 3)" } catch {}
-        if (-not $cred) { Write-Log "Sign-in to $share cancelled - $Purpose not opened." Warning; return $false }
+        $script:PBSharePrompts++
+        # the account often belongs to ANOTHER domain - say so, or people type their own user name and fail 3 times
+        try { $cred = Get-Credential -Message "Sign in to $share to open $Purpose (attempt $attempt of 3).`r`nIf it belongs to another domain, enter the user name as DOMAIN\user." } catch {}
+        if (-not $cred) { $script:PBShareCancelled[$share.ToLower()] = $true; Write-Log "Sign-in to $share cancelled - $Purpose not opened." Warning; return $false }
         try {
             $name = 'PBShare' + [guid]::NewGuid().ToString('N').Substring(0, 6)
             $null = New-PSDrive -Name $name -PSProvider FileSystem -Root $share -Credential $cred -Scope Global -ErrorAction Stop
@@ -4469,16 +4670,19 @@ function Connect-PBShare {
 # share behind the path and runs the step ONCE more. Any other error is rethrown unchanged.
 function Test-PBAccessError {
     param([string]$Message)
-    return ("$Message" -match '(?i)access (is |to the path .* is )?denied|zugriff (auf den pfad .* )?verweigert|unauthorized|logon failure|anmeldefehler|1219|multiple connections|mehrfachverbindungen|user name or password|benutzername oder kennwort|network path was not found|netzwerkpfad wurde nicht gefunden|network name cannot be found|netzwerkname wurde nicht gefunden|0x80070005|0x8007052e|0x80070035|0x80070043')
+    # Includes the wording Windows uses for a share in ANOTHER DOMAIN, which it reports as "network path/name not
+    # found" rather than "access denied" - a credential IS the fix there. Only ever consulted after an explicit
+    # action already failed, so a needless prompt cannot reach someone who is just typing.
+    return ("$Message" -match '(?i)access (is |to the path .* is )?denied|zugriff (auf den pfad .* )?verweigert|unauthorized|logon failure|anmeldefehler|1219|multiple connections|mehrfachverbindungen|user name or password|benutzername oder kennwort|network path was not found|netzwerkpfad wurde nicht gefunden|network name cannot be found|netzwerkname wurde nicht gefunden|cannot find path|0x80070005|0x8007052e|0x80070035|0x80070043|1326')
 }
 function Invoke-PBWithShareAccess {
-    param([string]$Path, [string]$Purpose = 'this folder', [scriptblock]$Action)
+    param([string]$Path, [string]$Purpose = 'this folder', [scriptblock]$Action, [switch]$AllowPrompt)
     try { & $Action }
     catch {
         $why = "$($_.Exception.Message)"
-        if (-not (Test-PBAccessError $why)) { throw }
+        if (-not $AllowPrompt -or $script:PBNoSharePrompt -or -not (Test-PBAccessError $why)) { throw }
         Write-Log "Access problem on $Purpose - $why. Offering a sign-in." Warning
-        if (-not (Connect-PBShare -Path $Path -Purpose $Purpose -Retry)) { throw }
+        if (-not (Connect-PBShare -Path $Path -Purpose $Purpose -Retry -AllowPrompt)) { throw }
         & $Action
     }
 }
@@ -6066,29 +6270,24 @@ function Test-ManageReady {
 $BtnCreateSccm.add_Click({
     if (-not $script:State.PublishBase) { return }
     $f = Get-PublishFields
-    # SAFETY: creating MIRRORS the package Content into PRELIVE (robocopy /MIR replaces + prunes). If content for
-    # this package is already on the prelive share, ASK before overwriting it. (The copy itself runs in a background
-    # runspace where a dialog can't be shown, so the confirmation must happen here, on the UI thread, up front.)
-    try {
-        $cfg = Get-SccmConfig
-        $dest = Join-Path (Join-Path $cfg.ContentShare $f.FullName) 'Content'
-        if (Test-Path $dest) {
-            $ans = [Windows.MessageBox]::Show("Content for '$($f.FullName)' already exists in PRELIVE:`n$dest`n`nCreating will MIRROR (replace) it. Continue?", 'Prelive content already exists', 'YesNo', 'Warning')
-            if ($ans -ne 'Yes') { $LblPublishLog.Text = 'Cancelled - prelive content left unchanged.'; $LblPublishLog.Foreground = '#DCDCAA'; return }
-        }
-    } catch {}
+    # SAFETY: creating MIRRORS the package Content into PRELIVE (robocopy /MIR replaces + prunes). The check below
+    # must never fail OPEN - see Confirm-PreliveMirror.
+    if (-not (Confirm-PreliveMirror -PackageName $f.FullName -Action 'Creating')) {
+        $LblPublishLog.Text = 'Cancelled - prelive content left unchanged.'; $LblPublishLog.Foreground = '#DCDCAA'; return
+    }
     Start-PublishJob -Target 'sccm' -Fields $f
 })
 $BtnCreateIntune.add_Click({ if ($script:State.PublishBase) { Start-PublishJob -Target 'intune' -Fields (Get-PublishFields) } })
 # Copy the CREATED package (c:\temp\<FullName>) to the Outgoing share at any time. Mirrors the folder, but ALWAYS
 # asks first if a package with that name is already there - nothing on the share is replaced without a yes.
 $BtnCopyOutgoing.add_Click({
+    Reset-PBShareAsk   # a cancel earlier must not silence this click
     $src = "$((Get-PBState).CreatedPath)"   # closure-safe
     if (-not $src -or -not (Test-Path $src)) { $LblCreateResult.Text = 'No created package yet - build one with Create first.'; $LblCreateResult.Foreground = '#F48771'; return }
     $outBase = if (Get-Command Get-Setting -EA SilentlyContinue) { Get-Setting 'OutgoingPath' } else { $null }
     if (-not $outBase)            { $LblCreateResult.Text = 'OutgoingPath is not set in settings.json.'; $LblCreateResult.Foreground = '#F48771'; return }
     # an Outgoing share that cannot be opened gets a sign-in prompt (Porsche) before giving up
-    $opened = $(if (Get-Command Connect-PBShare -EA SilentlyContinue) { Connect-PBShare -Path $outBase -Purpose 'the Outgoing share' } else { Test-Path $outBase })
+    $opened = $(if (Get-Command Connect-PBShare -EA SilentlyContinue) { Connect-PBShare -Path $outBase -Purpose 'the Outgoing share' -AllowPrompt } else { Test-Path $outBase })
     if (-not $opened) { $LblCreateResult.Text = "Outgoing path not reachable: $outBase"; $LblCreateResult.Foreground = '#F48771'; return }
     $leaf = Split-Path $src -Leaf
     $dest = Join-Path $outBase $leaf
@@ -6098,6 +6297,10 @@ $BtnCopyOutgoing.add_Click({
         if ($ans -ne 'Yes') { $LblCreateResult.Text = 'Cancelled - Outgoing copy left unchanged.'; $LblCreateResult.Foreground = '#DCDCAA'; return }
     }
     $LblCreateResult.Text = "Copying to Outgoing: $dest ..."; $LblCreateResult.Foreground = '#A0A8B4'
+    # robocopy of a whole package can run for minutes on a share - show the card and lock the button, or the
+    # window just sits there looking hung and people click again (control sweep, 24.09.2026)
+    $BtnCopyOutgoing.IsEnabled = $false
+    Show-PBBusy -Title 'Copying to Outgoing' -Detail "$leaf -> $outBase"
     try { (Get-PBMainWindow).Dispatcher.Invoke([action]{}, [System.Windows.Threading.DispatcherPriority]::Render) } catch {}
     try {
         $rc = '/MIR','/J','/MT:16','/R:2','/W:2','/NFL','/NDL','/NJH','/NJS','/NP'
@@ -6110,20 +6313,21 @@ $BtnCopyOutgoing.add_Click({
         # exit 8+ = files could not be copied - typically no write access on the share: offer a sign-in, copy once more
         if ($rcode -ge 8 -and (Get-Command Connect-PBShare -EA SilentlyContinue)) {
             Write-Log "Copy to Outgoing failed (robocopy exit $rcode) - offering a sign-in to the share." Warning
-            if (Connect-PBShare -Path $outBase -Purpose 'the Outgoing share' -Retry) { $rcode = & $copy }
+            if (Connect-PBShare -Path $outBase -Purpose 'the Outgoing share' -Retry -AllowPrompt) { $rcode = & $copy }
         }
         if ($rcode -ge 8) { $LblCreateResult.Text = "Copy to Outgoing FAILED (robocopy exit $rcode) - check the share / permissions."; $LblCreateResult.Foreground = '#F48771'; Write-Log "Copy to Outgoing failed (exit $rcode): $dest" Error }
         else { $LblCreateResult.Text = "Copied to Outgoing: $dest"; $LblCreateResult.Foreground = '#6A9955'; Write-Log "Copied package to Outgoing: $dest" Success }
     } catch {
         $why = "$($_.Exception.Message)"
         # a denied folder create / access error: offer a sign-in and try the copy once more
-        if ((Get-Command Test-PBAccessError -EA SilentlyContinue) -and (Test-PBAccessError $why) -and (Connect-PBShare -Path $outBase -Purpose 'the Outgoing share' -Retry)) {
+        if ((Get-Command Test-PBAccessError -EA SilentlyContinue) -and (Test-PBAccessError $why) -and (Connect-PBShare -Path $outBase -Purpose 'the Outgoing share' -Retry -AllowPrompt)) {
             try { $rcode = & $copy; if ($rcode -ge 8) { throw "robocopy exit $rcode" }; $LblCreateResult.Text = "Copied to Outgoing: $dest"; $LblCreateResult.Foreground = '#6A9955'; Write-Log "Copied package to Outgoing: $dest" Success; return }
             catch { $why = "$($_.Exception.Message)" }
         }
         $LblCreateResult.Text = "Copy to Outgoing failed: $why"; $LblCreateResult.Foreground = '#F48771'
-    }
-}.GetNewClosure())
+    } finally { Hide-PBBusy; $BtnCopyOutgoing.IsEnabled = $true }   # every exit, including the early return above
+})   # PLAIN handler: it calls script functions (Reset-PBShareAsk / Connect-PBShare / Test-PBAccessError /
+     # Get-PBState / Write-Log) and a .GetNewClosure() cannot see those - it failed with "not recognized" (24.09.2026)
 
 # LOCAL TEST CONSOLES: open an ELEVATED (admin) or SYSTEM/LocalSystem command prompt at the created package's Content
 # folder, so the packager can run Invoke-AppDeployToolkit.exe Install / Uninstall / Repair by hand at both privilege
@@ -6208,14 +6412,9 @@ $BtnUpdateContent.add_Click({
     # set (which copies NOTHING - it just refreshes the DPs), ASK before replacing existing prelive content. The
     # copy runs in a background runspace, so the confirmation must happen here on the UI thread, before the job.
     if (-not $f.RefreshOnly) {
-        try {
-            $cfg = Get-SccmConfig
-            $dest = Join-Path (Join-Path $cfg.ContentShare $f.FullName) 'Content'
-            if (Test-Path $dest) {
-                $ans = [Windows.MessageBox]::Show("This will MIRROR (REPLACE) the prelive content for '$($f.FullName)':`n$dest`n`nReally replace it?", 'Replace prelive content?', 'YesNo', 'Warning')
-                if ($ans -ne 'Yes') { $LblPublishLog.Text = 'Cancelled - prelive content left unchanged.'; $LblPublishLog.Foreground = '#DCDCAA'; return }
-            }
-        } catch {}
+        if (-not (Confirm-PreliveMirror -PackageName $f.FullName -Action 'This')) {
+            $LblPublishLog.Text = 'Cancelled - prelive content left unchanged.'; $LblPublishLog.Foreground = '#DCDCAA'; return
+        }
     }
     Start-SccmManageJob -Action 'content' -Fields $f
 })

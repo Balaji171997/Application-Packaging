@@ -1,0 +1,265 @@
+{
+  "_": "Installer technologies, how to recognise one, and what to try. Two sources: the team's OWN shipped corpus (Engine\\SwitchPriors.json, regenerate with Tools\\Build-SwitchPriors.ps1) and public vendor documentation. The corpus wins where the two disagree - it is what has actually worked here.",
+  "generated": "2026-09-25",
+  "howToUse": "Identify the technology from 'detect', then try 'install' in the order given. Corpus share tells you how common that technology is in our packages. If nothing installs silently, read 'ifItFails' before inventing new switches.",
+  "technologies": [
+    {
+      "name": "Windows Installer (MSI)",
+      "corpusShare": "57% of packages involve an MSI",
+      "detect": ["file extension .msi", "an .mst beside it means a transform is expected"],
+      "install": ["nothing for silence: OUR TEMPLATE ADDS IT. Start-ADTMsiProcess puts the config's 'REBOOT=ReallySuppress /QN' and /L*V logging on every msiexec call, and the test install adds the same. Give only TRANSFORMS= and real public properties."],
+      "inOurTemplate": "Start-ADTMsiProcess -Action Install -FilePath '<x>.msi' -Transforms '<x>.mst' [-AdditionalArgumentList 'PROP=VALUE']. Never /qn, /quiet, REBOOT=ReallySuppress or /L*v in the line, and never -ArgumentList - that REPLACES the template's defaults.",
+      "withTransform": "TRANSFORMS=\"<name>.mst\" - the tool resolves the path; the package script uses the bare name",
+      "uninstall": "Start-ADTMsiProcess -Action Uninstall -ProductCode '{ProductCode}' (the template adds its uninstall parameters); to test by hand: msiexec /x {ProductCode}",
+      "properties": "public properties are UPPERCASE and can be set on the command line (INSTALLDIR=, ALLUSERS=1, LICENSEKEY=)",
+      "notes": "Deterministic. If an MSI exists, prefer it over any wrapper EXE around it.",
+      "ifItFails": ["1603 = a generic failure, read the MSI log", "1619 = the package could not be opened, usually a wrong path", "1639 = invalid command line, usually a duplicated /i or an unquoted path with spaces"]
+    },
+    {
+      "name": "Inno Setup",
+      "corpusShare": "9% of installer launches",
+      "detect": ["the binary contains the string 'Inno Setup'", "a 'Setup' banner window with the Inno look", "/? shows the Inno switch list"],
+      "install": ["/VERYSILENT /SUPPRESSMSGBOXES /NORESTART", "/SILENT /SUPPRESSMSGBOXES /NORESTART", "/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART"],
+      "corpusTop": "/NORESTART /SUPPRESSMSGBOXES /VERYSILENT /LOADINF=<answers.inf>",
+      "uninstall": "the unins000.exe in the install folder, with /VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
+      "responseFile": "record with /SAVEINF=\"file.inf\", replay with /LOADINF=\"file.inf\" - this is how our corpus drives the awkward ones",
+      "extra": ["/DIR=\"path\" sets the install folder", "/LOG=\"file\" writes a setup log", "/TASKS= and /COMPONENTS= choose optional parts"],
+      "ifItFails": ["exit 2 = the user (or a suppressed prompt) cancelled", "try /SP- to skip the 'this will install...' prompt"]
+    },
+    {
+      "name": "NSIS (Nullsoft)",
+      "corpusShare": "15% of installer launches - the most common EXE technology here",
+      "detect": ["the binary contains 'Nullsoft' or 'NullsoftInst'", "/? usually does nothing at all - NSIS has no built-in help"],
+      "install": ["/S", "/S /D=C:\\Path (D must be LAST and unquoted, even with spaces)", "/AllUsers /S"],
+      "corpusTop": "/S",
+      "uninstall": "Uninstall.exe /S (often needs _?=<installdir> to run synchronously)",
+      "notes": "The switch is a CAPITAL S. Lowercase /s does nothing. Author-defined switches are common and undocumented; strings in the binary sometimes reveal them.",
+      "ifItFails": ["NSIS returns 0 even when it did nothing - always confirm with the snapshot, never with the exit code", "a wrapper may pass switches to an inner installer instead"]
+    },
+    {
+      "name": "InstallShield (InstallScript)",
+      "corpusShare": "5% of installer launches",
+      "detect": ["the binary contains 'InstallShield'", "a setup.iss or ISSetupPrerequisites folder beside it", "/? shows the InstallShield switch list"],
+      "install": ["/s /f1\"<path>\\setup.iss\" /f2\"<path>\\setup.log\"", "/s /v\"/qn\" (Basic MSI projects only)"],
+      "corpusTop": "/s /f1\"...\"",
+      "uninstall": "setup.exe /s /f1\"uninstall.iss\" /uninst, or the ARP UninstallString with /s",
+      "responseFile": "RECORD IT: setup.exe /r /f1\"C:\\path\\setup.iss\" walks the wizard once and writes the answers; then /s /f1\"same file\" replays it silently. This is the single most useful trick for an InstallShield EXE, and it needs a human to walk the wizard once.",
+      "notes": "Response files only exist for InstallScript projects. A Basic MSI project wrapped in setup.exe takes /s /v\"/qn\" and passes properties through /v.",
+      "ifItFails": ["-3 in setup.log = the response file does not match this version - re-record it", "check setup.log ResultCode, not the exit code"]
+    },
+    {
+      "name": "WiX Burn bundle / Microsoft bootstrapper",
+      "corpusShare": "12% of installer launches",
+      "detect": ["the binary contains 'wixburn' or a 'Bundle' manifest", "/? shows the Burn help", "Microsoft redistributables behave the same way"],
+      "install": ["/quiet /norestart", "/passive /norestart (shows progress only)", "/install /quiet /norestart"],
+      "corpusTop": "/q /norestart /log <file>",
+      "uninstall": "the same bundle exe with /uninstall /quiet /norestart",
+      "extra": ["/log \"file\" writes a full log", "/layout \"dir\" downloads the payloads for an offline package - useful when the vendor only ships a web installer"],
+      "ifItFails": ["3010 = success, a reboot is pending - treat as success and suppress the reboot", "a web bootstrapper with no network will fail: use /layout first"]
+    },
+    {
+      "name": "Advanced Installer",
+      "corpusShare": "seen inside vendor-specific launches",
+      "detect": ["the binary contains 'Advanced Installer'", "often wraps an MSI"],
+      "install": ["/exenoui /qn", "/exenoui /exenoupdates /qn"],
+      "corpusTop": "/exenoui /exenoupdates /qn",
+      "uninstall": "the ARP UninstallString, or the MSI product code with /qn",
+      "notes": "It is an MSI wrapper: extracting the MSI usually gives a cleaner package."
+    },
+    {
+      "name": "Qt Installer Framework",
+      "corpusShare": "occasional (engineering tools)",
+      "detect": ["a 'maintenancetool.exe' appears after install", "the binary contains 'QtInstallerFramework'"],
+      "install": ["--accept-licenses --default-answer --confirm-command install", "in older versions: --script <qs file> --silent"],
+      "uninstall": "maintenancetool.exe --accept-licenses --default-answer --confirm-command purge",
+      "notes": "Newer versions need the verb 'install' explicitly. A control script (.qs) drives anything unusual."
+    },
+    {
+      "name": "Squirrel / electron-builder (NSIS variant)",
+      "corpusShare": "occasional (modern desktop apps)",
+      "detect": ["a per-user install into %LOCALAPPDATA%", "an 'app-<version>' folder", "Update.exe beside the app"],
+      "install": ["/S", "--silent", "/allusers /S for the machine-wide electron-builder variant"],
+      "notes": "Frequently PER-USER by design. A per-user installer cannot be deployed machine-wide as-is - flag it rather than forcing it.",
+      "ifItFails": ["if it installs into a user profile, the package needs Active Setup or a different vendor build"]
+    },
+    {
+      "name": "InstallAware",
+      "detect": ["the binary contains 'InstallAware'"],
+      "install": ["/s", "/s /l=1033"],
+      "notes": "Rare here; behaves like a self-extractor around an MSI."
+    },
+    {
+      "name": "Self-extractor (7-Zip / WinRAR / IExpress SFX)",
+      "corpusShare": "common as an outer wrapper",
+      "detect": ["7-Zip SFX contains '7z' markers", "WinRAR SFX contains 'WinRAR'", "the payload appears in %TEMP% while it runs"],
+      "install": ["7-Zip SFX: -y -o\"<dir>\"", "WinRAR SFX: /S", "IExpress: /Q:A /T:<dir>"],
+      "extractInstead": "Extract it and package what is inside - that is almost always the better package. 7z x \"setup.exe\" -o\"<dir>\" works for many SFX types.",
+      "notes": "If extraction reveals an MSI, package the MSI."
+    },
+    {
+      "name": "MSIX / AppX",
+      "detect": [".msix, .msixbundle, .appx extension"],
+      "install": ["Add-AppxProvisionedPackage -Online -PackagePath <file> -SkipLicense (machine-wide)"],
+      "uninstall": "Remove-AppxProvisionedPackage -Online -PackageName <name>",
+      "notes": "A different deployment model - it is not an EXE/MSI package. Say so rather than forcing it into the usual shape."
+    },
+    {
+      "name": "Java / IzPack",
+      "detect": ["a .jar payload", "the binary mentions 'IzPack'"],
+      "install": ["java -jar installer.jar auto-install.xml"],
+      "responseFile": "record with java -jar installer.jar -options-record auto-install.xml",
+      "notes": "Needs a JRE present; that is a prerequisite the order must cover."
+    },
+    {
+      "name": "Vendor-specific / unknown",
+      "corpusShare": "37% of installer launches in our corpus - the single biggest group",
+      "detect": ["nothing matches the signatures above"],
+      "install": ["run <installer> /? and read what it prints - this is the first thing to try, and it costs seconds", "then the generic families in order: /S, /silent, /quiet /norestart, -q, --silent, /s /v\"/qn\""],
+      "notes": "Our own corpus is full of vendor-specific verbs (--install --ignorependingreboot --noreboot --nogui, -i silent, change --prod_key ... --lic_method). When a vendor has been packaged here before, the catalogue already knows its command - look there before experimenting.",
+      "ifItFails": ["ask the installer: /?, /help, --help, -h", "look for a vendor deployment guide in the order's documents", "an unattended install may need a response/answer file rather than a switch", "some vendors only support silent install via their own admin tool"]
+    }
+  ],
+  "discoveringAnUnknownExe": {
+    "_": "When nothing matches a known signature, work down this ladder. Steps 1-4 cost seconds and the agent can do them itself through the tool; 5-6 need a human, so ask with the exact command.",
+    "steps": [
+      {
+        "step": 1,
+        "what": "Ask the installer",
+        "how": "run it with /? then /help then --help then -h and READ the output. Most vendor installers document themselves.",
+        "who": "agent"
+      },
+      {
+        "step": 2,
+        "what": "Read the binary's own markers",
+        "how": "look for the technology strings inside the file - 'Nullsoft'/'NullsoftInst' (NSIS), 'Inno Setup', 'InstallShield', 'wixburn', 'Advanced Installer', 'QtInstallerFramework', '7-Zip', 'WinRAR'. Also the file version info (CompanyName, ProductName, OriginalFilename) and the digital signature.",
+        "who": "agent"
+      },
+      {
+        "step": 3,
+        "what": "Look at what sits beside it",
+        "how": "setup.iss or ISSetupPrerequisites means InstallShield with a response file; an .mst means a transform is expected; a .msi beside the .exe means the exe is probably just a bootstrapper.",
+        "who": "agent"
+      },
+      {
+        "step": 4,
+        "what": "Look inside it",
+        "how": "many installers are self-extractors: extracting reveals an MSI or a nested installer, which can then be asked with /? in turn. Only trust the extraction if what comes out is coherent.",
+        "who": "agent"
+      },
+      {
+        "step": 5,
+        "what": "Check what the world already knows",
+        "how": "the vendor's own deployment documentation first; then a switch database such as silentinstallhq.com (50,000+ applications, with install/uninstall commands and PSADT examples); then the WinGet manifests on GitHub, where every package must install from a command line. NOTE: the agent has no internet access, so this step is a request to a human - name the application and version and say what you need back.",
+        "who": "human"
+      },
+      {
+        "step": 6,
+        "what": "Record a response file",
+        "how": "when the selections cannot be expressed as switches at all. InstallShield: setup.exe /r /f1\"C:\\path\\setup.iss\" to record, then /s /f1\"...\" to replay. Inno: /SAVEINF=\"file.inf\" then /LOADINF=\"file.inf\". Somebody has to walk the wizard once, making exactly the choices the order specifies.",
+        "who": "human"
+      }
+    ]
+  },
+  "parameterIntents": {
+    "_": "A silent switch is only the FIRST of several things the command line has to achieve. Work through every intent below for the technology in hand, decide which ones this installer supports, and prove the composed command on the machine. A parameter that is not supported is not a failure - say so and carry the intent another way (a property, a registry value the package writes afterwards, a config file).",
+    "intents": [
+      {
+        "intent": "silence",
+        "why": "no window, no interaction, no waiting for a click",
+        "byTechnology": {
+          "MSI": "supplied by our template - Start-ADTMsiProcess adds REBOOT=ReallySuppress /QN itself; add nothing",
+          "Inno Setup": "/VERYSILENT (/SILENT still shows a progress window)",
+          "NSIS": "/S - case sensitive, and it must come before other arguments",
+          "InstallShield": "/s for the setup.exe, and /v\"/qn\" to pass silence through to the MSI underneath",
+          "WiX Burn": "/quiet or /silent",
+          "InstallAnywhere / izPack": "-i silent, usually with an installer.properties file",
+          "Squirrel": "--silent",
+          "MSIX / APPX": "no switch - Add-AppxProvisionedPackage is already silent"
+        }
+      },
+      {
+        "intent": "suppressPrompts",
+        "why": "a silent install can still throw up a message box, a 'this will install X, continue?' prompt, or a 'restart now?' question, and any one of them stops an unattended deployment dead",
+        "byTechnology": {
+          "MSI": "usually unnecessary (the template runs it /QN), but MSIRESTARTMANAGERCONTROL=Disable stops the restart-manager dialog",
+          "Inno Setup": "/SP- skips the 'This will install...' confirmation, /SUPPRESSMSGBOXES answers message boxes with their default. Use BOTH with /VERYSILENT.",
+          "NSIS": "no standard switch - if a prompt survives /S the installer is not properly silent, which is a route-4 or route-8 signal",
+          "InstallShield": "/sms can be needed so the launcher waits, and the /v\"...\" payload carries the MSI's own quiet flags"
+        }
+      },
+      {
+        "intent": "noRestart",
+        "why": "THE PACKAGE decides about restarting, never the vendor's installer. An installer that reboots mid-deployment can leave the rest of the task sequence unrun and the user logged out without warning.",
+        "byTechnology": {
+          "MSI": "supplied by our template (REBOOT=ReallySuppress in config.psd1) - add nothing; and /norestart is NOT an msiexec switch",
+          "Inno Setup": "/NORESTART",
+          "NSIS": "no standard switch; some scripts honour /NCRC or a custom one - check the help output",
+          "InstallShield": "/norestart, passed through with /v\"REBOOT=ReallySuppress\" as well when an MSI is underneath",
+          "WiX Burn": "/norestart"
+        }
+      },
+      {
+        "intent": "logging",
+        "why": "when it fails at a customer, the log is the only evidence",
+        "byTechnology": {
+          "MSI": "supplied by our template (/L*V into the package log folder) - add nothing",
+          "Inno Setup": "/LOG=\"<file>\"",
+          "InstallShield": "/f2\"<file>\"",
+          "WiX Burn": "/log \"<file>\""
+        }
+      },
+      {
+        "intent": "noDesktopIconOrLaunch",
+        "why": "a desktop icon nobody asked for, or the application launching at the end of a silent install, are both defects in a deployed package",
+        "byTechnology": {
+          "MSI": "often a public property - DESKTOPSHORTCUT=0, INSTALLDESKTOPSHORTCUT=\"\", LAUNCHPRODUCT=0. Read the MSI's Property table rather than guessing.",
+          "Inno Setup": "/MERGETASKS=\"!desktopicon\" - the leading ! removes that task",
+          "NSIS": "installer-specific, if anything"
+        }
+      },
+      {
+        "intent": "disableAutoUpdate",
+        "why": "70% of vendors ship an updater, and an unmanaged one fights the deployment: it changes the version behind our back and breaks detection",
+        "byTechnology": {
+          "MSI": "look for a property first (DISABLE_UPDATES=1, AUTOUPDATE=0, UPDATEMODE=Manual) - a property at install time is cleaner than a repair afterwards",
+          "Inno Setup / NSIS": "rarely a switch - expect to do it afterwards, by registry value, or by disabling the service or scheduled task the install created",
+          "any": "autorunsc lists what was actually created, so the thing to disable is found rather than guessed at"
+        }
+      },
+      {
+        "intent": "suppressTelemetryAndFirstRunPrompts",
+        "why": "the 'send usage data to the vendor?' box, the marketing sign-up, the survey and the first-run wizard all appear for the USER, after the install, where the installer's switches cannot reach. They are a defect just the same.",
+        "byTechnology": {
+          "any": "a machine-wide policy value where the vendor documents one (Mozilla policies.json, an HKLM policy key), otherwise a per-user default the package seeds through Invoke-ADTAllUsersRegistryAction or the Active Setup stub. The evaluation's first-run delta shows which key or file the prompt reads."
+        }
+      },
+      {
+        "intent": "licensingAndServer",
+        "why": "48% of our packages carry a licence detail, and a missing one turns a working install into a broken application",
+        "byTechnology": {
+          "MSI": "a public property (LICENSEKEY=, SERIALNUMBER=, LICSERVER=)",
+          "any": "otherwise a licence file placed by the package, or a server name written to the registry after the install"
+        }
+      }
+    ]
+  },
+  "rebootPolicy": {
+    "_": "House rule: the application's own installer must never restart the machine. Suppress it in the command line, and only the PACKAGE may ask for a restart, at the very end.",
+    "rules": [
+      "ALWAYS suppress the reboot in the install and uninstall commands - for an MSI our template already does it (REBOOT=ReallySuppress on every Start-ADTMsiProcess call); for an EXE use /NORESTART or the technology's equivalent.",
+      "Exit codes 3010 and 1641 mean 'succeeded, a restart is pending'. They are successes; the package records them, it does not fail on them.",
+      "A package-level restart is the EXCEPTION and needs a named reason. The reasons that qualify: the uninstall leaves files locked and the next install fails without it; a shortcut or file association does not work until the shell is restarted; a driver, service or agent the application depends on is not running until a restart; the vendor documents a mandatory restart.",
+      "Wanting to be safe is not a reason. If the reason cannot be named in one sentence, there is no package-level restart.",
+      "Where the team has an extension for it (Set-MTBReboot), that is what carries a package-level restart - at the END of the phase, not in the middle of the install."
+    ]
+  },
+  "universalRules": [
+    "Exit code 0 does not mean it installed. NSIS in particular returns 0 for doing nothing. The snapshot is the proof.",
+    "3010 and 1641 mean success with a pending reboot - treat as success, suppress the reboot.",
+    "1603 is a generic installer failure; find the installer's own log before guessing.",
+    "1618 means another installation is in progress - wait and retry rather than changing the command.",
+    "A window that waits for a click is not silent, even if the install eventually completes.",
+    "If an EXE wraps an MSI, extracting the MSI usually produces a cleaner, more reliable package - but only when the extraction is trustworthy.",
+    "A per-user installer cannot be made machine-wide by a switch. Recognise it and say so."
+  ]
+}

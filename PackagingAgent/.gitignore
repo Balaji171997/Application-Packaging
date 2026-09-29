@@ -1,0 +1,18 @@
+﻿# Secrets - the API key and client secret live here, never in the repo.
+agent.settings.json
+
+# Sysinternals tools are free to USE but their licence does not allow
+# redistribution, so they stay on disk and out of the repo.
+# Download them from https://learn.microsoft.com/sysinternals on each machine.
+Tools/Procmon.exe
+Tools/Procmon64.exe
+Tools/Procmon64a.exe
+Tools/autorunsc.exe
+Tools/autorunsc64.exe
+Tools/Autoruns*.exe
+Tools/*.pml
+Tools/Eula.txt
+
+# Run output
+Out/
+*.log

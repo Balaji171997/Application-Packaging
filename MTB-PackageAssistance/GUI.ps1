@@ -1377,7 +1377,25 @@ function Set-PBProgress {
     param([int]$Percent = -1, [string]$Status = '')
     try { if ($Status) { $script:Busy.Detail = $Status }; $script:Busy.Percent = $Percent } catch {}
 }
-function Hide-PBBusy { try { $script:Busy.Show = $false; $script:Busy.Percent = -1 } catch {} }
+function Hide-PBBusy { try { $script:Busy.Show = $false; $script:Busy.Percent = -1; $script:BusySuspend = 0 } catch {} }
+
+# THE BUSY CARD MUST STEP ASIDE FOR A QUESTION. It lives on its own STA thread and is Topmost, so it floats over
+# ANY dialog - including "which source do you want?" when several installers are found. The packager then sees a
+# progress card covering the window and has to drag the window to reach the picker (23.09.2026). So every modal
+# suspends it and the card comes back when the dialog closes. Counted, because dialogs nest.
+$script:BusySuspend = 0
+function Suspend-PBBusy {
+    try { if ($script:Busy -and $script:Busy.Show) { $script:BusySuspend++; $script:Busy.Show = $false; Start-Sleep -Milliseconds 60 } } catch {}
+}
+function Resume-PBBusy {
+    try { if ($script:BusySuspend -gt 0) { $script:BusySuspend--; if ($script:BusySuspend -eq 0) { $script:Busy.Show = $true } } } catch {}
+}
+# Run a block with the busy card out of the way (for a MessageBox, which has no window object to hook).
+function Invoke-PBWithoutBusy {
+    param([scriptblock]$Action)
+    Suspend-PBBusy
+    try { & $Action } finally { Resume-PBBusy }
+}
 Start-PBBusyHost
 # While the main thread is blocked, Windows would otherwise paint "(Not Responding)" into the title and grey the
 # window - alarming, and wrong: the busy card says exactly what is happening. Standard call for tools that block
@@ -1776,6 +1794,21 @@ function Get-CurrentReuseReport {
 # Modal popup: ONLY what needs the packager, each item with a "Confirmed" tick that takes it out of the open count
 # everywhere. What the tool did automatically (predecessor reuse) sits behind a collapsed expander - people skip a
 # list that mixes done and to-do, and then miss the to-do. Re-scans live.
+function Confirm-PreliveMirror {
+    param([string]$PackageName, [string]$Action = 'This')
+    $ask = { param($t, $c) ([Windows.MessageBox]::Show($t, $c, 'YesNo', 'Warning') -eq 'Yes') }
+    $dest = ''
+    try { $cfg = Get-SccmConfig; $dest = Join-Path (Join-Path $cfg.ContentShare $PackageName) 'Content' }
+    catch {
+        Write-Log "Prelive content check could not run: $($_.Exception.Message)" Warning
+        return (& $ask "The prelive content share could not be read from settings:`n$($_.Exception.Message)`n`n$Action will MIRROR (replace and prune) whatever is already there. Continue anyway?" 'Prelive content could not be checked')
+    }
+    if (Test-Path -LiteralPath $dest) {
+        return (& $ask "Content for '$PackageName' already exists in PRELIVE:`n$dest`n`n$Action will MIRROR (replace) it. Continue?" 'Prelive content already exists')
+    }
+    return $true
+}
+
 function Show-ReviewPopup {
     $items   = @(Get-CombinedReview)                 # everything (open + confirmed)
     $report  = Get-CurrentReuseReport
@@ -2262,7 +2295,13 @@ function Suggest-Predecessor {
     $key = "$($p.Vendor)|$($p.AppName)"
     if ($script:LastPredScanKey -eq $key) { return }
     $script:LastPredScanKey = $key
-    $roots = if (Get-Command Get-PredecessorRoots -EA SilentlyContinue) { @(Get-PredecessorRoots) } else { @(Get-Setting PredecessorPath) }
+    # Worked out ONCE per session: an unreachable root costs seconds per Test-Path, and this hint runs on every
+    # package name the packager types. The paths come from settings.json, which is read at startup. (23.09.2026)
+    if ($null -eq $script:PredQuietRoots) {
+        try { $script:PredQuietRoots = @(if (Get-Command Get-PredecessorRoots -EA SilentlyContinue) { Get-PredecessorRoots } else { Get-Setting PredecessorPath }) } catch { $script:PredQuietRoots = @() }
+        if (-not $script:PredQuietRoots.Count) { Write-Log 'Predecessor hint: no reachable live-share root - the hint stays off (Find predecessor still works).' }
+    }
+    $roots = @($script:PredQuietRoots)
     if (-not $roots.Count) { return }
     try {
         $allHits = New-Object System.Collections.Generic.List[object]
@@ -2285,6 +2324,7 @@ function Stage-SourceLocal {
     if (-not $Folder -or -not (Test-Path -LiteralPath $Folder)) { return $Folder }
     if ($Folder -notmatch '^\\\\') { return $Folder }                 # only stage UNC / network sources
     if ((Get-Setting 'StageSourceLocal' $true) -eq $false) { return $Folder }   # opt-out via settings.json
+    $ownCard = $false   # set once the card is ours; the finally below is what guarantees it comes down
     try {
         $leaf = Split-Path $Folder -Leaf
         $dest = Join-Path (Get-WorkPath 'Source') $leaf
@@ -2296,13 +2336,11 @@ function Stage-SourceLocal {
         Copy-Item -LiteralPath $Folder -Destination $dest -Recurse -Force -ErrorAction Stop
         if (Get-Command Unblock-PBPath -EA SilentlyContinue) { Unblock-PBPath -Path $dest }   # strip Mark-of-the-Web
         Write-Log "Staged source locally (one-time): $Folder -> $dest" Success
-        if ($ownCard) { Hide-PBBusy }
         return $dest
     } catch {
-        if ($ownCard) { Hide-PBBusy }
         Write-Log "Could not stage source locally ($($_.Exception.Message)) - working directly from the share." Warning
         return $Folder
-    }
+    } finally { if ($ownCard) { Hide-PBBusy } }   # the ONLY place the card comes down: every exit passes here
 }
 
 function Set-ResolvedSource {
@@ -2331,7 +2369,7 @@ function Set-ResolvedSource {
     # commands are kept (with the version/filename/ProductCode swaps) and must be reviewed/aligned.
     $warn = Get-SourceWarning
     if ($warn -and $warn -match 'Source (TYPE|STRUCTURE)|MULTI-COMPONENT') {
-        [System.Windows.MessageBox]::Show($warn, 'Source differs from the predecessor', 'OK', 'Warning') | Out-Null
+        Invoke-PBWithoutBusy { [System.Windows.MessageBox]::Show($warn, 'Source differs from the predecessor', 'OK', 'Warning') | Out-Null }
     }
 }
 
@@ -2969,6 +3007,12 @@ $LstAnchors.add_SelectionChanged({
     $script:AeEditor.TextArea.Focus() | Out-Null
 })
 $BtnRebuild.add_Click({
+    if (-not $script:State.Parsed -or -not $script:State.Parsed.IsValid) {
+        [Windows.MessageBox]::Show("Nothing to rebuild from yet.
+
+Enter the package name on the Info step (and choose the installer on Installation); the script is then built from those.", 'Nothing to rebuild', 'OK', 'Information') | Out-Null
+        return
+    }
     $script:State.ScriptText = Build-Step3Script   # discard manual edits, rebuild from inputs
     Populate-Step3
     Update-ReviewButton
@@ -2977,7 +3021,15 @@ $BtnRebuild.add_Click({
     if ($BtnSaveScript) { $BtnSaveScript.IsEnabled = $false }
     if ($LblScriptHdr) { $LblScriptHdr.Text = 'Invoke-AppDeployToolkit.ps1'; $LblScriptHdr.Foreground = '#E7E9ED' }
 })
-$BtnReview.add_Click({ Show-ReviewPopup })
+$BtnReview.add_Click({
+    if (-not "$($script:State.ScriptText)".Trim()) {
+        [Windows.MessageBox]::Show("There is nothing to review yet - the script has not been built.
+
+Open the Editor step (it builds the script from the Info and Installation steps), or press 'Rebuild from inputs'.", 'Nothing to review', 'OK', 'Information') | Out-Null
+        return
+    }
+    Show-ReviewPopup
+})
 
 # LOAD / SAVE an existing .ps1 directly in the editor - so after testing a package you can tweak its script and save
 # WITHOUT opening the file externally. Save is enabled only once a file is Loaded (so we only ever overwrite the file
@@ -3469,7 +3521,11 @@ $BtnPred.add_Click({
 # (The "View predecessor install / uninstall" button was removed on request - the sequence is still available as
 #  the tooltip on the predecessor line, via Format-PredecessorSeq.)
 $BtnFetch.add_Click({
-    if (-not (Parse-Current)) { return }
+    # say why nothing happens instead of ignoring the click (control sweep, 24.09.2026)
+    if (-not (Parse-Current)) {
+        $LblSrc.Text = 'Enter a valid package name first (Vendor_App_Arch_Version-Release_Lang) - the source is looked up by that name.'
+        $LblSrc.Foreground = '#E0BE7C'; $TxtPkg.Focus() | Out-Null; return
+    }
     # SYNCHRONOUS (reverted from async - same closure-scope reliability reasons as BtnPred). A short share walk.
     $BtnFetch.IsEnabled = $false
     $LblSrc.Text = Get-PBSearchLabel -For 'Source'; $LblSrc.Foreground = '#B7BEC8'
@@ -4498,6 +4554,12 @@ function Set-PBDialogChrome {
         $Window.Content = $g
         if ($Window.SizeToContent -eq 'Manual' -and $Window.Height -gt 0) { $Window.Height = $Window.Height + 42 }
         if ($PrimaryName) { $pb = $Window.FindName($PrimaryName); if ($pb -is [Windows.Controls.Button]) { try { $pb.Style = $script:Win.FindResource('PbAccentButton') } catch {} } }
+        # Chrome is applied immediately before ShowDialog, so this is the one place that knows a modal is coming:
+        # take the busy card down for it and bring it back when the dialog closes.
+        if (Get-Command Suspend-PBBusy -ErrorAction SilentlyContinue) {
+            Suspend-PBBusy
+            $Window.Add_Closed({ try { Resume-PBBusy } catch {} })
+        }
     } catch { Write-Log "Dialog chrome not applied ($Title): $($_.Exception.Message)" Warning }
 }
 function New-PBCaption {
@@ -5673,14 +5735,9 @@ $BtnCreateSccm.add_Click({
     # SAFETY: creating MIRRORS the package Content into PRELIVE (robocopy /MIR replaces + prunes). If content for
     # this package is already on the prelive share, ASK before overwriting it. (The copy itself runs in a background
     # runspace where a dialog can't be shown, so the confirmation must happen here, on the UI thread, up front.)
-    try {
-        $cfg = Get-SccmConfig
-        $dest = Join-Path (Join-Path $cfg.ContentShare $f.FullName) 'Content'
-        if (Test-Path $dest) {
-            $ans = [Windows.MessageBox]::Show("Content for '$($f.FullName)' already exists in PRELIVE:`n$dest`n`nCreating will MIRROR (replace) it. Continue?", 'Prelive content already exists', 'YesNo', 'Warning')
-            if ($ans -ne 'Yes') { $LblPublishLog.Text = 'Cancelled - prelive content left unchanged.'; $LblPublishLog.Foreground = '#DCDCAA'; return }
-        }
-    } catch {}
+    if (-not (Confirm-PreliveMirror -PackageName $f.FullName -Action 'Creating')) {
+        $LblPublishLog.Text = 'Cancelled - prelive content left unchanged.'; $LblPublishLog.Foreground = '#DCDCAA'; return
+    }
     Start-PublishJob -Target 'sccm' -Fields $f
 })
 $BtnCreateIntune.add_Click({
@@ -5718,7 +5775,9 @@ $BtnCopyOutgoing.add_Click({
         else { $LblCreateResult.Text = "Copied to Outgoing: $dest"; $LblCreateResult.Foreground = '#6A9955'; Write-Log "Copied package to Outgoing: $dest" Success }
     } catch { $LblCreateResult.Text = "Copy to Outgoing failed: $($_.Exception.Message)"; $LblCreateResult.Foreground = '#F48771' }
     finally { Hide-PBBusy }
-}.GetNewClosure())
+})   # PLAIN handler: a .GetNewClosure() cannot see script functions - this one calls Get-PBState /
+     # Get-Setting / Write-Log / Get-PBMainWindow and threw "Get-PBState is not recognized" on every click (found by
+     # the control sweep, 24.09.2026)
 
 # Copy the CREATED package to SharePoint: {Vendor}/{App}/{Version}_{Release}/SCCM/{Name}/. The ONE write this tool
 # makes to SharePoint, so it is deliberately careful: never signs in from here (that hangs - startup only), asks
@@ -5839,14 +5898,9 @@ $BtnUpdateContent.add_Click({
     # set (which copies NOTHING - it just refreshes the DPs), ASK before replacing existing prelive content. The
     # copy runs in a background runspace, so the confirmation must happen here on the UI thread, before the job.
     if (-not $f.RefreshOnly) {
-        try {
-            $cfg = Get-SccmConfig
-            $dest = Join-Path (Join-Path $cfg.ContentShare $f.FullName) 'Content'
-            if (Test-Path $dest) {
-                $ans = [Windows.MessageBox]::Show("This will MIRROR (REPLACE) the prelive content for '$($f.FullName)':`n$dest`n`nReally replace it?", 'Replace prelive content?', 'YesNo', 'Warning')
-                if ($ans -ne 'Yes') { $LblPublishLog.Text = 'Cancelled - prelive content left unchanged.'; $LblPublishLog.Foreground = '#DCDCAA'; return }
-            }
-        } catch {}
+        if (-not (Confirm-PreliveMirror -PackageName $f.FullName -Action 'This')) {
+            $LblPublishLog.Text = 'Cancelled - prelive content left unchanged.'; $LblPublishLog.Foreground = '#DCDCAA'; return
+        }
     }
     Start-SccmManageJob -Action 'content' -Fields $f
 })
