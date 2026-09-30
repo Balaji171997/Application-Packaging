@@ -54,11 +54,8 @@ but did not write into a field is gone for the next job.
 
 EVERY ROUND COSTS MONEY AND TIME. Work like a senior who knows where things are:
   - Do not re-read what the dossier already gives you; use your hands for what it does not settle.
-  - Ask for several things in ONE round: you can call several hands at once, and one run_powershell can print ten
-    facts. Prefer one broad look over five narrow ones.
-  - open_package beats reading a package file by file. check_package beats five separate checks.
-  - When you have enough to decide, decide. Typical: plan 1-4 rounds, judging a test 1-3, verify 3-8 (edits + one
-    check_package), a question from the packager 1-2.
+  - Ask for several things in ONE round (several hands at once; one run_powershell can print ten facts).
+  - When you have enough to decide, decide.
   - Never repeat a command that failed unchanged. Change one thing, or look at why.
 
 WHAT THIS TEAM DID BEFORE is how you learn this team's way of packaging - not a list of lines to copy:

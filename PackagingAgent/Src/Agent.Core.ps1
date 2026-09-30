@@ -2229,7 +2229,12 @@ function Invoke-AgentInstallRun {
             # WHAT IS ON SCREEN that belongs to this install: the family's windows, and any window of a process
             # started since we pressed go
             $wins = @(Get-AgentVisibleWindows | Where-Object {
-                        $ours.ContainsKey([int]$_.id) -or -not $before["$($_.hwnd)"] })
+                        $ours.ContainsKey([int]$_.id) -or (-not $before["$($_.hwnd)"] -and (
+                            # a new window counts when its process was started during this install, or when it is a
+                            # console (Windows Terminal hosts an installer's console in its own, older process) - a new
+                            # window of some unrelated program that was already running does not
+                            ($tab.ContainsKey([int]$_.id) -and $tab[[int]$_.id].CreationDate -and $tab[[int]$_.id].CreationDate -ge $t0.AddSeconds(-2)) -or
+                            "$($_.class)" -match '^(ConsoleWindowClass|CASCADIA_HOSTING_WINDOW_CLASS)$')) })
             # a NEW window of a process that is itself new belongs to the install; a new window of an old process (a
             # console tab in Windows Terminal) is watched and closed, but that process is never counted as ours
             foreach ($w in $wins) { if ($tab.ContainsKey([int]$w.id) -and $tab[[int]$w.id].CreationDate -and $tab[[int]$w.id].CreationDate -ge $t0.AddSeconds(-2)) { $ours[[int]$w.id] = $true } }
