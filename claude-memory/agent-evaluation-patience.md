@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: feedback
   originSessionId: a96ed47a-37eb-4079-887f-9966cf709555
-  modified: 2026-09-30T02:05:25.284Z
+  modified: 2026-09-30T02:45:12.591Z
 ---
 
 From the user's field tests and follow-ups (28-29 Sep 2026):
@@ -33,6 +33,11 @@ From the user's field tests and follow-ups (28-29 Sep 2026):
 - predecessor exists and source partly matches -> first reason WHY it was packaged that way; deviate only with a reason
 - "we are creating helping hands and instructions - the AI does the work; a tool only where it makes a job easier,
   and the AI keeps the freedom to do it itself"
+- **"no actions directly from repository"** (30 Sep): a share is only LISTED or COPIED FROM - copy local, work on the
+  copy, remove it when done. Applies to the agent's own code AND the AI's run_powershell (Use-LocalCopy /
+  Test-AgentOpShareUse / FromShares folder)
+- a missing prerequisite must NOT block: test without it (an error decides), ask for it; given later -> test with it;
+  still failing with a captured predecessor MSI -> build as per predecessor, ask a human to capture, still hand over
 
 **Why:** a 12 s "window = not silent" rule, bare-msiexec trials and a fresh rebuild lost the predecessor's config and
 method on real orders.

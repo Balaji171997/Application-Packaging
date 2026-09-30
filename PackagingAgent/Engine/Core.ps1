@@ -86,6 +86,31 @@ function Test-NetworkPath {
 }
 function Get-LocalStageRoot { Join-Path $env:LOCALAPPDATA 'PackageAssistance' }
 
+# NOTHING IS DONE ON A SHARE. A file on a share is copied to the local work folder, worked on there, and the copy is
+# removed when the work is done - it is never opened by an MSI reader, run, probed or extracted where it lies. The
+# shares are the team's repositories: a reader holding a handle there locks or damages a library file. On a real order
+# the product code of last version's MSI was read straight off the live library. Listing a folder is not "doing".
+function Get-ShareCopyRoot { Get-WorkPath 'FromShares' }
+function Use-LocalCopy {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][scriptblock]$Do)
+    if (-not (Test-NetworkPath $Path)) { return (& $Do $Path) }
+    $dir = Join-Path (Get-ShareCopyRoot) ([guid]::NewGuid().ToString('N').Substring(0, 10))
+    try {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        $local = Join-Path $dir (Split-Path -Leaf $Path)
+        Copy-Item -LiteralPath $Path -Destination $local -Force -ErrorAction Stop
+        return (& $Do $local)
+    } finally {
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $dir) { [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+# Everything copied from the shares for this order goes when the order is done (and at the start of the next one).
+function Clear-ShareCopies {
+    $root = Join-Path (Get-WorkRoot) 'FromShares'
+    if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 # Copy a single file only when the source is NEWER or the destination is missing (keeps launches/updates cheap).
 function Copy-IfNewer {
     param([string]$Source, [string]$Dest)

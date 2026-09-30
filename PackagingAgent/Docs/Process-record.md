@@ -195,6 +195,23 @@ matches even partly, first reason why it was packaged that way, and only deviate
 - plan: `predecessorUnderstanding` (how it was packaged, why, what is different now, each deviation with its reason);
   the plan check sends back a plan without it when a predecessor exists, and a fresh build without reasons.
 
+Then (30 Sep, Kistler again): the plan set readiness `blocked` because the Oracle Client package was not found; the
+packager put it in C:\temp, the AI answered "okay, proceeding with the evaluation" - and nothing moved, because the
+consult answer had no field for the packages and no way to lift the block. And the AI read the product code of last
+version's MSI straight off the live library. So:
+- **nothing is done on a share.** A share is listed or copied from, nothing else. `Use-LocalCopy` (Engine\Core) copies
+  a file into `<work>\FromShares`, works on the copy and removes it; every MSI reader (product code, properties,
+  authorship, arch, identity), 7-Zip listing/extraction, the transform check and the /? probe go through it. The runner
+  refuses an installer or transform on a share. `run_powershell` refuses any command that does more than list/copy on
+  a share path (`Test-AgentOpShareUse`, AST-based, follows variables and pipelines). `FromShares` is cleared at
+  handover and when the window closes. The predecessor payload now carries each MSI's product code, read from a copy.
+- **blocked means nothing can be run.** A plan with runnable steps and readiness blocked goes back (and is read as
+  ask_ao if the check is ignored). A missing prerequisite is asked for and the test goes ahead - an error shows it is
+  needed. A capture a person must make (`humanNeeded.beforeTheTest` false, or a capture/prerequisite request) no longer
+  stops prepare: it goes to the handover, and the test, the build from the predecessor and the handover go on.
+- **the consult answer acts.** `submit_consult` gained `prerequisitePackages` (replaces the plan's list, in order) and
+  `unblock`; `Set-AgentConsultChanges` writes them to the sheet and the console carries on to the evaluation approval.
+
 The uninstall is now tested after the judgement (`Invoke-AgentUninstallTest` + `submit_uninstall_review`); what it
 settles goes into the decision the build reads. `agent.settings.json` is now only the connection, the model, the
 fallbacks and the cost cap - prices live in code (they only serve the cap).

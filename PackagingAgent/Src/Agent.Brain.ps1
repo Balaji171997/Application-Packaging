@@ -674,12 +674,13 @@ function Get-AgentSchema {
                     whyCompare = $str
                     removeFirst = & $arr (@{ type = 'OBJECT'; properties = @{ displayName = $str; command = & $S 'STRING' 'exact silent uninstall command'; why = $str } }) 'from thisMachine.relatedInstalled: what must come off before the baseline'
                     extractMsi = @{ type = 'OBJECT'; properties = @{ wanted = $bool; why = $str } }
-                    prerequisitePackages = & $arr (@{ type = 'OBJECT'; properties = @{ order = $int; name = $str; path = & $S 'STRING' 'the package folder on the share (search_previous_packages finds it)'; why = & $S 'STRING' 'who needs it: the application, or another prerequisite in this list' } }) 'this team''s packages of software that must already be on the machine, IN INSTALL ORDER - including what those packages need themselves (open_package each one: its script and documents name its own prerequisites). The hands copy each locally, install it, and remove them all after the tests'
+                    prerequisitePackages = & $arr (@{ type = 'OBJECT'; properties = @{ order = $int; name = $str; path = & $S 'STRING' 'the package folder on the share (search_previous_packages finds it), or where the packager put it on this machine'; why = & $S 'STRING' 'who needs it: the application, or another prerequisite in this list' } }) 'this team''s packages of software that must already be on the machine, IN INSTALL ORDER - including what those packages need themselves (open_package each one: its script and documents name its own prerequisites). The hands copy each locally, install it, and remove them all after the tests'
                     traceTheInstall = @{ type = 'OBJECT'; properties = @{ wanted = $bool; why = $str } }
                     inspectFirstRun = @{ type = 'OBJECT'; properties = @{ wanted = $bool; why = $str } } } }
                 package = @{ type = 'OBJECT'; properties = $pk }
                 questions = & $arr (@{ type = 'OBJECT'; properties = @{ question = & $S 'STRING' 'sendable as written'; why = $str; forWhom = & $S 'STRING' 'owner | packager'; blocksTheTest = $bool } })
-                humanNeeded = @{ type = 'OBJECT'; properties = @{ required = $bool; what = $str; exactCommand = $str; sendBack = $str } }
+                humanNeeded = @{ type = 'OBJECT'; properties = @{ required = $bool; what = $str; exactCommand = $str; sendBack = $str
+                                  beforeTheTest = & $S 'BOOLEAN' 'true ONLY when the test cannot run at all without it (a response file recorded by a wizard, a licence). A capture of the new version, a missing prerequisite: false - the test and the build go on and it is in the handover' } }
                 readiness = & $S 'STRING' 'ready | ask_ao (test while questions are answered) | blocked (cannot test until something arrives)'
                 confidence = & $S 'STRING' 'high | medium | low'
                 summary = & $S 'STRING' '3-6 lines: what this package will be, what is still open' }
@@ -795,6 +796,9 @@ function Get-AgentSchema {
                 whatYouChecked = & $arr $str 'what you looked at before answering'
                 redoStage = & $S 'STRING' 'intake | plan | prepare | evaluate | build | verify | handover - ONLY if it must genuinely be done again'
                 whyRedo = $str
+                prerequisitePackages = & $arr (@{ type = 'OBJECT'; properties = @{ name = $str; path = $str; order = & $S 'INTEGER' '1 = installed first'; why = $str } }) 'prerequisite packages to install before the test, now that the packager has named or given them (a folder or installer path - local or share, the hands copy it locally). Replaces the plan''s list.'
+                unblock = & $S 'BOOLEAN' 'true when what the packager said or gave removes what the order was waiting on - the flow then carries on (the evaluation still asks the packager before it installs)'
+                whyUnblock = $str
                 stopTheRunningStage = & $S 'BOOLEAN' 'asked about a quiet stage: true ONLY when what you were shown says it is stuck'
                 whyStopOrWait = $str }
                 required = @('reply') }
@@ -1152,7 +1156,14 @@ function Test-AgentPlan {
         }
     }
     foreach ($pq in @(Get-AgentList $Plan.evaluate.prerequisitePackages)) {
-        if (-not "$($pq.path)".Trim() -or -not (Test-Path -LiteralPath "$($pq.path)")) { $msgs += "The prerequisite package '$($pq.name)' has no reachable path ('$($pq.path)'). Find it with search_previous_packages and give its folder." }
+        if (-not "$($pq.path)".Trim() -or -not (Test-Path -LiteralPath "$($pq.path)")) { $msgs += "The prerequisite package '$($pq.name)' has no reachable path ('$($pq.path)'). Find it with search_previous_packages and give its folder - or, if nobody has it yet, leave it out of the list, ask for it in questions, and test without it." }
+    }
+    # BLOCKED MEANS THERE IS NOTHING TO TEST - nothing else. A prerequisite nobody has found yet, or an MSI a person
+    # has to capture again, does not stop the test: on a real order "blocked" for a missing prerequisite stopped the
+    # whole flow, and nothing moved after the packager supplied it. Test what there is - an error in the test is what
+    # proves the prerequisite is needed - and build the rest from the predecessor while the question is open.
+    if ($readiness -eq 'blocked' -and ($steps.Count -or $loose)) {
+        $msgs += "readiness is blocked, but there is something to test ($(@($steps | ForEach-Object { "$($_.installer)" }) -join ', ')). Blocked is only for an order with nothing that can be run. A missing prerequisite, or an MSI a person must capture again, is asked for (questions / humanNeeded) with readiness ask_ao - the test goes ahead without it (an error then shows the prerequisite is really needed), and the package is still built from the predecessor and handed over."
     }
     # THE PREVIOUS MSI WAS A CAPTURE. When a packaging team built the predecessor's MSI from the vendor setup, the
     # predecessor's method is "capture the new version the same way" - which the plan has to say, instead of hunting
@@ -1161,7 +1172,7 @@ function Test-AgentPlan {
     if ($pp -and @(@($pp.capturedByAPackagingTeam) | Where-Object { $_ }).Count) {
         $said = "$(ConvertTo-AgentRecordText $Plan.install.method 4000) $(ConvertTo-AgentRecordText $Plan.humanNeeded 4000) $($Plan.route.why)"
         if ($said -notmatch '(?i)captur|repackag|built by (the|a|our) (packaging )?team|packaging team') {
-            $msgs += "The previous package's MSI was built by a packaging team, not shipped by the vendor: $(@($pp.capturedByAPackagingTeam) -join '; '). So the predecessor's method is a CAPTURE of the vendor setup, and no extraction will find that MSI in the new delivery. Say so in install.method, and either ask for the new version to be captured the same way (humanNeeded: what, how, what to send back; readiness blocked) with everything else planned from the predecessor, or say why the vendor setup is the better method this time (it must then pass every test)."
+            $msgs += "The previous package's MSI was built by a packaging team, not shipped by the vendor: $(@($pp.capturedByAPackagingTeam) -join '; '). So the predecessor's method is a CAPTURE of the vendor setup, and no extraction will find that MSI in the new delivery. Say so in install.method, and either ask for the new version to be captured the same way (humanNeeded: what, how, what to send back; readiness ask_ao - the vendor setup is still tested and the package is still built and handed over) with everything else planned from the predecessor, or say why the vendor setup is the better method this time (it must then pass every test)."
         }
     }
     # A PERSON IS NOT A PAIR OF HANDS. On a real order the plan asked the packager to extract a delivered zip and report
@@ -1216,6 +1227,8 @@ function Invoke-AgentPlan {
     # status = the worst of what the rules saw and what the engineer said
     $ruleBlock = @(Get-AgentList $Sheet.gaps | Where-Object { $_.severity -eq 'block' }).Count -gt 0
     $mr = "$($plan.readiness)"
+    # blocked with something runnable is a question, not a stop (the plan check says so; this holds when it was ignored)
+    if ($mr -eq 'blocked' -and (@(Get-AgentList $plan.install.steps).Count -or "$($plan.route.number)" -eq '7')) { $mr = 'ask_ao'; $plan.readiness = 'ask_ao' }
     $Sheet.status = if ($ruleBlock -or $mr -eq 'blocked') { 'blocked' } elseif ($mr -eq 'ask_ao' -or @(Get-AgentList $plan.questions).Count) { 'ask_ao' } else { 'ready' }
     $steps = @(Get-AgentList $plan.install.steps)
     Add-AgentTimeline $Sheet "planned: $($plan.route.kind) route $($plan.route.number), $($steps.Count) install step(s), $($Sheet.status)"
@@ -1700,9 +1713,42 @@ function Invoke-AgentConsult {
     $opCtx = $null
     $hands = Get-AgentHands -Sheet $Sheet -Want 'run_powershell', 'take_screenshot', 'read_document', 'search_previous_packages', 'open_package', 'remember_this' -Stage 'consult' -OpCtxOut ([ref]$opCtx)
     if ($Progress) { & $Progress 'model: the packager said something - looking before answering' }
-    return (Invoke-AgentJob -Sheet $Sheet -Job 'consult' -Title 'The packager is asking you something' -Instruction (Get-AgentStagePrompt -Stage 'consult') `
+    $r = Invoke-AgentJob -Sheet $Sheet -Job 'consult' -Title 'The packager is asking you something' -Instruction (Get-AgentStagePrompt -Stage 'consult') `
                 -Parts @(@{ text = "THE PACKAGER SAYS:`n$Message`n`nWhere the order stands:`n$(@($where) -join "`n")`n`nTHE MACHINE IN THE LAST 15 MINUTES (processes started, every window now, recent log lines, installer events):`n$(ConvertTo-AgentRecordText $(try { Get-AgentRecentEvidence -Since (Get-Date).AddMinutes(-15) -MaxFiles 5 -TailLines 20 } catch { $null }) 20000)" }) `
-                -SubmitName 'submit_consult' -SubmitDescription 'Answer the packager and say what changes.' -Tools $hands -MaxRounds 8 -Progress $Progress -OpCtx $opCtx -StageLabel 'consult')
+                -SubmitName 'submit_consult' -SubmitDescription 'Answer the packager and say what changes.' -Tools $hands -MaxRounds 8 -Progress $Progress -OpCtx $opCtx -StageLabel 'consult'
+    [void](Set-AgentConsultChanges -Sheet $Sheet -Result $r)
+    return $r
+}
+
+# WHAT THE ANSWER CHANGES, CARRIED OUT. On a real order the packager put the missing prerequisite packages in a local
+# folder, the AI answered "okay, proceeding with the evaluation" - and nothing happened: the answer had nowhere to put
+# the packages and no way to lift the block, so the order stayed blocked with an empty prerequisite list. Now the
+# answer's prerequisitePackages go into the plan and `unblock` lifts the block; the console then carries on.
+function Set-AgentConsultChanges {
+    param([Parameter(Mandatory)]$Sheet, $Result)
+    $out = [ordered]@{ prerequisitesSet = @(); unblocked = $false }
+    if (-not $Result) { return $out }
+    $pk = @(@(Get-AgentList $Result.prerequisitePackages) | Where-Object { "$($_.path)".Trim() })
+    if ($pk.Count -and $Sheet.plan -and -not $Sheet.plan.error) {
+        if (-not $Sheet.plan.evaluate) { $Sheet.plan.evaluate = [ordered]@{} }
+        $i = 0
+        $list = @($pk | Sort-Object { $o = 0; if ([int]::TryParse("$($_.order)", [ref]$o)) { $o } else { 99 } } | ForEach-Object {
+            $i++
+            [ordered]@{ order = $i; name = $(if ("$($_.name)".Trim()) { "$($_.name)" } else { Split-Path -Leaf "$($_.path)" }); path = "$($_.path)".Trim(); why = "$($_.why)" }
+        })
+        $Sheet.plan.evaluate.prerequisitePackages = $list
+        $out.prerequisitesSet = @($list | ForEach-Object { "$($_.order). $($_.name) ($($_.path))" })
+        Add-AgentTimeline $Sheet "prerequisite packages set from the packager's answer: $($out.prerequisitesSet -join '; ')"
+    }
+    if (([bool]$Result.unblock -or "$($Result.unblock)" -eq 'True' -or $pk.Count) -and "$($Sheet.status)" -eq 'blocked') {
+        $Sheet.status = 'ask_ao'
+        if ($Sheet.plan -and "$($Sheet.plan.readiness)" -eq 'blocked') { $Sheet.plan.readiness = 'ask_ao' }
+        $out.unblocked = $true
+        Add-AgentTimeline $Sheet "unblocked by the packager's answer: $(if ("$($Result.whyUnblock)".Trim()) { $Result.whyUnblock } else { 'what the order waited on was given' })"
+    }
+    if ($pk.Count -or $out.unblocked) { try { [void](Save-AgentSheet -Sheet $Sheet) } catch {} }
+    if ($Result -is [System.Collections.IDictionary]) { $Result['applied'] = $out } else { try { $Result | Add-Member -NotePropertyName applied -NotePropertyValue $out -Force } catch {} }
+    return $out
 }
 
 # WHAT THE PACKAGER LEARNED BY TESTING IT - sorted into memory by the AI (standalone, no conversation needed).

@@ -168,6 +168,8 @@ function Get-AgentArchiveInsight {
         seconds = 0; note = ''
     }
     if (-not (Test-Path -LiteralPath $Path)) { $res.note = 'the installer is not reachable'; return $res }
+    # 7-Zip never opens a file where it lies on a share - it reads a local copy
+    if (Test-NetworkPath $Path) { return (Use-LocalCopy -Path $Path -Do { param($l) Get-AgentArchiveInsight -Path $l -TimeoutSeconds $TimeoutSeconds -MaxEntriesReported $MaxEntriesReported }) }
     $t = Initialize-AgentTools
     if (-not $t.sevenZip) { $res.note = 'no archive tool is available, so the file itself cannot be inspected - the installer technology has to come from the documents, the file version resource, or the run'; return $res }
 
@@ -215,6 +217,7 @@ function Expand-AgentArchiveEntries {
     if (-not $t.sevenZip) { $res.note = 'no archive tool is available'; return $res }
     if (-not (Test-Path -LiteralPath $Path)) { $res.note = 'the installer is not reachable'; return $res }
     if (-not @($Entries).Count) { $res.note = 'nothing was asked for'; return $res }
+    if (Test-NetworkPath $Path) { return (Use-LocalCopy -Path $Path -Do { param($l) Expand-AgentArchiveEntries -Path $l -Entries $Entries -Destination $Destination -TimeoutSeconds $TimeoutSeconds }) }
     try { New-Item -ItemType Directory -Force -Path $Destination -ErrorAction Stop | Out-Null } catch { $res.note = "cannot write to $Destination"; return $res }
 
     $args = @('x', "$((Get-Item -LiteralPath $Path).FullName)", "-o$Destination", '-y') + @($Entries)
@@ -917,6 +920,8 @@ function Find-AgentPredecessorInOrder {
 # InstallShield) and the AI kept looking for an MSI inside the vendor EXE that never contained one.
 function Get-AgentMsiAuthorship {
     param([Parameter(Mandatory)][string]$Path)
+    # the predecessor's MSI sits in the live library - read a local copy, never the library file itself
+    if (Test-NetworkPath $Path) { return (Use-LocalCopy -Path $Path -Do { param($l) Get-AgentMsiAuthorship -Path $l }) }
     $r = [ordered]@{ title = ''; subject = ''; author = ''; comments = ''; createdBy = ''; builtByAPackagingTeam = $false; why = '' }
     try {
         $i = New-Object -ComObject WindowsInstaller.Installer
@@ -944,6 +949,9 @@ function Get-AgentPredecessorPayload {
     param([Parameter(Mandatory)][string]$PackagePath, [int]$MaxFiles = 40)
     $res = [ordered]@{ found = $false; filesFolder = ''; installers = @(); transforms = @(); otherFiles = @(); note = '' }
     if (-not (Test-Path -LiteralPath $PackagePath)) { $res.note = 'the predecessor package is not reachable'; return $res }
+    # asked for several times per order - its MSIs are copied from the library once, not every time
+    if ($null -eq $script:AgentPayloadCache) { $script:AgentPayloadCache = @{} }
+    if ($script:AgentPayloadCache.ContainsKey("$PackagePath|$MaxFiles")) { return $script:AgentPayloadCache["$PackagePath|$MaxFiles"] }
 
     $filesDir = @()
     foreach ($probe in @((Join-Path $PackagePath 'Content'), $PackagePath)) {
@@ -959,12 +967,21 @@ function Get-AgentPredecessorPayload {
     try { $all = @(Get-ChildItem -LiteralPath $filesDir[0].FullName -File -Recurse -ErrorAction SilentlyContinue) } catch {}
     $res.installers = @($all | Where-Object { $_.Extension -match '(?i)^\.(msi|msp|exe|appx|msix)$' } | Select-Object -First $MaxFiles |
         ForEach-Object { $o = [ordered]@{ name = $_.Name; ext = $_.Extension.ToLower(); sizeMB = [math]::Round($_.Length / 1MB, 1) }
-                         if ($_.Extension -ieq '.msi') { $o.whoBuiltIt = Get-AgentMsiAuthorship -Path $_.FullName }
+                         if ($_.Extension -ieq '.msi') {
+                             # ONE local copy per MSI for everything read from it (the library file is never opened), and
+                             # its identity is handed over so nobody has to go back to the share for a product code
+                             $mi = try { Use-LocalCopy -Path $_.FullName -Do { param($l) @{ who = (Get-AgentMsiAuthorship -Path $l); id = (Get-AgentMsiIdentity -Path $l) } } } catch { $null }
+                             if ($mi) {
+                                 $o.whoBuiltIt = $mi.who
+                                 if ($mi.id) { $o.productCode = "$($mi.id.productCode)"; $o.productVersion = "$($mi.id.productVersion)"; $o.productName = "$($mi.id.productName)"; $o.upgradeCode = "$($mi.id.upgradeCode)" }
+                             }
+                         }
                          $o })
     $cap = @($res.installers | Where-Object { $_.whoBuiltIt -and $_.whoBuiltIt.builtByAPackagingTeam })
     if ($cap.Count) { $res.capturedByAPackagingTeam = @($cap | ForEach-Object { "$($_.name): $($_.whoBuiltIt.why)" }) }
     $res.transforms = @($all | Where-Object { $_.Extension -match '(?i)^\.mst$' } | ForEach-Object { $_.Name })
     $res.otherFiles = @($all | Where-Object { $_.Extension -notmatch '(?i)^\.(msi|msp|exe|appx|msix|mst)$' } | Select-Object -First 15 | ForEach-Object { $_.Name })
+    $script:AgentPayloadCache["$PackagePath|$MaxFiles"] = $res
     $res.note = "the previous package shipped $(@($res.installers).Count) installer file(s)$(if (@($res.transforms).Count) { " and $(@($res.transforms).Count) transform(s)" }). Compare these against what THIS order delivered: if the kind of file changed, the change itself needs explaining before the old script can be reused.$(if ($cap.Count) { " $(@($cap).Count) of its MSI(s) were BUILT BY A PACKAGING TEAM (captured from the vendor setup), not shipped by the vendor - see capturedByAPackagingTeam." })"
     return $res
 }
@@ -1667,6 +1684,12 @@ function Copy-AgentExtractedMsiIntoPackage {
 function Get-AgentMsiIdentity {
     param([Parameter(Mandatory)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    # never opened where it lies on a share - read a local copy, and report the file by its real place
+    if (Test-NetworkPath $Path) {
+        $id = Use-LocalCopy -Path $Path -Do { param($l) Get-AgentMsiIdentity -Path $l }
+        if ($id) { $id.path = "$Path"; $id.readFrom = 'a local copy (the file sits on a share)' }
+        return $id
+    }
     $full = (Get-Item -LiteralPath $Path).FullName
     $t = Initialize-AgentTools
 
@@ -1722,11 +1745,11 @@ function Get-AgentMsiIdentity {
             return [ordered]@{
                 path           = $full
                 readBy         = 'COM (fallback)'
-                productName    = [string](Get-MsiProperty -Path $full -Property 'ProductName')
-                productVersion = [string](Get-MsiProperty -Path $full -Property 'ProductVersion')
-                productCode    = [string](Get-MsiProperty -Path $full -Property 'ProductCode')
-                upgradeCode    = [string](Get-MsiProperty -Path $full -Property 'UpgradeCode')
-                manufacturer   = [string](Get-MsiProperty -Path $full -Property 'Manufacturer')
+                productName    = [string](Get-MsiProperty -MsiPath $full -Property 'ProductName')
+                productVersion = [string](Get-MsiProperty -MsiPath $full -Property 'ProductVersion')
+                productCode    = [string](Get-MsiProperty -MsiPath $full -Property 'ProductCode')
+                upgradeCode    = [string](Get-MsiProperty -MsiPath $full -Property 'UpgradeCode')
+                manufacturer   = [string](Get-MsiProperty -MsiPath $full -Property 'Manufacturer')
                 allUsers       = ''
                 hasUiSequence  = $null
                 tableCount     = $null
@@ -1750,6 +1773,8 @@ function Test-AgentMstApplies {
     $res = [ordered]@{ applies = $null; checkedBy = 'not checked'; reason = ''; msi = $null; changes = $null }
     if (-not (Test-Path -LiteralPath $MsiPath)) { $res.reason = 'the MSI is not reachable'; return $res }
     if (-not (Test-Path -LiteralPath $MstPath)) { $res.reason = 'the transform is not reachable'; return $res }
+    # the MSI is applied as a throwaway copy below; a transform on a share is read from a local copy too
+    if (Test-NetworkPath $MstPath) { return (Use-LocalCopy -Path $MstPath -Do { param($l) Test-AgentMstApplies -MsiPath $MsiPath -MstPath $l }) }
 
     $t = Initialize-AgentTools
     if (-not $t.dtf) { $res.reason = 'the MSI library is not available, so this cannot be proven'; return $res }

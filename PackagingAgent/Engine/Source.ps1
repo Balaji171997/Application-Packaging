@@ -303,6 +303,7 @@ function Test-IsSecurityProduct {
 function Get-MsiProperty {
     param([string]$MsiPath, [string]$Property)
     if (-not (Test-Path $MsiPath)) { return $null }
+    if ((Test-NetworkPath $MsiPath) -and (Get-Command Use-LocalCopy -ErrorAction SilentlyContinue)) { return (Use-LocalCopy -Path $MsiPath -Do { param($l) Get-MsiProperty -MsiPath $l -Property $Property }) }
     $i=$null;$db=$null;$v=$null;$r=$null
     try {
         $i  = New-Object -ComObject WindowsInstaller.Installer
@@ -320,6 +321,7 @@ function Get-MsiProperty {
 function Get-MsiTemplateArch {
     param([string]$MsiPath)
     if (-not (Test-Path $MsiPath)) { return '' }
+    if ((Test-NetworkPath $MsiPath) -and (Get-Command Use-LocalCopy -ErrorAction SilentlyContinue)) { return (Use-LocalCopy -Path $MsiPath -Do { param($l) Get-MsiTemplateArch -MsiPath $l }) }
     $i=$null;$db=$null;$si=$null
     try {
         $i  = New-Object -ComObject WindowsInstaller.Installer

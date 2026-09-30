@@ -959,12 +959,23 @@ $r = Invoke-AgentConsult -Sheet $a.sheet -Message "$($a.message)" -Progress { pa
                 $ctx.LastProgressAt = Get-Date; $ctx.StallTold = 0
                 & $say 'AI' "$($ctx.Stage)" "Leaving it running$(if ("$($r.whyStopOrWait)".Trim()) { " - $($r.whyStopOrWait)" })." 'step'
             }
+            # WHAT THE ANSWER CHANGED (done in the consult job, on the sheet): say it, then CARRY ON. An answer that
+            # says "proceeding" and then leaves the flow standing is how a real order sat blocked after the packager
+            # had given it everything.
+            $ap = $r.applied
+            if ($ap -and @($ap.prerequisitesSet).Count) { & $say 'TOOL' 'consult' "Prerequisite packages for the test, in order: $(@($ap.prerequisitesSet) -join '; ')" 'step' }
+            if ($ap -and [bool]$ap.unblocked) { & $say 'TOOL' 'consult' 'The order is no longer blocked - carrying on.' 'step' }
             $redo = "$($r.redoStage)".Trim()
             if ($redo -and (Get-AgentStageDef -Id $redo)) {
                 & $say 'AI' 'consult' "That means $((Get-AgentStageDef -Id $redo).Title) has to be done again$(if ("$($r.whyRedo)".Trim()) { " - $($r.whyRedo)" })." 'step'
                 try { $ctx.Sheet.stages.Remove($redo) } catch {}
                 $ctx.Approved.Remove($redo) | Out-Null
                 & $drawChips; & $startStage $redo
+            } elseif ($ap -and ([bool]$ap.unblocked -or @($ap.prerequisitesSet).Count) -and $ctx.Phase -ne 'running') {
+                # the evaluation is waiting on this - a failed or stopped evaluate is opened again, then the flow walks on
+                # (the evaluation still asks for approval before it installs anything)
+                if ("$(Get-AgentStageStatus -Sheet $ctx.Sheet -Id 'evaluate')" -in 'failed', 'blocked') { try { $ctx.Sheet.stages.Remove('evaluate') } catch {}; $ctx.Approved.Remove('evaluate') | Out-Null }
+                & $drawChips; & $advance
             }
           } catch {
             $ctx.ConsultTimer.Stop(); $ctx.Consulting = $false; $pbar.Visibility = 'Collapsed'
@@ -1266,6 +1277,8 @@ $r = Invoke-AgentConsult -Sheet $a.sheet -Message "$($a.message)" -Progress { pa
                 $o = Export-AgentEvaluation -Ctx @{ Sheet = $ctx.Sheet; Result = $ctx.Result; RunInfo = $ctx.Run }
                 [void](Set-AgentStage -Sheet $ctx.Sheet -Id 'handover' -Status 'done' -Note "sheet + handover + snapshot report" -Data @{ dir = "$($o.Dir)" })
                 & $say 'TOOL' $Id "Wrote the evaluation sheet, agent-handover.json and the snapshot report to $($o.Dir)." 'step'
+                # the order is done - whatever was copied from the shares to work on goes now
+                try { Clear-ShareCopies } catch {}
             } catch {
                 [void](Set-AgentStage -Sheet $ctx.Sheet -Id 'handover' -Status 'failed' -Note "$($_.Exception.Message)")
                 & $say 'TOOL' $Id "Handover failed: $($_.Exception.Message)" 'error'
@@ -1829,7 +1842,7 @@ Is this still working, or is it stuck? Look at whatever you need to - run_powers
     # Draw the route before anything runs, so an empty window still shows what this is going to do.
     & $drawChips
     $win.add_Loaded({ $timer.Start() })
-    $win.add_Closed({ try { $timer.Stop() } catch {}; $ctx.Stop = $true; if ($ctx.Box) { try { Stop-AgentRunspace -Box $ctx.Box } catch {} } })
+    $win.add_Closed({ try { $timer.Stop() } catch {}; $ctx.Stop = $true; if ($ctx.Box) { try { Stop-AgentRunspace -Box $ctx.Box } catch {} }; try { Clear-ShareCopies } catch {} })
     [void]$win.ShowDialog()
 }
 

@@ -58,6 +58,71 @@ function Get-AgentOpPathsOutside {
     return @($out | Sort-Object -Unique)
 }
 
+# Where copies taken from the shares live; the whole folder is removed when the order is done (Clear-ShareCopies).
+function Get-AgentShareCopyDir {
+    if (Get-Command Get-ShareCopyRoot -ErrorAction SilentlyContinue) { try { return (Get-ShareCopyRoot) } catch {} }
+    return (Join-Path $env:TEMP 'PackagingAgent\FromShares')
+}
+
+# DOES THIS COMMAND DO MORE ON A SHARE THAN LIST IT OR COPY FROM IT? '' when it does not; otherwise what it does.
+# Everything that names a share path - directly, through a variable it was put in, or further down the pipeline it
+# feeds - may only list (Get-ChildItem, Test-Path, ...), copy (Copy-Item, robocopy) or shape that listing
+# (Where-Object, Select-Object, ...). A guard rail read from the command text, like the other checks here.
+function Test-AgentOpShareUse {
+    param([string]$Script)
+    $isShare = { param($p) if (Get-Command Test-NetworkPath -ErrorAction SilentlyContinue) { Test-NetworkPath "$p" } else { "$p" -match '^\\\\' } }
+    $refs = @([regex]::Matches("$Script", '(?i)(?:[A-Z]:\\|\\\\)[^"''`|;,\r\n\)]{2,240}') | ForEach-Object { "$($_.Value)".Trim().TrimEnd('\', '.', ',', ')') } |
+              Where-Object { & $isShare $_ } | Sort-Object -Unique)
+    if (-not $refs.Count) { return '' }
+    $tokens = $null; $errs = $null
+    $ast = [Management.Automation.Language.Parser]::ParseInput("$Script", [ref]$tokens, [ref]$errs)
+    if (@($errs).Count) { return 'it names a share and could not be read as PowerShell, so what it does there cannot be checked' }
+    # a variable that was handed a share path carries the share with it
+    $tainted = @{}
+    $mentions = {
+        param([string]$t)
+        foreach ($r in $refs) { if ($t.IndexOf($r, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true } }
+        foreach ($v in @($tainted.Keys)) { if ($t -match ('(?i)\$(\{)?' + [regex]::Escape($v) + '\b')) { return $true } }
+        return $false
+    }
+    for ($pass = 0; $pass -lt 3; $pass++) {
+        foreach ($a in @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] }, $true))) {
+            if ((& $mentions $a.Right.Extent.Text) -and $a.Left -is [Management.Automation.Language.VariableExpressionAst]) { $tainted["$($a.Left.VariablePath.UserPath)"] = $true }
+        }
+        foreach ($f in @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.ForEachStatementAst] }, $true))) {
+            if (& $mentions $f.Condition.Extent.Text) { $tainted["$($f.Variable.VariablePath.UserPath)"] = $true }
+        }
+    }
+    $allowed = '^(?i)(Copy-Item|copy|cp|cpi|robocopy(\.exe)?|Get-ChildItem|gci|dir|ls|Test-Path|Join-Path|Split-Path|Resolve-Path|Where-Object|where|\?|Select-Object|select|Sort-Object|sort|ForEach-Object|foreach|%|Measure-Object|measure|Group-Object|Format-Table|ft|Format-List|fl|Out-String|Write-Output|echo|Write-Host|New-Item|Remove-Item|ConvertTo-Json)$'
+    $shareRelated = {
+        param($n)
+        for ($p = $n; $p; $p = $p.Parent) {
+            if ($p -is [Management.Automation.Language.PipelineAst] -or $p -is [Management.Automation.Language.AssignmentStatementAst]) { if (& $mentions $p.Extent.Text) { return $true } }
+            if ($p -is [Management.Automation.Language.ForEachStatementAst] -and (& $mentions $p.Condition.Extent.Text)) { return $true }
+        }
+        return $false
+    }
+    $bad = @()
+    foreach ($c in @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true))) {
+        $name = "$($c.GetCommandName())"
+        if (-not $name) { if (& $shareRelated $c) { $bad += "it runs '$($c.CommandElements[0].Extent.Text)'" }; continue }
+        if ($name -notmatch $allowed -and (& $shareRelated $c)) { $bad += "$name" }
+    }
+    foreach ($m in @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.MemberExpressionAst] }, $true))) {
+        $member = "$($m.Member.Extent.Text)".Trim("'", '"')
+        if ($m -is [Management.Automation.Language.InvokeMemberExpressionAst]) {
+            if ($m.Static -and "$($m.Expression.Extent.Text)" -match '(?i)^\[(System\.)?IO\.Path\]$') { continue }
+            if (-not $m.Static -and $member -match '^(?i)(Trim\w*|Replace|Split|Substring|ToLower|ToUpper|ToString|StartsWith|EndsWith|Contains|IndexOf)$') { continue }
+            if ((& $mentions $m.Extent.Text) -or (& $shareRelated $m)) { $bad += ".$member()" }
+        } elseif ($member -match '^(?i)(VersionInfo|Open\w*|Read\w*)$' -and ((& $mentions $m.Extent.Text) -or (& $shareRelated $m))) { $bad += ".$member" }
+    }
+    # New-Item / Remove-Item are allowed above only because the write checks already refuse them ON a share -
+    # with a share in the same pipeline they are creating the local folder a copy goes into, or tidying it.
+    $bad = @($bad | Sort-Object -Unique)
+    if ($bad.Count) { return "it uses $($bad -join ', ') on $($refs -join '; ')" }
+    return ''
+}
+
 # Run ONE command from the AI. Returns what the tool saw, in the shape the model gets back.
 function Invoke-AgentOpCommand {
     param([Parameter(Mandatory)]$Ctx, [Parameter(Mandatory)][string]$Script, [string]$Purpose = '', [string]$Intent = 'read')
@@ -100,6 +165,16 @@ function Invoke-AgentOpCommand {
     }
     if ($foreignShares.Count) {
         $rec.refused = "this command reaches a network share that is not part of this order: $($foreignShares -join '; '). The order folder and the predecessor package are yours to read; other shares are not."
+        $Ctx.Commands.Add($rec); return @{ ok = $false; refused = $rec.refused; output = '' }
+    }
+    # NOTHING IS DONE ON A SHARE - it is LISTED, or COPIED FROM, and that is all. Opening a file there (an MSI's
+    # product code, a version resource, a text file), running it, extracting it: all of that happens on a local copy,
+    # and the copy is removed when the work is done. On a real order the AI read the product code of last version's MSI
+    # straight off the live library.
+    $inside = Test-AgentOpShareUse -Script "$Script"
+    if ($inside) {
+        $rec.refused = "this command does more on a network share than list it or copy from it: $inside. Nothing is opened, read, run or extracted on a share. Copy what you need into $(Get-AgentShareCopyDir) first (Copy-Item / robocopy), then work on the copy (by its local path), and remove the copy when you are done."
+        Write-Log "AI op REFUSED - it worked directly on a share: $inside" Warning
         $Ctx.Commands.Add($rec); return @{ ok = $false; refused = $rec.refused; output = '' }
     }
     # THE SHARES ARE READ-ONLY, ALWAYS. The order shares, the live package library, anything on a UNC path: the agent
@@ -320,10 +395,11 @@ list or extract an archive, edit the package script, copy a file into SupportFil
 what you want to see (Write-Output / the expression itself) - whatever the command prints is what you get back.
 Set intent to "modify" for anything that writes, renames, copies or deletes; "read" for everything else.
 THE ORDER'S SOURCE IS HERE: {1} - read, list and open anything in it.
-YOU MAY WRITE HERE: {0}. Extract, copy and experiment there. The order folder, the previous package and the network
-shares are read-only: copy or extract FROM them INTO your work folder. Never ask a person to do what this can do.
-You may call this as often as you need before you submit your result.
-'@ -f $(if ($writable) { $writable } else { 'your work folder' }), $(if ("$($Ctx.OrderFolder)".Trim()) { "$($Ctx.OrderFolder)" } else { 'the order folder named in the dossier' })) -Parameters @{ type = 'OBJECT'; properties = @{
+YOU MAY WRITE HERE: {0}. Extract, copy and experiment there. The order folder and the previous package are read-only.
+ON A NETWORK SHARE (\\server\..., the previous package in the live library) you only LIST and COPY FROM: copy what you
+need into {2}, then open, read, run or extract THE COPY, and remove it when done. Nothing is opened on a share.
+Never ask a person to do what this can do. You may call this as often as you need before you submit your result.
+'@ -f $(if ($writable) { $writable } else { 'your work folder' }), $(if ("$($Ctx.OrderFolder)".Trim()) { "$($Ctx.OrderFolder)" } else { 'the order folder named in the dossier' }), (Get-AgentShareCopyDir)) -Parameters @{ type = 'OBJECT'; properties = @{
                 purpose = @{ type = 'STRING'; description = 'one short line: why you are running this, in plain words for the packager' }
                 intent  = @{ type = 'STRING'; description = 'read | modify' }
                 script  = @{ type = 'STRING'; description = 'the PowerShell. The working directory is already the package folder, so relative paths work.' } }

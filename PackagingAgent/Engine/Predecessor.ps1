@@ -202,6 +202,7 @@ function Strip-Boilerplate {
 function Get-MsiProductCode {
     param([string]$MsiPath)
     if (-not (Test-Path $MsiPath)) { return $null }
+    if ((Test-NetworkPath $MsiPath) -and (Get-Command Use-LocalCopy -ErrorAction SilentlyContinue)) { return (Use-LocalCopy -Path $MsiPath -Do { param($l) Get-MsiProductCode -MsiPath $l }) }
     $i=$null;$db=$null;$v=$null;$r=$null
     try {
         $i  = New-Object -ComObject WindowsInstaller.Installer

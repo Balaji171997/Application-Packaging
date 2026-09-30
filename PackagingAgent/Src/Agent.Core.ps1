@@ -211,10 +211,19 @@ function Get-AgentInstallerFacts {
     $f = [ordered]@{ name = $File.Name; path = $p; sizeMB = [math]::Round($File.Length / 1MB, 1); ext = $ext; engine = ''; arch = ''; version = ''; productName = ''; manufacturer = ''; productCode = ''; upgradeCode = ''; isPrerequisite = $false; prerequisiteLabel = ''; securityProduct = $false; responseFilesNearby = @(); mstNearby = @() }
     try { $f.engine = Get-InstallerEngine -Path $p } catch {}
     if ($ext -eq '.msi') {
-        try { $f.arch = Get-MsiTemplateArch $p } catch {}
-        foreach ($prop in 'ProductName','ProductVersion','Manufacturer','ProductCode','UpgradeCode') {
-            $v = try { Get-MsiProperty -MsiPath $p -Property $prop } catch { $null }
-            switch ($prop) { 'ProductName' { $f.productName = "$v" } 'ProductVersion' { $f.version = "$v" } 'Manufacturer' { $f.manufacturer = "$v" } 'ProductCode' { $f.productCode = "$v" } 'UpgradeCode' { $f.upgradeCode = "$v" } }
+        # one local copy for all the reads when the MSI sits on a share (never opened there)
+        $readMsi = {
+            param($m)
+            $o = @{ arch = ''; props = @{} }
+            try { $o.arch = Get-MsiTemplateArch $m } catch {}
+            foreach ($prop in 'ProductName','ProductVersion','Manufacturer','ProductCode','UpgradeCode') { $o.props[$prop] = try { Get-MsiProperty -MsiPath $m -Property $prop } catch { $null } }
+            $o
+        }
+        $mi = if (Test-NetworkPath $p) { try { Use-LocalCopy -Path $p -Do $readMsi } catch { $null } } else { & $readMsi $p }
+        if ($mi) {
+            $f.arch = "$($mi.arch)"
+            $f.productName = "$($mi.props.ProductName)"; $f.version = "$($mi.props.ProductVersion)"; $f.manufacturer = "$($mi.props.Manufacturer)"
+            $f.productCode = "$($mi.props.ProductCode)"; $f.upgradeCode = "$($mi.props.UpgradeCode)"
         }
     } elseif ($ext -eq '.exe') {
         try { $f.arch = Get-PeArch $p } catch {}
@@ -727,8 +736,19 @@ function Invoke-AgentPrepare {
         $Sheet.expandedZips = @($exp)
         if ($exp.Count) { $Sheet.expandedDir = $root }
     }
-    if ($Sheet.plan -and $Sheet.plan.humanNeeded -and [bool]$Sheet.plan.humanNeeded.required) { $need = $Sheet.plan.humanNeeded }
-    $Sheet.prepare = [ordered]@{ toolDid = @($did.ToArray()); humanNeeded = $need
+    # A PERSON'S JOB THAT THE TEST DOES NOT WAIT FOR - capturing the new version as the predecessor was captured, a
+    # prerequisite still to be found - is carried to the handover, and the flow goes on: test what is here, build from
+    # the predecessor, hand over with the request in it. Only what the test truly cannot run without stops here.
+    $later = $null
+    if ($Sheet.plan -and $Sheet.plan.humanNeeded -and [bool]$Sheet.plan.humanNeeded.required) {
+        $hn = $Sheet.plan.humanNeeded
+        # unsaid = the test waits (a response file, a licence); said false, or a capture / prerequisite = it does not
+        $has = if ($hn -is [System.Collections.IDictionary]) { $hn.Contains('beforeTheTest') } else { [bool]$hn.PSObject.Properties['beforeTheTest'] }
+        $saidLater = ($has -and "$($hn.beforeTheTest)" -in 'False', '0', '')
+        if (-not $saidLater -and "$($hn.what) $($hn.exactCommand)" -notmatch '(?i)captur|repackag|prerequisite|dependenc') { $need = $hn }
+        else { $later = $hn; $did.Add("for a person, in the handover (the test goes ahead without it): $($hn.what)") }
+    }
+    $Sheet.prepare = [ordered]@{ toolDid = @($did.ToArray()); humanNeeded = $need; humanNeededForHandover = $later
                                  route = $(if ($Sheet.plan) { "$($Sheet.plan.route.kind) $($Sheet.plan.route.number)" } else { '' }) }
     if ($need) {
         Add-AgentTimeline $Sheet "prepare: waiting for a person - $($need.what)"
@@ -1967,6 +1987,8 @@ function Get-AgentRecentEvidence {
 # first real answer.
 function Get-AgentInstallerHelpLook {
     param([Parameter(Mandatory)][string]$ExePath, [int]$TimeoutSec = 12, [string[]]$Switches = @('/?', '/help', '-h', '--help'), [scriptblock]$Progress)
+    # never started where it lies on a share (and its download mark is never cleared there) - probe a local copy
+    if (Test-NetworkPath $ExePath) { return (Use-LocalCopy -Path $ExePath -Do { param($l) Get-AgentInstallerHelpLook -ExePath $l -TimeoutSec $TimeoutSec -Switches $Switches -Progress $Progress }) }
     $out = New-Object System.Collections.Generic.List[object]
     $stem = [IO.Path]::GetFileNameWithoutExtension($ExePath)
     [void](Initialize-AgentWindowApi)
@@ -2098,6 +2120,14 @@ function Invoke-AgentInstallRun {
     $r = [ordered]@{ ExitCode = $null; DurationSec = 0; WindowsSeen = @(); TimedOut = $false; Error = ''; Command = ''; Interactive = $false; Interrupted = $false; NeededIntervention = @()
                      Looks = @(); WindowsAfterInstall = @(); LeftRunning = @(); StartedByInstall = @(); LaunchedHow = ''; Unblocked = @()
                      TemplateDefaultsAdded = @(); MsiLog = ''; ExitedAfterSec = $null; ScreenshotWhileRunning = ''; WindowsOnScreen = @(); RunningProcesses = @() }
+    # NOTHING RUNS FROM A SHARE - not the installer, not a transform or response file it is pointed at. Copy it to
+    # the local work folder and run it there. (The source and the prerequisites are local copies already.)
+    $sharePaths = @(@($Installer) + @([regex]::Matches("$Arguments", '\\\\[^\s"'';,]+') | ForEach-Object { $_.Value }) | Where-Object { Test-NetworkPath "$_" })
+    if ($sharePaths.Count) {
+        $r.Error = "not run: $($sharePaths -join '; ') is on a network share. Nothing is run, opened or extracted on a share - copy it to the local work folder, run it from there, and remove the copy when done."
+        $r.Command = ("`"$Installer`" $Arguments").Trim()
+        return $r
+    }
     $argsIn = "$Arguments"
     if ([IO.Path]::GetExtension($Installer) -ieq '.msi') {
         $log = Join-Path $env:TEMP ("PackagingAgent_{0}_{1}.log" -f ($stem -replace '[^\w.-]', '_'), (Get-Date -Format 'HHmmss'))
