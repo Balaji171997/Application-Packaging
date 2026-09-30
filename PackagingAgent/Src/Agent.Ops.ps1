@@ -310,16 +310,20 @@ function Invoke-AgentOpCommand {
 # The ONE tool the model needs to reach the machine. Everything else it wants, it writes as PowerShell.
 function Get-AgentOpTools {
     param([Parameter(Mandatory)]$Ctx)
+    $writable = @(Get-AgentOpWriteRoots -Ctx $Ctx) -join '  and  '
     return @(
         @{ Ctx = $Ctx
-           Decl = (New-AgentFunctionDeclaration -Name 'run_powershell' -Description @'
+           Decl = (New-AgentFunctionDeclaration -Name 'run_powershell' -Description (@'
 Run a Windows PowerShell 5.1 command on the packaging machine and get its output back. This is how you look at
 anything and how you change anything: read a file with line numbers, search a script, list a folder, inspect an MSI,
-edit the package script, copy a file into SupportFiles. Write real PowerShell and OUTPUT what you want to see
-(Write-Output / the expression itself) - whatever the command prints is what you get back.
+list or extract an archive, edit the package script, copy a file into SupportFiles. Write real PowerShell and OUTPUT
+what you want to see (Write-Output / the expression itself) - whatever the command prints is what you get back.
 Set intent to "modify" for anything that writes, renames, copies or deletes; "read" for everything else.
+THE ORDER'S SOURCE IS HERE: {1} - read, list and open anything in it.
+YOU MAY WRITE HERE: {0}. Extract, copy and experiment there. The order folder, the previous package and the network
+shares are read-only: copy or extract FROM them INTO your work folder. Never ask a person to do what this can do.
 You may call this as often as you need before you submit your result.
-'@ -Parameters @{ type = 'OBJECT'; properties = @{
+'@ -f $(if ($writable) { $writable } else { 'your work folder' }), $(if ("$($Ctx.OrderFolder)".Trim()) { "$($Ctx.OrderFolder)" } else { 'the order folder named in the dossier' })) -Parameters @{ type = 'OBJECT'; properties = @{
                 purpose = @{ type = 'STRING'; description = 'one short line: why you are running this, in plain words for the packager' }
                 intent  = @{ type = 'STRING'; description = 'read | modify' }
                 script  = @{ type = 'STRING'; description = 'the PowerShell. The working directory is already the package folder, so relative paths work.' } }

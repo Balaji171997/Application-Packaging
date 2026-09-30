@@ -1,0 +1,21 @@
+{
+    "AI":  {
+               "_":  "The AI connection. This file is git-ignored and stays on this machine: the client secret and API key live here and nowhere else. Model = the brain for every job; FallbackModels are used only when it is unavailable; MaxCostPerPackageUSD stops a runaway order.",
+               "Enabled":  true,
+               "Provider":  "openai",
+               "BaseUrl":  "https://llmapi.ai.vwgroup.com/v1",
+               "TokenUrl":  "https://idp.cloud.vwgroup.com/auth/realms/kums-mfa/protocol/openid-connect/token",
+               "ClientId":  "idp-99629305-eb32-4450-af6d-0762ac02ca2b-llmaas-app",
+               "ClientSecret":  "cidps_lWOI5rXq9WyH8NuMidjiNDKByVT4Vd2zehop7CxYcaVfXYwE4qbB1HYBfo",
+               "ApiKey":  "sk-htirwepUbCSFNswyBa8-rA",
+               "ApiKeyHeader":  "X-LLM-API-CLIENT-ID",
+               "ApiKeyPrefix":  "Bearer ",
+               "AuthMode":  "token+key",
+               "Model":  "gemini-2.5-pro",
+               "FallbackModels":  [
+                                      "claude-sonnet-4.6",
+                                      "gpt-5.1"
+                                  ],
+               "MaxCostPerPackageUSD":  5
+           }
+}

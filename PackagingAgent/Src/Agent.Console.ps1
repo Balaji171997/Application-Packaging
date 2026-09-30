@@ -88,6 +88,12 @@ param($a, $box)
 $log = $a.activity; $script:AgentActivityLog = $log; $sheet = $a.sheet
 # IS THIS MACHINE FIT TO TEST ON? If a copy of the application is already here, the before/after diff is worthless.
 # The AI decides what each match really is and what must come off; the tool runs the uninstall commands.
+# WHAT EARLIER TESTS COULD NOT TAKE OFF THIS MACHINE comes off first - every test starts from a clean machine
+$box.Progress = 'removing what earlier tests left on this machine'
+$early = try { Clear-AgentEarlierLeftovers -Progress { param($t) $box.Progress = "$t" } } catch { $null }
+if ($early -and (@($early.removed).Count -or @($early.stillThere).Count)) {
+    Add-AgentActivity -Log $log -Actor 'TOOL' -Stage 'evaluate' -Kind $(if (@($early.stillThere).Count) { 'error' } else { 'step' }) -Text "Left by earlier tests on this machine: removed $(@($early.removed).Count)$(if (@($early.removed).Count) { " ($(@($early.removed) -join '; '))" })$(if (@($early.stillThere).Count) { "; STILL THERE: $(@($early.stillThere) -join '; ')" })."
+}
 $box.Progress = 'checking what is already installed'
 $mp = Invoke-AgentMachinePrep -Sheet $sheet -Execute -Progress { param($t) $box.Progress = "$t" }
 $sheet.machinePrep = $mp
@@ -140,6 +146,16 @@ if ($wantExtract -and @(Get-AgentList $sheet.extractedMsis.candidates).Count) {
                 Add-AgentActivity -Log $log -Actor 'TOOL' -Stage 'evaluate' -Kind 'error' -Text "Nothing could be extracted: $($ef.note)"
             }
         }
+    }
+}
+
+# PREREQUISITES THAT ARE PACKAGES (a database client the instructions require): installed from their packages BEFORE
+# the baseline, so the application is tested the way it will meet a client, and nobody is asked to install them
+$preq = @(Get-AgentList $ev.prerequisitePackages)
+if ($preq.Count) {
+    $box.Progress = 'installing the prerequisite packages'
+    foreach ($r in @(Install-AgentPrerequisitePackages -Sheet $sheet -Packages $preq -Progress { param($t) $box.Progress = "$t" })) {
+        Add-AgentActivity -Log $log -Actor 'TOOL' -Stage 'evaluate' -Kind $(if ($r.ok) { 'step' } else { 'error' }) -Text "Prerequisite $($r.name): $(if ($r.ok) { "installed from its package (exit $($r.exitCode)) - it stays until the package tests are done" } else { "NOT installed: $($r.error)$($r.exitCode)" })" -Command "$($r.path)"
     }
 }
 
@@ -350,7 +366,8 @@ if (@($seq).Count -ge 2 -or $pass -gt 1) {
 $ranSequence = [bool]$trial
 for ($round = 1; $round -le 3 -and -not $ranSequence; $round++) {
     $trial = Invoke-AgentSilentTrial -Installer $a.installer -Candidates $cands -RunAs $p.RunAs -AlsoLookIn $look -Progress { param($t) $box.Progress = "$t" } -Judge $judge -CaptureMsiTo "$($sheet.capturedDir)" `
-                 -BetweenAttempts { & $cleanup 'before the next attempt' } -CleanBeforeFirst:($round -gt 1)
+                 -BetweenAttempts { & $cleanup 'before the next attempt' } -CleanBeforeFirst:($round -gt 1 -and -not $justRebaselined)
+    $justRebaselined = $false
     & $endTrace
     foreach ($att in @($trial.attempts)) {
         $att.round = $round
@@ -366,7 +383,19 @@ for ($round = 1; $round -le 3 -and -not $ranSequence; $round++) {
     if (-not $advice) { Add-AgentActivity -Log $log -Actor 'TOOL' -Stage 'evaluate' -Kind 'error' -Text 'The AI could not be reached for advice - stopping the trial.'; break }
     Add-AgentActivity -Log $log -Actor 'AI' -Stage 'evaluate' -Text "$($advice.diagnosis)"
     $sheet.retryAdvice = $advice
-    if ($advice.needsSomethingElse -and $advice.needsSomethingElse.required) {
+    # A MISSING PREREQUISITE THE TEAM HAS A PACKAGE FOR: clean the failed attempt off, install the prerequisite, take a
+    # new baseline (so the prerequisite is never "cleaned up" as if the test had put it there), and try again
+    $needPkgs = @(Get-AgentList $advice.installPrerequisitePackages)
+    if ($needPkgs.Count) {
+        [void](& $cleanup 'before installing the prerequisite')
+        foreach ($r in @(Install-AgentPrerequisitePackages -Sheet $sheet -Packages $needPkgs -Progress { param($t) $box.Progress = "$t" })) {
+            Add-AgentActivity -Log $log -Actor 'TOOL' -Stage 'evaluate' -Kind $(if ($r.ok) { 'step' } else { 'error' }) -Text "Prerequisite $($r.name): $(if ($r.ok) { "installed from its package (exit $($r.exitCode))" } else { "NOT installed: $($r.error)$($r.exitCode)" })" -Command "$($r.path)"
+        }
+        $box.Progress = 'new baseline with the prerequisite in place'
+        $before = Get-MachineSnapshot; $script:AgentBaseline = $before; $justRebaselined = $true
+        if (-not @(Get-AgentList $advice.candidates).Count) { $advice.candidates = @(@{ command = "$(@($allAttempts.ToArray())[-1].arguments)"; source = 'the same line, now that the prerequisite is installed' }) }
+    }
+    if ($advice.needsSomethingElse -and $advice.needsSomethingElse.required -and -not $needPkgs.Count) {
         # A PERSON HAS TO DO SOMETHING FIRST (record a response file, supply a licence). Running lines that need a file
         # nobody has made yet only produces failures that look like evidence - stop here and ask.
         Add-AgentActivity -Log $log -Actor 'AI' -Stage 'evaluate' -Kind 'error' -Text "This installer needs more than a switch: $($advice.needsSomethingElse.what). $($advice.needsSomethingElse.how)"
@@ -466,7 +495,8 @@ $sheet = Invoke-AgentSnapshotDecision -Sheet $sheet -Result $res -RunInfo $run -
 # THE UNINSTALL IS TESTED TOO - the line the package will use, watched the same way, then the machine compared with how
 # it was before the install. It also gives the machine back.
 $dec = $sheet.decision
-$installed = [bool]($trial.found -or ($dec -is [System.Collections.IDictionary] -and $dec.installOutcome -and [bool]$dec.installOutcome.installedAsExpected))
+# (installed at all - silently or not: whatever went on has to be taken off by its own uninstall, and that is tested)
+$installed = [bool]($trial.found -or ($dec -is [System.Collections.IDictionary] -and $dec.installOutcome -and [bool]$dec.installOutcome.installedAsExpected) -or ($res.Un -and "$($res.Un.DisplayName)".Trim()))
 if ($dec -is [System.Collections.IDictionary] -and -not $dec.Contains('error') -and $installed) {
     $uc = @("$($dec.uninstall.testCommand)", "$($dec.uninstall.command)", "$(if ($res.Un) { $res.Un.QuietUninstall })") | Where-Object { "$_".Trim() } | Select-Object -First 1
     if ($uc) {

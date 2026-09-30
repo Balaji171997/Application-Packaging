@@ -253,6 +253,7 @@ $goodPlan = [ordered]@{
     understanding = 'App 2.0, an MSI with the organisation''s transform; a version bump of App 1.0.'
     documentsRead = @('Installation Instructions.docx: /VERYSILENT line is for another product - ignored')
     predecessor = [ordered]@{ found = $true; name = (Split-Path -Leaf $pred); path = $pred; confidence = 'certain'; why = 'same MSI product, version 1.0 -> 2.0'; searchesRun = @('open_package') }
+    predecessorUnderstanding = [ordered]@{ howItWasPackaged = 'the vendor MSI with the organisation''s transform, post-install logging'; whyItWasDoneThatWay = 'the transform carries the owner''s ServerName'; whatIsDifferentNow = 'only the version'; deviations = @() }
     route = [ordered]@{ kind = 'reuse_with_changes'; number = 1; why = 'the transform carries every choice' }
     install = [ordered]@{ steps = @([ordered]@{ order = 1; installer = 'App Setup 2.0.msi'; arguments = '/qn REBOOT=ReallySuppress TRANSFORMS="App Setup 2.0.mst"'; purpose = 'main application'; source = 'predecessor install line' })
                           alternatives = @([ordered]@{ arguments = 'msiexec /i "App Setup 2.0.msi" /qn REBOOT=ReallySuppress'; source = 'playbook'; why = 'without the transform, to isolate it' })
@@ -305,7 +306,11 @@ $tp = Test-AgentPlan -Sheet $sheet -Plan ([ordered]@{ readiness = 'ready'; route
 Assert 'plan check: no install line is sent back'  ($tp -match 'nothing can be tested')
 $tp2 = Test-AgentPlan -Sheet $sheet -Plan ([ordered]@{ readiness = 'ready'; route = @{ number = 3 }; install = @{ steps = @(@{ installer = 'invented.exe' }) }; predecessor = @{ found = $true } })
 Assert 'plan check: an invented file is sent back' ($tp2 -match "'invented.exe' is not in the delivery")
-Assert 'plan check: a good plan passes'            (-not "$(Test-AgentPlan -Sheet $sheet -Plan $goodPlan)".Trim())
+$noUnd = [ordered]@{}; foreach ($k in $goodPlan.Keys) { if ($k -ne 'predecessorUnderstanding') { $noUnd[$k] = $goodPlan[$k] } }
+Assert 'plan check: a predecessor must be understood before deciding' ((Test-AgentPlan -Sheet $sheet -Plan $noUnd) -match 'predecessorUnderstanding is missing')
+$gpMsg = "$(Test-AgentPlan -Sheet $sheet -Plan $goodPlan)".Trim()
+Assert 'plan check: a good plan passes'            (-not $gpMsg)
+if ($gpMsg) { Write-Host "     $gpMsg" -ForegroundColor Yellow }
 Assert 'plan check: loose files need no installer' (-not ("$(Test-AgentPlan -Sheet $sheetE -Plan ([ordered]@{ readiness = 'ready'; route = @{ number = 7 }; install = @{ steps = @() }; predecessor = @{ found = $false; why = 'none' } }))" -match 'nothing can be tested'))
 
 # =====================================================================================================================
@@ -751,6 +756,26 @@ if (-not $twoProc.HasExited) { try { $twoProc.Kill() } catch {} }
 # the installer is asked what it accepts, and the answer is read
 $hl = @(Get-AgentInstallerHelpLook -ExePath $psExe -Switches @('/?') -TimeoutSec 15)
 Assert 'help: the installer''s own list of switches is read' (@($hl).Count -eq 1 -and $hl[0].looksLikeHelp -and "$($hl[0].consoleText)" -match '(?i)-NoProfile')
+# THE WHOLE DELIVERY IS VISIBLE: a zip three folders down, behind 160 other files, is listed with its path and contents
+$dl = New-TestDir 'delivery'; $dlSrc = Join-Path $dl 'source'; New-Item -ItemType Directory -Force (Join-Path $dlSrc 'App'), (Join-Path $dlSrc 'Tools\Drv\stage') | Out-Null
+1..160 | ForEach-Object { Set-Content (Join-Path $dlSrc "App\f$_.dll") 'x' -Encoding Ascii }
+Set-Content (Join-Path $dlSrc 'Tools\Drv\stage\ftdibus.inf') '[Version]' -Encoding Ascii; Set-Content (Join-Path $dlSrc 'Tools\Drv\stage\ftdiport.inf') '[Version]' -Encoding Ascii
+Compress-Archive -Path (Join-Path $dlSrc 'Tools\Drv\stage\*') -DestinationPath (Join-Path $dlSrc 'Tools\Drv\drivers.zip') -Force
+Remove-Item (Join-Path $dlSrc 'Tools\Drv\stage') -Recurse -Force
+Copy-Item $psExe (Join-Path $dlSrc 'setup.exe')
+$dlFacts = Get-AgentSourceFacts -Folder $dl
+Assert 'delivery: a deep zip is listed with its path' (@($dlFacts.zips) -contains 'source\Tools\Drv\drivers.zip' -and (@($dlFacts.keyFiles) -join '|') -match [regex]::Escape('source\Tools\Drv\drivers.zip'))
+Assert 'delivery: what is inside every zip is listed' ((@(@($dlFacts.zipContents)[0].entries) -join '|') -match 'ftdibus\.inf')
+Assert 'delivery: every folder is summarised, however many files' ((@($dlFacts.folders) -join '|') -match 'source\\App\\\s+160 file')
+$dlSheet = New-AgentSheet -PkgName 'V_A_x86_1.0-0001_MUL' -Folder $dl; $dlSheet.sources = $dlFacts
+$dlSheet = Invoke-AgentPrepare -Sheet $dlSheet
+Assert 'prepare: every delivered zip is expanded into the work folder' (@($dlSheet.expandedZips).Count -eq 1 -and (Test-Path (Join-Path "$(@($dlSheet.expandedZips)[0].expandedTo)" 'ftdibus.inf')) -and "$($dlSheet.expandedDir)" -notlike "$dl*")
+$hnPlan = @{ readiness = 'ask_ao'; route = @{ kind = 'fresh'; number = 3 }; predecessor = @{ found = $false; why = 'none' }; install = @{ steps = @(@{ order = 1; installer = 'setup.exe'; commandLine = '"setup.exe" /S'; arguments = '/S' }) }
+             humanNeeded = @{ required = $true; what = 'Please extract the delivered driver archive'; exactCommand = 'Expand-Archive -Path x.zip -DestinationPath y'; sendBack = 'the paths to the inf files' } }
+Assert 'plan: asking a person for what the hands can do goes back' ((Test-AgentPlan -Sheet $dlSheet -Plan $hnPlan) -match 'your hands can do')
+Assert 'hands: run_powershell says where the AI may write' ((@(Get-AgentOpTools -Ctx (New-AgentOpContext -PackageFolder $dl))[0].Decl.description) -match 'YOU MAY WRITE HERE')
+Assert 'hands: run_powershell names the order''s source folder' ((@(Get-AgentOpTools -Ctx (New-AgentOpContext -PackageFolder $dl -OrderFolder $dl))[0].Decl.description) -match [regex]::Escape("SOURCE IS HERE: $dl"))
+Assert 'delivery: every file, with its path, when the order is a readable size' (@($dlFacts.allFiles).Count -eq 162 -and (@($dlFacts.allFiles) -join '|') -match [regex]::Escape('source\Tools\Drv\drivers.zip'))
 # the toolkit's log goes in full, as readable lines
 $cm = ConvertFrom-AgentCmTraceLog '<![LOG[Executing [C:\x\Ceus82.exe /SILENT]...]LOG]!><time="10:00:01.123+120" date="09-29-2026" component="Start-ADTProcess" context="SYSTEM" type="1" thread="1" file="x">
 <![LOG[Execution failed with exit code [1603].]LOG]!><time="10:00:09.456+120" date="09-29-2026" component="Start-ADTProcess" context="SYSTEM" type="3" thread="1" file="x">'
@@ -769,7 +794,7 @@ function Start-AgentInstallerProcess { param([string]$File, [string]$Arguments =
     $psi = New-Object System.Diagnostics.ProcessStartInfo; $psi.FileName = $File; $psi.Arguments = $Arguments; $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
     return @{ Process = [System.Diagnostics.Process]::Start($psi); How = 'test launch' } }
 $ptr = Invoke-AgentPackageTest -ScriptPath (Join-Path $ptContent 'Invoke-AppDeployToolkit.ps1') -DeploymentTypes @('Install', 'Bogus') -Sheet ([ordered]@{ identity = @{ vendor = 'V'; app = 'A' } }) -StallSec 4
-Remove-Item Function:\Start-AgentInstallerProcess; . (Join-Path $here 'Src\Agent.Core.ps1')
+# (the stand-in launcher stays until the end of this section - the runs below need it too)
 Assert 'package test: the run is reported with its exit code and the machine since' (@($ptr.runs).Count -eq 2 -and $null -ne @($ptr.runs)[0].exitCode -and "$(@($ptr.runs)[0].command)" -match '-DeploymentType Install -DeployMode Silent' -and $null -ne @($ptr.runs)[0].machineSinceThisRun)
 Assert 'package test: only Install, Repair, Uninstall exist' ("$(@($ptr.runs)[1].verdict)" -eq 'not-run')
 # an MSI a vendor EXE unpacks while it runs, and deletes at the end, is caught while it exists
@@ -957,7 +982,10 @@ $mkPkg = { param($Name, $Post, $Pre, [switch]$WithDocs)
 $corpusOut = New-TestDir 'corpusout'; $corpusCache = New-TestDir 'corpuscache'
 $hv = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here 'Tools\Build-CorpusKnowledge.ps1') -From $lib -OutDir $corpusOut -CacheDir $corpusCache 2>&1 | ForEach-Object { "$_" }
 Assert 'harvest: it reads a library and writes the corpus' ((Test-Path "$corpusOut\Index.json") -and (Test-Path "$corpusOut\Patterns.json") -and (Test-Path "$corpusOut\Vendors.json") -and (Test-Path "$corpusOut\Lessons.json") -and (Test-Path "$corpusOut\Packages\Vendor.json"))
-if (-not (Test-Path "$corpusOut\Index.json")) { $hv | Select-Object -Last 15 | ForEach-Object { Write-Host "     $_" -ForegroundColor Red } }
+if (-not ((Test-Path "$corpusOut\Index.json") -and (Test-Path "$corpusOut\Packages\Vendor.json") -and (Test-Path "$corpusOut\Lessons.json"))) {
+    $hv | Select-Object -Last 25 | ForEach-Object { Write-Host "     harvester: $_" -ForegroundColor Yellow }
+    Get-ChildItem $corpusOut -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "     harvester wrote: $($_.FullName.Substring($corpusOut.Length)) $($_.Length)" -ForegroundColor Yellow }
+}
 $script:AgentCorpusDir = $corpusOut; $script:AgentCorpusCache = @{}
 $vp = @(Get-AgentCorpusPart 'Packages\Vendor.json') | Where-Object { $_.package -eq 'Vendor_Tool_x64_1.0-0001_MUL' }
 Assert 'harvest: two packages indexed'             (@(Get-AgentCorpusPart 'Index.json').Count -eq 2)

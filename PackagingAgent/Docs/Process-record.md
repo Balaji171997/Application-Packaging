@@ -154,6 +154,47 @@ means nobody touches anything**: any window the hands had to close - an error bo
 prompt, an application or console left open - is recorded in `neededIntervention` and makes the attempt, the uninstall
 test or the package test NOT silent; the package has to suppress it. A progress window that goes by itself is fine.
 
+Next run: the plan asked the PACKAGER to extract a delivered driver zip, with a wrong path in the command. Why: the
+delivery listing showed only the first 150 files (the zip, three folders down, was not among them) and zips by name
+only, so the AI never saw where the zip was or what was in it; and nothing stopped a plan from handing a person work
+the hands can do. Now: `sources.keyFiles` (every archive/installer/driver/config file with its path, up to 400),
+`sources.zipContents` (each zip's entries, read without extracting), `sources.folders` (every folder with counts and
+kinds); prepare expands every delivered zip into the work folder (`expandedZips`, also searched for installers);
+run_powershell states where the AI may write; the plan check sends back a humanNeeded that asks for listing,
+extracting or copying; the handbook: never ask a person for what the hands can do.
+
+Third Kistler field test (29 Sep, afternoon). What happened and what was changed (all general, no application named):
+- The predecessor's main MSI was a CAPTURE (author "MAN Software Packaging", InstallShield); the vendor EXE never had one.
+  The AI looked for an MSI to extract and concluded "the vendor no longer ships it". Now every MSI read gets
+  `whoBuiltIt` (summary info: author, comments, creating tool - `Get-AgentMsiAuthorship`); the predecessor payload flags
+  `capturedByAPackagingTeam`; the plan check sends back a plan that ignores it; the handbook: a captured predecessor
+  means "capture the new version the same way" (a person's job - say so), everything else from the predecessor.
+- The error dialog came from a MISSING PREREQUISITE (the instructions require a database client). The retry diagnosed
+  it but asked the packager. Now `evaluate.prerequisitePackages` / retry `installPrerequisitePackages`: the hands
+  install the team's package of it from the share (new baseline afterwards), and remove it after the package tests.
+- 0 of 13 planned changes landed: finds copied from the v3 predecessor, the build converts to v4. The dossier now shows
+  a v3 predecessor CONVERTED; the build retries a failed find converted, then ignoring indentation (`Edit-AgentScriptTrimmed`).
+- Verify ran out of 16 rounds: now the configured 30.
+- The uninstall test only ran for a "silent" install: now whenever the install left an ARP entry.
+- Cleanup left the drivers the setup added: `Remove-AgentAddedDrivers` (pnputil, only when no copy existed before);
+  whatever a cleanup cannot remove is recorded (`machine-leftovers.json`) and removed before the next evaluation
+  (`Clear-AgentEarlierLeftovers`); folders the predecessor script names that already exist are shown to the plan, and
+  removeFirst may remove a folder.
+- MSI catching: also every MSI named on a new msiexec command line, copied the moment the process appears; scans every
+  1.5 s. A child a setup starts just as it ends is found in a last look for descendants and closed.
+
+Then (packager): an MSI can be unpacked anywhere, not only in the temp folders - watch the event log too; prerequisites
+are never installed from a share, and a prerequisite can have its own; and when a predecessor exists and the source
+matches even partly, first reason why it was packaged that way, and only deviate with a good reason. So:
+- the runner reads the MsiInstaller events while it runs ("Beginning a Windows Installer transaction: <path>") and the
+  msiexec command lines, and copies every MSI they name the moment it is named; the events are kept on the attempt
+  (`msiEvents`) even when the file was already gone.
+- prerequisite packages carry an install order (their own prerequisites first, read from each package's script and
+  documents), are installed from a LOCAL copy one by one, the chain stops at the first failure with that package's own
+  toolkit log, and they are removed in reverse order after the tests.
+- plan: `predecessorUnderstanding` (how it was packaged, why, what is different now, each deviation with its reason);
+  the plan check sends back a plan without it when a predecessor exists, and a fresh build without reasons.
+
 The uninstall is now tested after the judgement (`Invoke-AgentUninstallTest` + `submit_uninstall_review`); what it
 settles goes into the decision the build reads. `agent.settings.json` is now only the connection, the model, the
 fallbacks and the cost cap - prices live in code (they only serve the cap).

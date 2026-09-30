@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: feedback
   originSessionId: a96ed47a-37eb-4079-887f-9966cf709555
-  modified: 2026-09-29T04:31:36.684Z
+  modified: 2026-09-30T02:05:25.284Z
 ---
 
 From the user's field tests and follow-ups (28-29 Sep 2026):
@@ -26,6 +26,11 @@ From the user's field tests and follow-ups (28-29 Sep 2026):
 - SILENT = nobody touches anything. Brief progress/splash is fine; ANY window that needs a click or close (error box
   "to ignore", prompt, app/console left open) = NOT silent even if the instructions say ignore - the package must
   suppress it. General rule, never phrase it as one application's case
+- a predecessor MSI may be the TEAM'S CAPTURE (author "MAN Software Packaging", InstallShield) - then the method is
+  "capture again" (a person's job) and everything else follows the predecessor
+- MSIs can be unpacked anywhere - watch MsiInstaller events + msiexec command lines, not just temp folders
+- prerequisites: copy locally then install (never from the share), in order incl. their own prerequisites
+- predecessor exists and source partly matches -> first reason WHY it was packaged that way; deviate only with a reason
 - "we are creating helping hands and instructions - the AI does the work; a tool only where it makes a job easier,
   and the AI keeps the freedom to do it itself"
 

@@ -910,6 +910,30 @@ function Find-AgentPredecessorInOrder {
     return @($out.ToArray() | Sort-Object rank, name)
 }
 
+# WHO BUILT THIS MSI - the vendor, or a packaging team that CAPTURED the vendor's setup into an MSI. The MSI's summary
+# information says so (author, comments, the tool that created it). It decides what "the predecessor's method" really
+# is: a vendor MSI can be taken again from the new delivery; a captured one cannot - the capture has to be made again.
+# On a real order the previous package installed "Ceus_8.6.6.9.msi" (author "MAN Software Packaging", created with
+# InstallShield) and the AI kept looking for an MSI inside the vendor EXE that never contained one.
+function Get-AgentMsiAuthorship {
+    param([Parameter(Mandatory)][string]$Path)
+    $r = [ordered]@{ title = ''; subject = ''; author = ''; comments = ''; createdBy = ''; builtByAPackagingTeam = $false; why = '' }
+    try {
+        $i = New-Object -ComObject WindowsInstaller.Installer
+        $si = $i.GetType().InvokeMember('SummaryInformation', 'GetProperty', $null, $i, @($Path, 0))
+        $get = { param($n) try { "$($si.GetType().InvokeMember('Property', 'GetProperty', $null, $si, @($n)))" } catch { '' } }
+        $r.title = & $get 2; $r.subject = & $get 3; $r.author = & $get 4; $r.comments = & $get 6; $r.createdBy = & $get 18
+        try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($si); [void][Runtime.InteropServices.Marshal]::ReleaseComObject($i) } catch {}
+    } catch { $r.why = "the summary information could not be read: $($_.Exception.Message.Split([char]10)[0])"; return $r }
+    $txt = "$($r.author) $($r.comments) $($r.title)"
+    $team = [regex]::Match($txt, '(?i)(software packaging|packaging team|packaging service|repackag\w*|created by [^|]*packag\w*|captured|client management)')
+    $tool = [regex]::Match("$($r.createdBy)", '(?i)(AdminStudio|Repackager|Advanced Installer|Master Packager|RayPack|EMCO|MSI Wrapper|Orca|InstallShield)')
+    if ($team.Success) { $r.builtByAPackagingTeam = $true; $r.why = "author/comments say '$($team.Value)'$(if ($tool.Success) { "; created with $($tool.Value)" })" }
+    elseif ($tool.Success -and $r.createdBy -match '(?i)Repackager|AdminStudio|Master Packager|RayPack|EMCO|MSI Wrapper') { $r.builtByAPackagingTeam = $true; $r.why = "created with $($tool.Value), a repackaging tool" }
+    else { $r.why = "no sign of a packaging team - author '$($r.author)'" }
+    return $r
+}
+
 function Get-AgentPredecessorPayload {
     <#
       What the PREVIOUS package actually shipped in its Files folder. This is the missing half of the reuse
@@ -934,10 +958,14 @@ function Get-AgentPredecessorPayload {
     $all = @()
     try { $all = @(Get-ChildItem -LiteralPath $filesDir[0].FullName -File -Recurse -ErrorAction SilentlyContinue) } catch {}
     $res.installers = @($all | Where-Object { $_.Extension -match '(?i)^\.(msi|msp|exe|appx|msix)$' } | Select-Object -First $MaxFiles |
-        ForEach-Object { [ordered]@{ name = $_.Name; ext = $_.Extension.ToLower(); sizeMB = [math]::Round($_.Length / 1MB, 1) } })
+        ForEach-Object { $o = [ordered]@{ name = $_.Name; ext = $_.Extension.ToLower(); sizeMB = [math]::Round($_.Length / 1MB, 1) }
+                         if ($_.Extension -ieq '.msi') { $o.whoBuiltIt = Get-AgentMsiAuthorship -Path $_.FullName }
+                         $o })
+    $cap = @($res.installers | Where-Object { $_.whoBuiltIt -and $_.whoBuiltIt.builtByAPackagingTeam })
+    if ($cap.Count) { $res.capturedByAPackagingTeam = @($cap | ForEach-Object { "$($_.name): $($_.whoBuiltIt.why)" }) }
     $res.transforms = @($all | Where-Object { $_.Extension -match '(?i)^\.mst$' } | ForEach-Object { $_.Name })
     $res.otherFiles = @($all | Where-Object { $_.Extension -notmatch '(?i)^\.(msi|msp|exe|appx|msix|mst)$' } | Select-Object -First 15 | ForEach-Object { $_.Name })
-    $res.note = "the previous package shipped $(@($res.installers).Count) installer file(s)$(if (@($res.transforms).Count) { " and $(@($res.transforms).Count) transform(s)" }). Compare these against what THIS order delivered: if the kind of file changed, the change itself needs explaining before the old script can be reused."
+    $res.note = "the previous package shipped $(@($res.installers).Count) installer file(s)$(if (@($res.transforms).Count) { " and $(@($res.transforms).Count) transform(s)" }). Compare these against what THIS order delivered: if the kind of file changed, the change itself needs explaining before the old script can be reused.$(if ($cap.Count) { " $(@($cap).Count) of its MSI(s) were BUILT BY A PACKAGING TEAM (captured from the vendor setup), not shipped by the vendor - see capturedByAPackagingTeam." })"
     return $res
 }
 

@@ -114,7 +114,10 @@ your hands; the only places you never write to are the network shares and the pr
         fromTheFormTickboxes = $(if ($Sheet.declared -and $Sheet.declared.fromRules) { $Sheet.declared.fromRules } else { $null }) })
 
     # 2. WHAT WAS DELIVERED
-    & $add 'WHAT WAS DELIVERED (all of it, by name - installers with what their headers say)' $Sheet.sources
+    # WHERE THE SOURCE LIVES, said first and plainly - every path in the listing is relative to it, and the engineer
+    # looks at anything there itself (run_powershell, read_document) instead of asking anyone.
+    $srcWhere = "The order is on this machine at: $folder$(if ("$($Sheet.sources.payloadRoot)".Trim()) { "`nThe source (payload) root is: $($Sheet.sources.payloadRoot)" })$(if ("$($Sheet.orderStagedFrom)".Trim()) { "`nIt was copied from: $($Sheet.orderStagedFrom) (read-only)" })`nEvery relative path below is under the order folder. Read, list, open or copy anything in it yourself with run_powershell or read_document; it is read-only, so extract or copy into your work folder."
+    & $add 'WHAT WAS DELIVERED (all of it - every file with its path, installers with what their headers say, what is inside every zip)' "$srcWhere`n$(try { $Sheet.sources | ConvertTo-Json -Depth 12 -Compress } catch { "$($Sheet.sources)" })"
 
     # 3. THE DOCUMENTS, IN FULL
     try { foreach ($p in @(Get-AgentDossierDocuments -Sheet $Sheet)) { $parts.Add($p) } }
@@ -130,6 +133,10 @@ your hands; the only places you never write to are the network shares and the pr
     & $add 'THIS MACHINE (where the test install will happen)' ([ordered]@{
         computer = "$env:COMPUTERNAME"; elevated = [bool](Test-AgentElevated)
         relatedInstalled = @($related)
+        # folders the previous package's script works with that ALREADY exist here - an earlier test (or an older install)
+        # left them, and they change what a test shows. Put the ones that belong to this application in removeFirst.
+        foldersThePredecessorUsesThatAlreadyExistHere = @(try { Get-AgentPredecessorPathsOnMachine -Sheet $Sheet } catch { @() })
+        leftBehindByEarlierTestsHere = $(try { $lp = Get-AgentLeftoversPath; if (Test-Path -LiteralPath $lp) { [IO.File]::ReadAllText($lp) } else { 'nothing recorded' } } catch { $null })
         aboutRelatedInstalled = $(if (@($related).Count) { 'already installed here and matching this application by name or publisher. Anything that is really this application (or an older version of it) must come off before the baseline, or the before/after picture is unreadable - say so in evaluate.removeFirst. A name collision with unrelated software stays.' } else { 'nothing related is installed - the machine is clean for this application' })
         evidenceTools = $(try { Get-AgentToolInventory } catch { $null }) })
 
@@ -166,6 +173,25 @@ your hands; the only places you never write to are the network shares and the pr
         catalogueLookupAtIntake = @(Get-AgentList $Sheet.history.kb) })
 
     return $parts.ToArray()
+}
+
+# The machine paths the previous package's script names ($envProgramData\X, $envProgramFilesX86\X ...) that exist
+# on this machine right now.
+function Get-AgentPredecessorPathsOnMachine {
+    param($Sheet)
+    $pred = if ($Sheet.history -and $Sheet.history.predecessor) { "$($Sheet.history.predecessor.path)" } else { '' }
+    if (-not $pred -or -not (Test-Path -LiteralPath $pred)) { return @() }
+    $sc = @(Get-ChildItem -LiteralPath $pred -Recurse -Depth 3 -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '(?i)^(Invoke-AppDeployToolkit|Deploy-Application)\.ps1$' } | Select-Object -First 1)
+    if (-not $sc.Count) { return @() }
+    $t = [IO.File]::ReadAllText($sc[0].FullName)
+    $map = [ordered]@{ '$envProgramFilesX86' = ${env:ProgramFiles(x86)}; '$envProgramFiles' = $env:ProgramFiles; '$envProgramData' = $env:ProgramData; '$envCommonProgramFilesX86' = ${env:CommonProgramFiles(x86)}; '$envCommonProgramFiles' = $env:CommonProgramFiles; '$envAllUsersProfile' = $env:ALLUSERSPROFILE; '$envPublic' = $env:PUBLIC }
+    $out = @()
+    foreach ($m in @([regex]::Matches($t, '(?i)(\$env(ProgramFilesX86|ProgramFiles|ProgramData|CommonProgramFilesX86|CommonProgramFiles|AllUsersProfile|Public))\\([^\\"''\s]+)'))) {
+        $root = $map[$m.Groups[1].Value]; if (-not $root) { continue }
+        $p = Join-Path $root $m.Groups[3].Value
+        if ((Test-Path -LiteralPath $p) -and $out -notcontains $p) { $out += $p }
+    }
+    return @($out | Select-Object -First 20)
 }
 
 # The documents the orderer sent, IN FULL, with the pictures in them. The install instructions first - they decide how
@@ -270,6 +296,18 @@ function Open-AgentPackage {
     if ($s.Count) {
         $res.scriptName = $s[0].FullName.Substring($Path.TrimEnd('\').Length).TrimStart('\')
         $t = try { [IO.File]::ReadAllText($s[0].FullName) } catch { '' }
+        # A v3 SCRIPT IS CONVERTED BEFORE ANY CHANGE IS APPLIED TO IT. The build carries a v3 predecessor over into v4
+        # (Execute-MSI -> Start-ADTMsiProcess, $dirFiles -> $adtSession.DirFiles ...), so a change whose find text was
+        # copied from the v3 original matches nothing - on a real order 0 of 13 planned changes landed. The engineer
+        # gets the script in the form its changes will be applied to.
+        $isV3 = ($s[0].Name -ieq 'Deploy-Application.ps1' -or $t -match '(?m)^\s*(Execute-MSI|Execute-Process|Show-InstallationWelcome)\b')
+        if ($isV3 -and (Get-Command Convert-V3ToV4Content -ErrorAction SilentlyContinue)) {
+            $conv = try { "$(Convert-V3ToV4Content -Content $t)" } catch { '' }
+            if ($conv.Trim()) {
+                $res.scriptGeneration = 'PSADT v3 - shown CONVERTED to v4, exactly as the build carries it over. Copy package.changes find texts from THIS text, not from the v3 original (which is in the package on the share).'
+                $t = $conv
+            }
+        }
         if ($t.Length -gt $MaxScriptChars) { $t = $t.Substring(0, $MaxScriptChars) + "`n...(THE REST IS NOT HERE - $($t.Length) characters in all; read it with run_powershell: Get-Content -LiteralPath '$($s[0].FullName)')" }
         $res.script = $t
     } else { $res.note = 'no Invoke-AppDeployToolkit.ps1 / Deploy-Application.ps1 in it - it may not be a PSADT package' }
@@ -606,6 +644,11 @@ function Get-AgentSchema {
                     why = & $S 'STRING' 'what makes it the previous version of THIS application - or why none of the candidates fits'
                     searchesRun = & $arr $str
                     rejectedTheDossierPredecessor = & $S 'STRING' 'only when the dossier named one and it is the wrong package: why' } }
+                predecessorUnderstanding = @{ type = 'OBJECT'; description = 'when a previous package exists: understand it BEFORE deciding anything'; properties = @{
+                    howItWasPackaged = & $S 'STRING' 'what it installs, from which files, with which lines, and what else it does (removal, drivers, permissions, configuration, repair, cleanup)'
+                    whyItWasDoneThatWay = & $S 'STRING' 'the reason behind each unusual choice - a captured MSI, a transform, a step skipped, a file shipped beside - read from its script, comments, documents and the old evaluation'
+                    whatIsDifferentNow = & $S 'STRING' 'what in THIS delivery differs from what the predecessor packaged (files, versions, the installer technology), and what is the same'
+                    deviations = & $arr (@{ type = 'OBJECT'; properties = @{ what = $str; reason = & $S 'STRING' 'why following the predecessor is not good enough here' } }) 'everything this package will do DIFFERENTLY from the predecessor, each with a real reason; empty = follow it' } }
                 route = @{ type = 'OBJECT'; properties = @{
                     kind = & $S 'STRING' 'reuse_as_is | reuse_with_changes | fresh'
                     number = & $S 'INTEGER' '1 MSI+transform | 2 MSI+properties | 3 EXE switches | 4 EXE+response file | 5 extracted MSI | 6 silent+post-install config | 7 loose files | 8 manual'
@@ -631,6 +674,7 @@ function Get-AgentSchema {
                     whyCompare = $str
                     removeFirst = & $arr (@{ type = 'OBJECT'; properties = @{ displayName = $str; command = & $S 'STRING' 'exact silent uninstall command'; why = $str } }) 'from thisMachine.relatedInstalled: what must come off before the baseline'
                     extractMsi = @{ type = 'OBJECT'; properties = @{ wanted = $bool; why = $str } }
+                    prerequisitePackages = & $arr (@{ type = 'OBJECT'; properties = @{ order = $int; name = $str; path = & $S 'STRING' 'the package folder on the share (search_previous_packages finds it)'; why = & $S 'STRING' 'who needs it: the application, or another prerequisite in this list' } }) 'this team''s packages of software that must already be on the machine, IN INSTALL ORDER - including what those packages need themselves (open_package each one: its script and documents name its own prerequisites). The hands copy each locally, install it, and remove them all after the tests'
                     traceTheInstall = @{ type = 'OBJECT'; properties = @{ wanted = $bool; why = $str } }
                     inspectFirstRun = @{ type = 'OBJECT'; properties = @{ wanted = $bool; why = $str } } } }
                 package = @{ type = 'OBJECT'; properties = $pk }
@@ -711,6 +755,7 @@ function Get-AgentSchema {
                 diagnosis = & $S 'STRING' 'what the failures say - exit codes, window titles, what they point at'
                 candidates = & $arr (@{ type = 'OBJECT'; properties = @{ command = & $S 'STRING' 'ARGUMENTS ONLY'; source = $str; expect = $str; why = & $S 'STRING' 'why this differs from what failed' } }) 'best first; empty when no switch can fix it'
                 needsSomethingElse = @{ type = 'OBJECT'; properties = @{ required = $bool; what = $str; how = $str; exactCommand = $str; sendBack = $str } }
+                installPrerequisitePackages = & $arr (@{ type = 'OBJECT'; properties = @{ order = $int; name = $str; path = & $S 'STRING' 'the package folder on the share'; why = $str } }) 'a missing prerequisite this team has a package for (with ITS prerequisites first, in order): the hands copy each locally, install it, then run your candidates again (never ask the packager to install it)'
                 giveUp = & $S 'BOOLEAN' 'true when no sourced option is left'
                 summary = $str }
                 required = @('diagnosis', 'summary') }
@@ -1023,7 +1068,7 @@ function Get-AgentInstallerRoots {
     param($Sheet)
     $r = @()
     if ($Sheet) {
-        foreach ($p in @("$($Sheet.sources.payloadRoot)", "$($Sheet.extractedDir)", "$($Sheet.capturedDir)")) { if ("$p".Trim()) { $r += $p } }
+        foreach ($p in @("$($Sheet.sources.payloadRoot)", "$($Sheet.expandedDir)", "$($Sheet.extractedDir)", "$($Sheet.capturedDir)")) { if ("$p".Trim()) { $r += $p } }
         $pred = if ($Sheet.history -and $Sheet.history.predecessor) { "$($Sheet.history.predecessor.path)" } else { '' }
         if ($pred) { foreach ($sub in 'Content\Files', 'Files') { $f = Join-Path $pred $sub; $r += $f } }
     }
@@ -1097,6 +1142,34 @@ function Test-AgentPlan {
         $msgs += 'You say there is no predecessor, but the dossier lists candidates and you give no reason and no searches. Look at them (open_package) and say why none fits, or name the right one.'
     }
     if ("$($Plan.route.kind)" -like 'reuse*' -and -not [bool]$Plan.predecessor.found -and -not ($Sheet.history -and $Sheet.history.predecessor)) { $msgs += "route.kind is $($Plan.route.kind) but no predecessor is found - there is nothing to reuse." }
+    # UNDERSTAND THE PREDECESSOR BEFORE CHANGING IT. It was packaged that way for reasons; leaving it needs a reason too.
+    if ([bool]$Plan.predecessor.found -or ($Sheet.history -and $Sheet.history.predecessor)) {
+        $pu = $Plan.predecessorUnderstanding
+        if (-not ($pu -is [System.Collections.IDictionary]) -or -not "$($pu.howItWasPackaged)".Trim() -or -not "$($pu.whyItWasDoneThatWay)".Trim()) {
+            $msgs += 'predecessorUnderstanding is missing or empty. There is a previous package: say how it was packaged, WHY it was done that way (its script, comments, documents and old evaluation are in the dossier), and what is different in this delivery - before deciding anything.'
+        } elseif ("$($Plan.route.kind)" -eq 'fresh' -and -not @(@(Get-AgentList $pu.deviations) | Where-Object { "$($_.reason)".Trim() }).Count) {
+            $msgs += 'route.kind is fresh although there is a previous package, and predecessorUnderstanding.deviations gives no reason. Follow the predecessor (reuse_with_changes), or name each thing you do differently and why the predecessor''s way is not good enough here.'
+        }
+    }
+    foreach ($pq in @(Get-AgentList $Plan.evaluate.prerequisitePackages)) {
+        if (-not "$($pq.path)".Trim() -or -not (Test-Path -LiteralPath "$($pq.path)")) { $msgs += "The prerequisite package '$($pq.name)' has no reachable path ('$($pq.path)'). Find it with search_previous_packages and give its folder." }
+    }
+    # THE PREVIOUS MSI WAS A CAPTURE. When a packaging team built the predecessor's MSI from the vendor setup, the
+    # predecessor's method is "capture the new version the same way" - which the plan has to say, instead of hunting
+    # the vendor setup for an MSI that was never in it.
+    $pp = if ($Sheet.history -and $Sheet.history.predecessor -and "$($Sheet.history.predecessor.path)".Trim()) { try { Get-AgentPredecessorPayload -PackagePath "$($Sheet.history.predecessor.path)" } catch { $null } } else { $null }
+    if ($pp -and @(@($pp.capturedByAPackagingTeam) | Where-Object { $_ }).Count) {
+        $said = "$(ConvertTo-AgentRecordText $Plan.install.method 4000) $(ConvertTo-AgentRecordText $Plan.humanNeeded 4000) $($Plan.route.why)"
+        if ($said -notmatch '(?i)captur|repackag|built by (the|a|our) (packaging )?team|packaging team') {
+            $msgs += "The previous package's MSI was built by a packaging team, not shipped by the vendor: $(@($pp.capturedByAPackagingTeam) -join '; '). So the predecessor's method is a CAPTURE of the vendor setup, and no extraction will find that MSI in the new delivery. Say so in install.method, and either ask for the new version to be captured the same way (humanNeeded: what, how, what to send back; readiness blocked) with everything else planned from the predecessor, or say why the vendor setup is the better method this time (it must then pass every test)."
+        }
+    }
+    # A PERSON IS NOT A PAIR OF HANDS. On a real order the plan asked the packager to extract a delivered zip and report
+    # the paths inside it - two lines of PowerShell the engineer could run itself, with a wrong path in the command.
+    $hn = $Plan.humanNeeded
+    if ($hn -and [bool]$hn.required -and "$($hn.exactCommand) $($hn.what) $($hn.sendBack)" -match '(?i)\b(Expand-Archive|Copy-Item|Move-Item|Get-ChildItem|Get-Content|New-Item|7z(\.exe)?|msiexec\s+/a|extract|unzip|un-zip|list (the )?(contents|files)|find (the )?path|paths? (to|of) the)') {
+        $msgs += "humanNeeded asks the packager for something your hands can do on this machine ($("$($hn.what)".Trim())). Do it yourself with run_powershell - extract or copy into your work folder, list it, read it - and plan from what you find (delivered zips are also listed in sources.zipContents and expanded by prepare). humanNeeded is only for what a PERSON must do: click through a wizard to record a response file, supply a licence, key or credential, deliver a missing file."
+    }
     return ($msgs -join "`n")
 }
 
@@ -1204,7 +1277,7 @@ function Invoke-AgentMachinePrep {
     if ($Progress) { & $Progress 'checking what is already installed on this machine' }
     $found = @(Get-AgentInstalledRelated -Vendor "$($Sheet.identity.vendor)" -App "$($Sheet.identity.app)" -ExtraTokens @(@(Get-AgentList $Sheet.sources.installers | ForEach-Object { "$($_.productName)" }) + @("$($Sheet.history.predecessor.name)") | Where-Object { "$_".Trim() }))
     $out = [ordered]@{ found = $found; decision = $null; removed = @(); readyToTest = $true; notInThePlan = @() }
-    if (-not $found.Count) { $out.summary = 'the machine is clean - nothing related is installed'; return $out }
+    if (-not $found.Count -and -not @(Get-AgentList $Sheet.plan.evaluate.removeFirst | Where-Object { "$($_.command)" -match '(?i)\bRemove-Item\b|\brmdir\b|\brd\s|\bdel\s' }).Count) { $out.summary = 'the machine is clean - nothing related is installed'; return $out }
     $plan = @(Get-AgentList $Sheet.plan.evaluate.removeFirst)
     $out.decision = [ordered]@{ summary = $(if ($plan.Count) { "The plan takes off $($plan.Count) item(s) before the baseline: $(@($plan | ForEach-Object { $_.displayName }) -join ', ')." } else { 'The plan removes nothing before the baseline.' }) }
     $covered = @{}; foreach ($p in $plan) { $covered["$($p.displayName)".ToLowerInvariant()] = $true }
@@ -1213,7 +1286,9 @@ function Invoke-AgentMachinePrep {
         $opCtx = New-AgentOpContext -PackageFolder $env:TEMP -Stage 'evaluate'
         foreach ($item in $plan) {
             if (-not "$($item.command)".Trim()) { continue }
-            if (-not @($found | Where-Object { "$($_.displayName)" -ieq "$($item.displayName)" }).Count) { continue }   # already gone
+            # a program that is no longer installed is skipped; a leftover FOLDER or file the AI named is removed as asked
+            $isPathRemoval = ("$($item.command)" -match '(?i)\bRemove-Item\b|\brmdir\b|\brd\s|\bdel\s')
+            if (-not $isPathRemoval -and -not @($found | Where-Object { "$($_.displayName)" -ieq "$($item.displayName)" }).Count) { continue }   # already gone
             if ($Progress) { & $Progress "removing '$($item.displayName)' so the test starts clean" }
             $r = Invoke-AgentOpCommand -Ctx $opCtx -Purpose "remove '$($item.displayName)' before testing - $($item.why)" -Intent 'modify' -Script "$($item.command)"
             $out.removed += [ordered]@{ displayName = "$($item.displayName)"; command = "$($item.command)"; ok = [bool]$r.ok; output = "$($r.output)" }
@@ -1274,6 +1349,8 @@ function Invoke-AgentSnapshotDecision {
         testRound = $(if ($Sheet.firstMethod) { 2 } else { 1 })
         firstRound = $(if ($Sheet.firstMethod) { [ordered]@{ provenLines = @($Sheet.firstMethod.provenSteps); decided = (ConvertTo-AgentRecordText $Sheet.firstMethod.decision 8000); uninstall = $(if ($Sheet.firstMethod.uninstallTest) { "$($Sheet.firstMethod.uninstallTest.verdict), left behind: $([int]$Sheet.firstMethod.uninstallTest.leftBehind.count)" } else { 'not tested' }) } } else { $null })
         msiCaughtWhileInstalling = @(Get-AgentList $Sheet.msiCaptured)
+        deliveredZipsExpandedTo = @(Get-AgentList $Sheet.expandedZips)
+        prerequisitePackagesInstalled = @(Get-AgentList $Sheet.prerequisitesInstalled)
         installerHelp = (ConvertTo-AgentHelpRecord $Sheet.installerHelp)
         machineSinceTheTestStarted = $(try { Get-AgentRecentEvidence -Since $(if ($Sheet.trialStartedAt) { [datetime]$Sheet.trialStartedAt } else { (Get-Date).AddMinutes(-30) }) } catch { $null })
         machinePrep = $(if ($Sheet.machinePrep) { [ordered]@{ removed = $Sheet.machinePrep.removed; leftInstalled = $Sheet.machinePrep.notInThePlan; stillInstalled = $Sheet.machinePrep.stillInstalled } } else { $null })
@@ -1314,6 +1391,7 @@ function Invoke-AgentRetryCandidates {
     param([Parameter(Mandatory)]$Sheet, [Parameter(Mandatory)]$Attempts, [string]$Installer, [scriptblock]$Progress)
     if (-not (Test-AgentEnabled)) { return $null }
     $ctx = [ordered]@{ installer = (Split-Path -Leaf "$Installer"); parametersTheInstallerAdmitsTo = (ConvertTo-AgentHelpRecord $Sheet.installerHelp); attempts = @(Get-AgentList $Attempts | ForEach-Object { ConvertTo-AgentAttemptRecord $_ })
+                       prerequisitePackagesInstalled = @(Get-AgentList $Sheet.prerequisitesInstalled)
                        machineSinceTheTestStarted = $(try { Get-AgentRecentEvidence -Since $(if ($Sheet.trialStartedAt) { [datetime]$Sheet.trialStartedAt } else { (Get-Date).AddMinutes(-30) }) } catch { $null }) }
     $text = try { $ctx | ConvertTo-Json -Depth 10 -Compress } catch { "$ctx" }
     if ($text.Length -gt 60000) { $text = $text.Substring(0, 60000) + '...(shortened)' }
@@ -1334,7 +1412,8 @@ function ConvertTo-AgentAttemptRecord {
     return [ordered]@{
         installer = "$($A.installer)"; aiCommand = "$($A.aiCommand)"; arguments = "$($A.arguments)"; ranAs = "$($A.command)"; verdict = "$($A.verdict)"; exitCode = $A.exitCode; error = "$($A.error)"
         neededIntervention = @($A.neededIntervention)
-        msiLogFacts = $A.msiLogFacts; msiCaptured = @(@($A.msiCaptured) | Where-Object { $_ } | ForEach-Object { "$($_.file) ($($_.sizeMB) MB)" })
+        msiLogFacts = $A.msiLogFacts; msiCaptured = @(@($A.msiCaptured) | Where-Object { $_ } | ForEach-Object { "$($_.file) ($($_.sizeMB) MB, from $($_.unpackedAt))" })
+        msiEvents = @(@($A.msiEvents) | Where-Object { $_ })
         durationSec = $A.durationSec; installerEndedAfterSec = $A.installerEndedAfterSec; launchedHow = "$($A.launchedHow)"
         templateDefaultsAdded = @($A.templateDefaultsAdded); msiLog = "$($A.msiLog)"
         windowsSeen = @($A.windowsSeen); windowsAfterInstall = @($A.windowsAfterInstall)
@@ -1536,6 +1615,8 @@ function Invoke-AgentPackageVerification {
                                    uninstallTest = $(if ($Sheet.uninstallTest) { [ordered]@{ command = "$($Sheet.uninstallTest.command)"; verdict = "$($Sheet.uninstallTest.verdict)"; exitCode = $Sheet.uninstallTest.exitCode; leftBehind = $Sheet.uninstallTest.leftBehind; note = "$($Sheet.uninstallTest.note)" } } else { 'not run' })
                                    uninstallReview = $(if ($Sheet.uninstallReview) { ConvertTo-AgentRecordText $Sheet.uninstallReview 6000 } else { $null }) } } elseif ("$(Get-AgentStageStatus -Sheet $Sheet -Id 'evaluate')" -eq 'skipped') { 'the test install was SKIPPED - nothing about this package was proven on a machine' } else { $null })
         packageTree = @(Get-AgentPackageTree -Root $pkgFolder -Max 150)
+        deliveredZipsExpandedTo = @(Get-AgentList $Sheet.expandedZips)
+        filesTheOrderDidNotDeliverButTheTestUsed = [ordered]@{ caught = @(Get-AgentList $Sheet.msiCaptured | ForEach-Object { "$($_.path)" }); extracted = "$($Sheet.extractedDir)" }
         theMechanicalChecks = $checks }
     $parts = @(@{ text = "THE PACKAGE AS BUILT: $pkgFolder`n$(try { $facts | ConvertTo-Json -Depth 10 -Compress } catch { '' })" },
                @{ text = "===== THE BUILT SCRIPT ($(Split-Path -Leaf $ScriptPath)), WITH LINE NUMBERS =====`n$numbered" })
@@ -1575,7 +1656,9 @@ function Invoke-AgentPackageVerification {
         Write-Log "AI: verification failed: $($_.Exception.Message)" Warning
         $Sheet.verification = [ordered]@{ error = "$($_.Exception.Message)"; transcript = $tr.ToArray(); changesApplied = @($edits.ToArray()) }
     }
-    # THE PACKAGE TESTS PUT THINGS ON THIS MACHINE - give it back to how it was before the first one
+    # THE PACKAGE TESTS PUT THINGS ON THIS MACHINE - give it back to how it was before the first one, then take off the
+    # prerequisites the evaluation installed for the tests
+    try { $gone = @(Remove-AgentPrerequisitePackages -Sheet $Sheet -Progress $Progress); if ($gone.Count) { Add-AgentTimeline $Sheet "prerequisites removed after the tests: $($gone -join '; ')" } } catch {}
     if ($testCtx -and $testCtx.Baseline) {
         try {
             $cl = Invoke-AgentMachineCleanup -Before $testCtx.Baseline -Sheet $Sheet -Progress $Progress -Why 'after the package tests'
@@ -1590,7 +1673,9 @@ function Invoke-AgentPackageVerification {
 # around it. ONLY A PASS IS A PASS: anything else leaves the package built but not signed off, in front of the packager.
 function Invoke-AgentVerifyLoop {
     param([Parameter(Mandatory)]$Sheet, [Parameter(Mandatory)][string]$ScriptPath, [int]$MaxRounds = 16, [scriptblock]$Progress)
-    if ($MaxRounds -lt 6) { $MaxRounds = 16 }   # callers used to pass the number of whole verify passes (3)
+    # callers used to pass the number of whole verify passes (3). Verify checks, fixes, TESTS the package and re-tests:
+    # 16 rounds ran out on a real order, so it gets the configured verify budget.
+    if ($MaxRounds -lt 20) { $MaxRounds = [Math]::Max(20, [int](Get-AgentConfig).MaxStepsVerify) }
     $Sheet = Invoke-AgentPackageVerification -Sheet $Sheet -ScriptPath $ScriptPath -MaxRounds $MaxRounds -Progress $Progress
     if ("$(Get-AgentStageStatus -Sheet $Sheet -Id 'verify')" -eq 'skipped') { [void](Save-AgentSheet -Sheet $Sheet); return $Sheet }
     $v = $Sheet.verification

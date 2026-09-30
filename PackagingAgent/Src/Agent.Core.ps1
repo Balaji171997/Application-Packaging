@@ -271,8 +271,15 @@ function Get-AgentSourceFacts {
         $s.folders = @($all | Group-Object { Split-Path -Parent (& $rel $_) } | Sort-Object Name | Select-Object -First 200 | ForEach-Object {
             $kinds = ($_.Group | Group-Object { $_.Extension.ToLowerInvariant() } | Sort-Object Count -Descending | Select-Object -First 6 | ForEach-Object { "$($_.Name) x$($_.Count)" }) -join ', '
             "$(if ($_.Name) { $_.Name } else { '(top)' })\  $($_.Count) file(s): $kinds" })
-        $s.otherFiles = @($rest | Select-Object -First 150 | ForEach-Object { (& $rel $_) })
-        if ($rest.Count -gt 150) { $s.notes += "$($rest.Count) further files in the delivery; the first 150 are in otherFiles - keyFiles, zipContents and folders cover the whole delivery" }
+        # THE COMPLETE LIST, every file with its path and size, whenever it is a size a person could read (most orders).
+        # Only a very large payload is summarised - and then keyFiles, zipContents and folders still cover all of it.
+        if ($all.Count -le 600) {
+            $s.allFiles = @($all | ForEach-Object { "$(& $rel $_)  ($([math]::Round($_.Length / 1KB, 1)) KB)" })
+            $s.otherFiles = @()
+        } else {
+            $s.otherFiles = @($rest | Select-Object -First 150 | ForEach-Object { (& $rel $_) })
+            $s.notes += "$($all.Count) files in the delivery - too many to list one by one; keyFiles, zipContents and folders cover all of it, and run_powershell (Get-ChildItem -Recurse on the order folder) lists any folder in full"
+        }
     } catch { $s.notes += "listing the delivery failed: $($_.Exception.Message)" }
     $res = $null
     try { $res = Resolve-Source -RootPath $Folder } catch { $s.notes += "resolver failed: $($_.Exception.Message)" }
@@ -695,6 +702,30 @@ function Invoke-AgentPrepare {
         } else {
             $did.Add('extraction was asked for, but no delivered installer lists an MSI inside (7-Zip cannot read Inno Setup, InstallShield or Wise) - the MSIs the installer unpacks are caught while it runs in the test instead')
         }
+    }
+    # EVERY DELIVERED ZIP, EXPANDED - into this machine's work folder, never into the order. Drivers, configuration and
+    # licence files often arrive zipped; the AI reads them, the test uses them, the build can place them, and nobody is
+    # asked to extract anything by hand.
+    $zips = @(Get-AgentList $Sheet.sources.zips)
+    if ($zips.Count -and -not @(Get-AgentList $Sheet.expandedZips).Count) {
+        $root = if (Get-Command Get-WorkPath -ErrorAction SilentlyContinue) { Get-WorkPath ("Expanded\" + ("$($Sheet.package)" -replace '[\\/:*?"<>|]', '_')) } else { Join-Path $env:TEMP "PackagingAgent\Expanded\$($Sheet.package)" }
+        $exp = @()
+        foreach ($z in $zips) {
+            $src = Join-Path "$($Sheet.folder)" "$z"
+            if (-not (Test-Path -LiteralPath $src)) { $src = Find-AgentOrderFile -Folder "$($Sheet.folder)" -Name (Split-Path -Leaf "$z") }
+            if (-not $src) { continue }
+            $dest = Join-Path $root ([IO.Path]::GetFileNameWithoutExtension($src))
+            try {
+                if ($Progress) { & $Progress "expanding $(Split-Path -Leaf $src)" }
+                if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force -ErrorAction SilentlyContinue }
+                Expand-Archive -LiteralPath $src -DestinationPath $dest -Force -ErrorAction Stop
+                $files = @(Get-ChildItem -LiteralPath $dest -File -Recurse -ErrorAction SilentlyContinue)
+                $exp += [ordered]@{ zip = "$z"; expandedTo = $dest; fileCount = $files.Count; files = @($files | Select-Object -First 60 | ForEach-Object { $_.FullName.Substring($dest.Length).TrimStart('\') }) }
+                $did.Add("expanded $(Split-Path -Leaf $src) ($($files.Count) file(s)) to $dest")
+            } catch { $did.Add("could not expand $(Split-Path -Leaf $src): $($_.Exception.Message.Split([char]10)[0])") }
+        }
+        $Sheet.expandedZips = @($exp)
+        if ($exp.Count) { $Sheet.expandedDir = $root }
     }
     if ($Sheet.plan -and $Sheet.plan.humanNeeded -and [bool]$Sheet.plan.humanNeeded.required) { $need = $Sheet.plan.humanNeeded }
     $Sheet.prepare = [ordered]@{ toolDid = @($did.ToArray()); humanNeeded = $need
@@ -1419,6 +1450,40 @@ function New-AgentNewPkg {
     return $np
 }
 
+# The same edit, matched line by line with each line trimmed: the find's lines must appear consecutively (blank lines
+# ignored), exactly once; the matched lines are replaced, the first line's indentation kept. Parsing is protected.
+function Edit-AgentScriptTrimmed {
+    param([Parameter(Mandatory)][string]$Path, [string]$Find, [string]$ReplaceWith = '')
+    $res = [ordered]@{ ok = $false; path = "$Path"; note = ''; occurrences = 0 }
+    $want = @("$Find" -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if (-not $want.Count -or -not (Test-Path -LiteralPath $Path)) { $res.note = 'nothing to match'; return $res }
+    $bytes = [IO.File]::ReadAllBytes($Path); $bom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+    $text = [Text.Encoding]::UTF8.GetString($bytes, $(if ($bom) { 3 } else { 0 }), $bytes.Length - $(if ($bom) { 3 } else { 0 }))
+    $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $lines = @($text -split "`r?`n")
+    $hits = @()
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i].Trim() -ne $want[0]) { continue }
+        $j = $i; $k = 0
+        while ($j -lt $lines.Count -and $k -lt $want.Count) { $t = $lines[$j].Trim(); if (-not $t) { $j++; continue }; if ($t -ne $want[$k]) { break }; $j++; $k++ }
+        if ($k -eq $want.Count) { $hits += , @($i, ($j - 1)) }
+    }
+    $res.occurrences = $hits.Count
+    if ($hits.Count -ne 1) { $res.note = $(if ($hits.Count) { "matches $($hits.Count) places - not changed" } else { 'not found even ignoring indentation' }); return $res }
+    $from = $hits[0][0]; $to = $hits[0][1]
+    $indent = [regex]::Match($lines[$from], '^\s*').Value
+    $newLines = @("$ReplaceWith" -split "`r?`n" | ForEach-Object { if ($_.Trim()) { $indent + $_.TrimStart() } else { '' } })
+    $out = @(); if ($from -gt 0) { $out += $lines[0..($from - 1)] }; $out += $newLines; if ($to -lt $lines.Count - 1) { $out += $lines[($to + 1)..($lines.Count - 1)] }
+    $new = $out -join $nl
+    $e1 = $null; $e2 = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$null, [ref]$e1)
+    [void][System.Management.Automation.Language.Parser]::ParseInput($new, [ref]$null, [ref]$e2)
+    if (@($e2).Count -gt @($e1).Count) { $res.note = 'NOT WRITTEN - the script would stop parsing'; return $res }
+    [IO.File]::WriteAllText($Path, $new, (New-Object Text.UTF8Encoding $bom))
+    $res.ok = $true; $res.line = $from + 1; $res.note = 'matched ignoring indentation'
+    return $res
+}
+
 # THE AI'S OWN EDITS TO A REUSED SCRIPT, applied exactly as written: each find must occur once, and a change that would
 # stop the script parsing is not made. What could not be applied is reported, never guessed at - verify sees both.
 function Invoke-AgentPlannedChanges {
@@ -1427,7 +1492,18 @@ function Invoke-AgentPlannedChanges {
     foreach ($ch in @(Get-AgentList $Changes)) {
         if (-not "$($ch.find)".Trim()) { $notDone.Add([ordered]@{ why = "$($ch.why)"; problem = 'no find text' }); continue }
         $e = Edit-AgentScript -Path $ScriptPath -Find "$($ch.find)" -ReplaceWith "$($ch.replaceWith)"
-        if ($e.ok) { $done.Add([ordered]@{ section = "$($ch.section)"; why = "$($ch.why)"; line = $e.line }) }
+        # THE FIND WAS COPIED FROM A v3 PREDECESSOR: the build converted it to v4, so try the converted form
+        if (-not $e.ok -and [int]$e.occurrences -eq 0 -and (Get-Command Convert-V3ToV4Content -ErrorAction SilentlyContinue)) {
+            $conv = try { "$(Convert-V3ToV4Content -Content "$($ch.find)")" } catch { '' }
+            if ($conv.Trim() -and $conv -ne "$($ch.find)") { $e2 = Edit-AgentScript -Path $ScriptPath -Find $conv -ReplaceWith "$($ch.replaceWith)"; if ($e2.ok) { $e = $e2; $e.note = 'matched after converting the find text from v3 to v4' } }
+        }
+        # ...or it differs only in indentation: match line by line, trimmed - still exactly once
+        if (-not $e.ok -and [int]$e.occurrences -eq 0) {
+            $e3 = Edit-AgentScriptTrimmed -Path $ScriptPath -Find "$($ch.find)" -ReplaceWith "$($ch.replaceWith)"
+            if (-not $e3.ok -and (Get-Command Convert-V3ToV4Content -ErrorAction SilentlyContinue)) { $conv = try { "$(Convert-V3ToV4Content -Content "$($ch.find)")" } catch { '' }; if ($conv.Trim()) { $e3 = Edit-AgentScriptTrimmed -Path $ScriptPath -Find $conv -ReplaceWith "$($ch.replaceWith)" } }
+            if ($e3.ok) { $e = $e3 }
+        }
+        if ($e.ok) { $done.Add([ordered]@{ section = "$($ch.section)"; why = "$($ch.why)"; line = $e.line; how = "$($e.note)" }) }
         else {
             # already in? (the builder may have made the same swap itself) - only believable for a substantial text
             # whose old form is gone; a short replacement like 'x' is in every script by accident
@@ -1963,14 +2039,41 @@ function Invoke-AgentInstallRun {
     # nothing. That is how the team gets "the MSI extracted from the EXE": run it and take the MSI while it is there.
     # So the watch folders are scanned while the install runs and every new MSI (with the .cab/.mst/.msp beside it) is
     # copied out as soon as it appears, and copied again if it was still being written.
-    $cap = @{ dirs = @(); base = @{}; lastScan = -100.0; got = [ordered]@{} }
+    $cap = @{ dirs = @(); base = @{}; lastScan = -100.0; got = [ordered]@{}; evLast = -100.0; events = [ordered]@{}; evSince = (Get-Date).AddSeconds(-2) }
+    # copy one MSI (and the .cab/.mst/.msp beside it) the moment its path is known
+    $grabPath = {
+        param([string]$mp, [string]$how)
+        if (-not "$CaptureMsiTo".Trim() -or -not "$mp".Trim() -or $cap.got.Contains($mp)) { return }
+        if ($mp.StartsWith([IO.Path]::GetFullPath($CaptureMsiTo), [StringComparison]::OrdinalIgnoreCase) -or (Test-RuntimeCacheMsi $mp) -or -not (Test-Path -LiteralPath $mp)) { return }
+        $fi = Get-Item -LiteralPath $mp -ErrorAction SilentlyContinue
+        if (-not $fi) { return }
+        $dest = Join-Path $CaptureMsiTo ("{0:D2}_{1}" -f ($cap.got.Count + 1), ($fi.Directory.Name -replace '[^\w.-]', '_'))
+        try {
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+            Copy-Item -LiteralPath $mp -Destination $dest -Force -ErrorAction Stop
+            foreach ($sib in @(Get-ChildItem -LiteralPath $fi.DirectoryName -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '(?i)^\.(cab|mst|msp)$' })) { Copy-Item -LiteralPath $sib.FullName -Destination $dest -Force -ErrorAction SilentlyContinue }
+            $cap.got[$mp] = @{ dir = $dest; path = (Join-Path $dest $fi.Name); len = $fi.Length; time = $fi.LastWriteTimeUtc; from = "$mp ($how)" }
+            & $say "caught $($fi.Name) ($how)"
+        } catch {}
+    }
+    # THE WINDOWS INSTALLER EVENTS since the start: every MSI transaction with its path, every product installed or
+    # failed. Kept as evidence whether or not the file still exists.
+    $readMsiEvents = {
+        $evs = @(); try { $evs = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'MsiInstaller'; StartTime = $cap.evSince } -ErrorAction Stop) } catch {}
+        foreach ($e in $evs) {
+            if ($cap.events.Contains("$($e.RecordId)")) { continue }
+            $msg = ("$($e.Message)" -replace '\s+', ' ').Trim()
+            $cap.events["$($e.RecordId)"] = "$($e.TimeCreated.ToString('HH:mm:ss')) event $($e.Id): $($msg.Substring(0, [Math]::Min(260, $msg.Length)))"
+            foreach ($m in @([regex]::Matches($msg, '(?i)([A-Z]:\\[^:*?"<>|\r\n]+?\.msi)\b'))) { & $grabPath $m.Groups[1].Value 'named in the Windows Installer events' }
+        }
+    }
     if ("$CaptureMsiTo".Trim() -and (Get-Command Get-MsiWatchDirs -ErrorAction SilentlyContinue)) {
         $cap.dirs = @(Get-MsiWatchDirs | Where-Object { -not (Test-RuntimeCacheMsi $_) })
         try { $cap.base = Get-MsiSnapshot -Dirs $cap.dirs } catch {}
     }
     $grab = {
         foreach ($d in @($cap.dirs)) {
-            foreach ($f in @(Get-ChildItem -LiteralPath $d -Filter *.msi -File -Recurse -Depth 4 -Force -ErrorAction SilentlyContinue)) {
+            foreach ($f in @(Get-ChildItem -LiteralPath $d -Filter *.msi -File -Recurse -Depth 3 -Force -ErrorAction SilentlyContinue)) {
                 if ($f.Length -lt 100KB) { continue }
                 if ($f.FullName.StartsWith([IO.Path]::GetFullPath($CaptureMsiTo), [StringComparison]::OrdinalIgnoreCase)) { continue }   # our own copies
                 if ($cap.base.ContainsKey($f.FullName) -and $f.LastWriteTimeUtc -le $cap.base[$f.FullName]) { continue }
@@ -2085,8 +2188,15 @@ function Invoke-AgentInstallRun {
         while ($true) {
             Start-Sleep -Milliseconds $TickMs
             $now = $sw.Elapsed.TotalSeconds
-            if (@($cap.dirs).Count -and ($now - $cap.lastScan) -ge 3) { $cap.lastScan = $now; & $grab }
+            if (@($cap.dirs).Count -and ($now - $cap.lastScan) -ge 1.5) { $cap.lastScan = $now; & $grab }
             $tab = Get-AgentProcessTable
+            # AN MSI IS CAUGHT WHEREVER IT LIVES, the moment anything names it: on a new msiexec command line, or in the
+            # Windows Installer events ("Beginning a Windows Installer transaction: <path>"). A setup can unpack into any
+            # folder - not only %TEMP% - and delete it again within seconds; those two places say where it was.
+            foreach ($p in @($tab.Values | Where-Object { "$($_.Name)" -ieq 'msiexec.exe' -and "$($_.CommandLine)" -match '(?i)\.msi' -and $_.CreationDate -ge $t0.AddSeconds(-2) })) {
+                foreach ($m in @([regex]::Matches("$($p.CommandLine)", '(?i)"([^"]+\.msi)"|(\S+\.msi)'))) { & $grabPath $(if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[2].Value }) "named on msiexec's command line" }
+            }
+            if (($now - $cap.evLast) -ge 1.5) { $cap.evLast = $now; & $readMsiEvents }
             # THE FAMILY: what we started, what it started at any depth, anything new named after the installer
             # (an elevated Inno relaunch as <name>.tmp is not our child)
             $grew = $true
@@ -2186,10 +2296,19 @@ function Invoke-AgentInstallRun {
         }
         if ($null -eq $r.ExitCode) { try { if ($proc.HasExited) { $r.ExitCode = $proc.ExitCode } } catch {} }
         if (@($cap.dirs).Count) { & $grab }
+        & $readMsiEvents
         $r.WindowsSeen = @($seen.Keys); $r.WindowsAfterInstall = @($after.Keys)
         # GIVE THE MACHINE BACK. Everything this install started that is still running is closed - photographed first
         # when it has a window, so the AI sees what was on screen (the application it opened, a console, an error).
+        # (a child started just after the last look - the application a setup launches as it ends - is still family:
+        # find every descendant once more, after a moment, or it is left running on the packager's screen)
+        Start-Sleep -Milliseconds 1500
         $tab = Get-AgentProcessTable
+        $grew = $true
+        while ($grew) {
+            $grew = $false
+            foreach ($p in @($tab.Values)) { $id = [int]$p.ProcessId; if ($ours.ContainsKey($id) -or $id -eq $PID) { continue }; if ($p.CreationDate -and $p.CreationDate -ge $t0.AddSeconds(-2) -and ($ours.ContainsKey([int]$p.ParentProcessId) -or "$($p.Name)" -like "$stem*")) { $ours[$id] = $true; $grew = $true } }
+        }
         $left = @($tab.Values | Where-Object { $ours.ContainsKey([int]$_.ProcessId) -and [int]$_.ProcessId -ne $PID -and -not ("$($_.Name)" -ieq 'msiexec.exe' -and "$($_.CommandLine)" -match '(?i)\s/V\b') })
         # every window opened since go that is still there: the family's, and consoles hosted elsewhere (Windows Terminal)
         $leftWins = @(Get-AgentVisibleWindows | Where-Object { $ours.ContainsKey([int]$_.id) -or (-not $before["$($_.hwnd)"] -and "$($_.class)" -match '^(ConsoleWindowClass|CASCADIA_HOSTING_WINDOW_CLASS)$') })
@@ -2205,6 +2324,7 @@ function Invoke-AgentInstallRun {
         }
     } catch { $r.Error = "$($_.Exception.Message)" }
     $r.Looks = $looks.ToArray()
+    $r.MsiEvents = @($cap.events.Values | Select-Object -First 40)
     $r.MsiCaptured = @($cap.got.Values | ForEach-Object { [ordered]@{ file = (Split-Path -Leaf "$($_.path)"); path = "$($_.path)"; unpackedAt = "$($_.from)"; sizeMB = [math]::Round($_.len / 1MB, 1) } })
     if ("$($r.MsiLog)".Trim()) { $r.MsiLogFacts = Test-AgentMsiLog -LogPath $r.MsiLog -Arguments $argsIn }
     $r.StartedByInstall = @($started.Values)
@@ -2249,6 +2369,9 @@ function Test-AgentSilentCandidate {
                        msiLogFacts = $run.MsiLogFacts
                        # MSIs the installer unpacked while it ran, copied out before it could delete them
                        msiCaptured = @($run.MsiCaptured)
+                       # every Windows Installer transaction and result since the start, with the MSI paths - even
+                       # the ones whose file was gone before it could be copied
+                       msiEvents = @($run.MsiEvents)
                        # what the machine looked like: every look at the screen (with what the AI said it was), what the
                        # install opened after it ended, and every process it started
                        looks = @($run.Looks)
@@ -2337,7 +2460,7 @@ function Invoke-AgentUninstallTest {
                    elseif ($run.TimedOut) { 'hung' } elseif ($null -ne $run.ExitCode -and $ok -notcontains [int]$run.ExitCode) { 'failed' }
                    elseif (@($run.WindowsSeen).Count) { 'progress' } else { 'silent' }
     foreach ($k in 'ExitCode', 'DurationSec', 'Error', 'Command', 'LaunchedHow', 'MsiLog') { $out[$k.Substring(0, 1).ToLower() + $k.Substring(1)] = $run[$k] }
-    $out.windowsSeen = @($run.WindowsSeen); $out.windowsAfter = @($run.WindowsAfterInstall); $out.looks = @($run.Looks); $out.neededIntervention = @($run.NeededIntervention)
+    $out.windowsSeen = @($run.WindowsSeen); $out.windowsAfter = @($run.WindowsAfterInstall); $out.looks = @($run.Looks); $out.neededIntervention = @($run.NeededIntervention); $out.msiEvents = @($run.MsiEvents)
     $out.processesThatAppeared = @($run.StartedByInstall); $out.leftRunning = @($run.LeftRunning)
     if ($Before -and (Get-Command Get-MachineSnapshot -ErrorAction SilentlyContinue)) {
         if ($Progress) { & $Progress 'uninstall test: comparing the machine with how it was before the install' }
@@ -2421,6 +2544,45 @@ function Invoke-AgentPackageTest {
     return $out
 }
 
+# PREREQUISITES THAT ARE THIS TEAM'S OWN PACKAGES (a database client, a runtime the instructions require) - installed
+# the way deployment installs them, from a local copy of the package, and kept on the sheet so they can be removed the
+# same way after the tests.
+function Install-AgentPrerequisitePackages {
+    param([Parameter(Mandatory)]$Sheet, $Packages, [scriptblock]$Progress)
+    $done = @()
+    # IN ORDER - a prerequisite can have its own prerequisite, and the chain only works bottom-up. Each is copied from
+    # the share to this machine and installed from the local copy (Install-AgentPredecessorPackage), never from the share.
+    foreach ($pq in @(@(Get-AgentList $Packages) | Sort-Object { if ("$($_.order)".Trim()) { [int]"$($_.order)" } else { 999 } })) {
+        $path = "$($pq.path)".Trim()
+        if (-not $path -or -not (Test-Path -LiteralPath $path)) { $done += [ordered]@{ name = "$($pq.name)"; path = $path; ok = $false; error = 'the package folder is not reachable' }; break }
+        if (@(Get-AgentList $Sheet.prerequisitesInstalled | Where-Object { "$($_.path)" -eq $path -and $_.ok -and -not $_.removed }).Count) { continue }   # already on
+        if ($Progress) { & $Progress "installing the prerequisite $($pq.name) from a local copy of its package" }
+        $t0 = Get-Date
+        $r = Install-AgentPredecessorPackage -PredecessorPath $path -Progress $Progress
+        $rec = [ordered]@{ order = $pq.order; name = "$($pq.name)"; path = $path; why = "$($pq.why)"; ok = [bool]$r.ok; exitCode = $r.exitCode; error = "$($r.error)"; localCopy = "$($r.localCopy)"; ranWith = "$($r.ranWith)" }
+        if (-not $r.ok) {
+            # ITS OWN LOG says what it was missing - often a prerequisite of the prerequisite
+            $rec.itsToolkitLog = @(try { Get-AgentToolkitLogs -Since $t0 -MaxCharsPerLog 60000 } catch { @() })
+        }
+        $done += $rec
+        $Sheet.prerequisitesInstalled = @(@(Get-AgentList $Sheet.prerequisitesInstalled) + @($rec))
+        if (-not $r.ok) { break }   # the rest of the chain depends on this one
+    }
+    return @($done)
+}
+function Remove-AgentPrerequisitePackages {
+    param([Parameter(Mandatory)]$Sheet, [scriptblock]$Progress)
+    $out = @()
+    $list = @(Get-AgentList $Sheet.prerequisitesInstalled | Where-Object { $_.ok -and -not $_.removed }); [array]::Reverse($list)   # dependents first
+    foreach ($pq in $list) {
+        if ($Progress) { & $Progress "removing the prerequisite $($pq.name) again" }
+        $u = Uninstall-AgentPredecessorPackage -InstallResult @{ localCopy = "$($pq.localCopy)" } -Progress $Progress
+        $pq.removed = [bool]$u.ok; $pq.removeResult = "$(if ($u.ok) { "removed (exit $($u.exitCode))" } else { "NOT removed: $($u.error)$($u.exitCode)" })"
+        $out += "$($pq.name): $($pq.removeResult)"
+    }
+    return @($out)
+}
+
 # How to take one program entry off silently - only from what the entry itself says, or the technology's documented
 # silent uninstall (Windows Installer by product code, Inno Setup's unins000.exe). Nothing is invented: an entry with
 # none of these is reported, not guessed at.
@@ -2433,6 +2595,81 @@ function Get-AgentSilentUninstallFor {
     if ($u -match '(?i)msiexec' -and $g.Success) { return @{ command = "msiexec /x $($g.Value)"; how = 'Windows Installer, by product code' } }
     if ($u -match '(?i)unins\d{3}\.exe' -or $key -match '(?i)_is1$') { if ($u) { return @{ command = "$u /VERYSILENT /SUPPRESSMSGBOXES /NORESTART"; how = 'Inno Setup uninstaller, its documented silent switches' } } }
     return $null
+}
+
+# Drivers by their driver-store folder name (ftdibus.inf_amd64_27ad...): the published name (oemNN.inf) comes from
+# pnputil /enum-drivers, read by pattern so a localised Windows (German labels) reads the same.
+function Remove-AgentAddedDrivers {
+    param([string[]]$DriverStoreIds = @(), $Before)
+    $res = @{ removed = @(); notRemoved = @() }
+    $pn = Join-Path $env:windir 'Sysnative\pnputil.exe'; if (-not (Test-Path -LiteralPath $pn)) { $pn = Join-Path $env:windir 'System32\pnputil.exe' }
+    if (-not (Test-Path -LiteralPath $pn)) { $res.notRemoved = @($DriverStoreIds | ForEach-Object { "driver $_ - pnputil is not available" }); return $res }
+    $map = @(); $pub = $null
+    foreach ($ln in @(& $pn /enum-drivers 2>$null)) {
+        if ("$ln" -match '(?i)\b(oem\d+\.inf)\b') { $pub = $Matches[1]; continue }
+        if ($pub -and "$ln" -match '(?i):\s*(\S+\.inf)\s*$') { $map += @{ pub = $pub; orig = $Matches[1].ToLowerInvariant() }; $pub = $null }
+    }
+    $beforeKeys = @(if ($Before -and $Before.Drivers) { @($Before.Drivers.Keys) } else { @() })
+    foreach ($id in @($DriverStoreIds)) {
+        $orig = ("$id" -split '_')[0].ToLowerInvariant()
+        if (@($beforeKeys | Where-Object { "$_".ToLowerInvariant().StartsWith("$orig" + '_') }).Count) { $res.notRemoved += "driver $orig - a copy of it was already installed before the test, so it is left alone"; continue }
+        $hits = @($map | Where-Object { $_.orig -eq $orig })
+        if (-not $hits.Count) { $res.notRemoved += "driver $orig - not found in pnputil's list"; continue }
+        foreach ($h in $hits) {
+            $o = @(& $pn /delete-driver $h.pub /uninstall /force 2>&1)
+            if ($LASTEXITCODE -eq 0) { $res.removed += "driver $orig ($($h.pub))" } else { $res.notRemoved += "driver $orig ($($h.pub)) - pnputil: $((@($o) | Select-Object -Last 1))" }
+        }
+    }
+    return $res
+}
+
+# The record of what a cleanup could not remove - the work folder, per machine, never the knowledge base.
+function Get-AgentLeftoversPath { $d = if (Get-Command Get-WorkPath -ErrorAction SilentlyContinue) { Get-WorkPath 'AI' } else { Join-Path $env:TEMP 'PackagingAgent\AI' }; return (Join-Path $d 'machine-leftovers.json') }
+function Save-AgentLeftovers {
+    param([string]$Package, $Cleanup)
+    $p = Get-AgentLeftoversPath
+    $items = @()
+    if ($Cleanup -and $Cleanup.left) {
+        foreach ($cat in 'Programs', 'ProgramDirs', 'Drivers', 'Services', 'Tasks', 'Shortcuts') { foreach ($x in @($Cleanup.left[$cat])) { if ("$x".Trim()) { $items += [ordered]@{ category = $cat; item = "$x"; id = $(if ("$x" -match '\[(.+)\]\s*$') { $Matches[1] } else { "$x" }) } } } }
+    }
+    $all = @(); if (Test-Path -LiteralPath $p) { try { $raw = [IO.File]::ReadAllText($p) | ConvertFrom-Json; $all = @($raw) } catch {} }
+    $all = @($all | Where-Object { "$($_.package)" -ne $Package })
+    if ($items.Count) { $all += [pscustomobject]@{ package = $Package; at = (Get-Date -Format 'yyyy-MM-dd HH:mm'); items = @($items) } }
+    $json = if (@($all).Count) { ConvertTo-Json -InputObject @($all) -Depth 6 } else { '[]' }
+    [IO.File]::WriteAllText($p, $json, (New-Object Text.UTF8Encoding $false))
+}
+# Before a new evaluation: take off what earlier tests on this machine could not. Folders and drivers they created,
+# programs they installed (silently, the same way as any cleanup). What still resists is reported.
+function Clear-AgentEarlierLeftovers {
+    param([scriptblock]$Progress)
+    $p = Get-AgentLeftoversPath
+    $out = [ordered]@{ removed = @(); stillThere = @() }
+    if (-not (Test-Path -LiteralPath $p)) { return $out }
+    $all = @(); try { $all = @([IO.File]::ReadAllText($p) | ConvertFrom-Json) } catch { return $out }
+    foreach ($rec in $all) {
+        foreach ($it in @($rec.items)) {
+            $id = "$($it.id)"
+            switch ("$($it.category)") {
+                'ProgramDirs' { if (Test-Path -LiteralPath $id) { try { Remove-Item -LiteralPath $id -Recurse -Force -ErrorAction Stop; $out.removed += "$id (left by $($rec.package))" } catch { $out.stillThere += "$id - $($_.Exception.Message.Split([char]10)[0])" } } }
+                'Drivers' { $r = Remove-AgentAddedDrivers -DriverStoreIds @($id); $out.removed += @($r.removed); $out.stillThere += @($r.notRemoved | Where-Object { $_ -notmatch 'not found' }) }
+                'Programs' {
+                    $key = @(Get-Item -LiteralPath ("Registry::$($id -replace '^HKLM:', 'HKEY_LOCAL_MACHINE' -replace '^HKCU:', 'HKEY_CURRENT_USER')") -ErrorAction SilentlyContinue)
+                    if (-not $key.Count) { continue }
+                    $info = @{}; foreach ($n in $key[0].GetValueNames()) { $info[$n] = $key[0].GetValue($n) }; $info['_key'] = $key[0].PSChildName
+                    $u = Get-AgentSilentUninstallFor -Info $info
+                    $rc = if ($u) { ConvertTo-AgentRunnable -Command $u.command } else { $null }
+                    if ($rc -and $rc.ok) {
+                        if ($Progress) { & $Progress "removing $($info.DisplayName), left by an earlier test" }
+                        $run = Invoke-AgentInstallRun -Installer $rc.file -Arguments $rc.args -RunAs 'Admin' -TimeoutSec 900 -Action 'uninstall'
+                        if ($null -eq $run.ExitCode -or [int]$run.ExitCode -notin 0, 1605, 1641, 3010) { $out.stillThere += "$($info.DisplayName) - exit $($run.ExitCode)" } else { $out.removed += "$($info.DisplayName) (left by $($rec.package))" }
+                    } else { $out.stillThere += "$($info.DisplayName) - no silent uninstall known" }
+                }
+                default { $out.stillThere += "$($it.category): $($it.item)" }
+            }
+        }
+    }
+    try { if (-not @($out.stillThere).Count) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue } } catch {}
+    return $out
 }
 
 # GIVE THE MACHINE BACK. Everything a test put on this machine since the baseline comes off again, so the next attempt,
@@ -2482,8 +2719,15 @@ function Invoke-AgentMachineCleanup {
         if (-not (& $pointsIntoGone "$($rk.Info.Command)")) { continue }
         try { Remove-ItemProperty -LiteralPath "$($rk.Info.Hive)" -Name "$($rk.Info.Name)" -Force -ErrorAction Stop; $out.otherRemoved += "run entry $($rk.Id)" } catch {}
     }
+    # DRIVERS the test added to the driver store - taken out with pnputil, but only when no copy of the same driver
+    # was there before the test (then it may belong to a device on this machine, and it is reported instead)
+    $drvAdded = @($cmp.Drivers.Added)
+    if ($drvAdded.Count) { $r = Remove-AgentAddedDrivers -DriverStoreIds @($drvAdded | ForEach-Object { "$($_.Id)" }) -Before $Before; $out.otherRemoved += @($r.removed); $out.couldNotRemove += @($r.notRemoved) }
     $out.left = ConvertTo-AgentLeftoverSummary (& $diff)
     $out.clean = -not [int]$out.left.count
+    # WHAT COULD NOT BE REMOVED IS WRITTEN DOWN, and tried again before the next evaluation starts - so a machine a test
+    # left dirty does not stay dirty for the next order
+    try { Save-AgentLeftovers -Package "$($Sheet.package)" -Cleanup $out } catch {}
     & $say $(if ($out.clean) { 'the machine is back to its baseline' } else { "the machine is NOT fully back: $([int]$out.left.count) item(s) remain" })
     return $out
 }
